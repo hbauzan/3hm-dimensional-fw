@@ -33,9 +33,12 @@ fn main() {
     };
     fs::create_dir_all("reports").expect("create reports/");
     let path = "reports/rompepepe_v3_matrix.json";
-    fs::write(path, serde_json::to_string_pretty(&report).unwrap()).expect("write report");
+    let scpb_path = "reports/scpb_220_matrix.json";
+    let json = serde_json::to_string_pretty(&report).unwrap();
+    fs::write(path, &json).expect("write report");
+    fs::write(scpb_path, &json).expect("write scpb report");
     println!(
-        "cosine_leak_rate={:.4} mode_c={}/{} wrote {path}",
+        "cosine_leak_rate={:.4} mode_c={}/{} wrote {path} and {scpb_path}",
         report.cosine_leak_rate, report.mode_c_blocked, report.vectors
     );
 }

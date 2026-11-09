@@ -113,6 +113,11 @@ export interface ChatTelemetryDto {
   l1: Tier1Breach
   l2: Tier2Breach
   l3: Tier3Breach
+  clauses_skipped?: number
+  normalizer_segmenter_us?: number
+  embedding_inference_ms?: number
+  simd_gate_kernel_us?: number
+  total_pipeline_ms?: number
 }
 
 export type ChatBreachDto = ChatTelemetryDto & {

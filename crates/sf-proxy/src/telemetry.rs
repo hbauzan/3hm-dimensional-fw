@@ -37,7 +37,16 @@ pub struct BreachTelemetryDto {
     pub breaching_clause_index: Option<usize>,
     pub breaching_clause_sha256: Option<String>,
     pub total_clauses_extracted: usize,
+    pub clauses_skipped: usize,
     pub gate_latency_ns: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub normalizer_segmenter_us: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub embedding_inference_ms: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub simd_gate_kernel_us: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_pipeline_ms: Option<f64>,
     pub metrics: BreachMetricsDto,
 }
 

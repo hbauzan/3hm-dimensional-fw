@@ -12,6 +12,7 @@ export function BreachCard({ breach }: { breach: ChatBreachDto }) {
       <Tier1 tier={breach.l1} />
       <Tier2 telemetry={breach} />
       <Tier3 tier={breach.l3} />
+      <DisaggregatedLatency telemetry={breach} />
     </article>
   )
 }
@@ -31,6 +32,7 @@ export function PassCard({ telemetry }: { telemetry: ChatTelemetryDto }) {
       <Tier1 tier={telemetry.l1} />
       <Tier2 telemetry={telemetry} />
       <Tier3 tier={telemetry.l3} />
+      <DisaggregatedLatency telemetry={telemetry} />
     </article>
   )
 }
@@ -98,8 +100,8 @@ function Tier2({ telemetry }: { telemetry: ChatTelemetryDto }) {
 
 function Tier3({ tier }: { tier: Tier3Breach }) {
   return (
-    <section aria-label="Tier 3 spectral quorum" className="mt-3">
-      <h3 className="text-studio-muted">Tier 3 — Spectral Quorum</h3>
+    <section aria-label="Tier 3 Subspace Coordinate Quorum (K-of-D L∞ Gate)" className="mt-3">
+      <h3 className="text-studio-muted">Tier 3 — Subspace Coordinate Quorum (K-of-D L∞ Gate)</h3>
       {tier.evaluated &&
       tier.affirmative_votes !== undefined &&
       tier.required_votes !== undefined ? (
@@ -113,6 +115,32 @@ function Tier3({ tier }: { tier: Tier3Breach }) {
         <p>Skipped</p>
       )}
     </section>
+  )
+}
+
+function DisaggregatedLatency({ telemetry }: { telemetry: ChatTelemetryDto }) {
+  const hasLatency =
+    telemetry.normalizer_segmenter_us !== undefined ||
+    telemetry.simd_gate_kernel_us !== undefined ||
+    telemetry.embedding_inference_ms !== undefined
+  const hasSkipped = telemetry.clauses_skipped !== undefined && telemetry.clauses_skipped > 0
+  if (!hasLatency && !hasSkipped) return null
+  return (
+    <div className="mt-3 pt-2 border-t border-studio-line text-[10px] text-studio-muted font-mono">
+      {hasSkipped && (
+        <p className="text-studio-warn font-semibold">
+          Sequential Early-Exit: {telemetry.clauses_skipped} downstream clauses skipped
+        </p>
+      )}
+      {hasLatency && (
+        <div className="grid grid-cols-2 gap-1 mt-1 text-[10px]">
+          <span>Norm/Segment: {telemetry.normalizer_segmenter_us ?? 0} µs</span>
+          <span>Embed: {telemetry.embedding_inference_ms !== undefined ? `${telemetry.embedding_inference_ms.toFixed(2)} ms` : '0.00 ms'}</span>
+          <span>SIMD Gate: {telemetry.simd_gate_kernel_us ?? 0} µs</span>
+          <span>Total: {telemetry.total_pipeline_ms !== undefined ? `${telemetry.total_pipeline_ms.toFixed(2)} ms` : '0.00 ms'}</span>
+        </div>
+      )}
+    </div>
   )
 }
 

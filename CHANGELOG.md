@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.0.0
+
+- **Terminology Sanitization**: Replaced all internal project terminology with formal academic and systems standards:
+  - Benchmark renamed to **SCPB-220** (**Sub-Clause Piggybacking Benchmark**).
+  - Tier 3 gate designated as **Subspace Coordinate Quorum (K-of-D L∞ Gate)**.
+  - Background noise coordinates documented as **Anisotropic Rogue Dimensions (Timkey & van Schijndel, 2021)**.
+  - 55 domain pairs formally designated as **55 Pairwise OvO (One-vs-One) Cross-Lingual Subspace Masks**.
+  - Output space defined as **1024D Contrastive Embedding Manifold ($S^{1023} \subset \mathbb{R}^{1024}$)** with **deterministic IEEE 754 binary32 evaluation with 0 ULP cross-architecture parity**.
+- **Pre-Segmentation Input Normalizer**: Added deterministic, zero-allocation pre-segmentation pipeline (`InputNormalizer`) in `sf-proxy`:
+  - Unicode NFKC canonicalization with Cyrillic and Greek homoglyph neutralization.
+  - Invisible evasion code point stripping (`\u{200B}`, `\u{200C}`, `\u{200D}`, `\u{2060}`, `\u{FEFF}`, `\u{00AD}`).
+  - High-entropy Base64 payload detection ($\ge 24$ chars), decoding UTF-8 cleartext and routing clauses into `ClauseSegmenter`.
+- **Sequential Clause Early-Exit**: Multi-clause evaluation short-circuits immediately upon first failing clause, avoiding redundant embedding and kernel evaluations while recording `clauses_skipped`.
+- **Disaggregated Telemetry**: Response JSON and HTTP headers (`x-sf-*`) report isolated stage latencies: `normalizer_segmenter_us`, `embedding_inference_ms`, `simd_gate_kernel_us`, and `total_pipeline_ms`. The web UI renders a dedicated disaggregated latency panel in `BreachCard`.
+- **Public Benchmark Suite (`sf-bench`)**:
+  - Suite 1 evaluates `SCPB-220` against global sequence cosine dilution.
+  - Suite 2 evaluates authentic `BAAI/bge-m3` IEEE 754 binary32 vectors from `clinc_oos` (52 real out-of-scope samples) and `deepset/prompt-injections` (48 adversarial prompt injections with piggybacking) vs. 100 clean in-domain legitimate queries across 11 canonical domains. Demonstrates 50.00% global cosine leakage rate, 86.00% 3HM containment recall, 1.00% clean FPR, and 1 µs p99 gate latency.
+  - Compiled offline via embedded binary fixtures (`crates/sf-bench/fixtures/oos_bge_m3_vectors.bin` and metadata manifest). Added `tools/generate_real_public_benchmarks.py`.
+- **CERN Zenodo DOI & Documentation Overhaul**:
+  - Authored `.zenodo.json` metadata for DOI archival.
+  - Rewrote `README.md` with mathematical analysis of cosine dilution, algorithmic comparison ($O(D^2)$ Mahalanobis vs strict $\ell_\infty$ vs 3HM $K$-of-$D$), Timkey citation, and operational threat model boundaries.
+
 ## Unreleased
 
 - Playground chat no longer false-breaches an in-domain prompt on an empty pairwise mask. `MockBatchEmbedder` skips pairwise containment unless the batch contains the exact token `BREACH`. `PERMUTATION_NOISE` still breaches Tier 3. The SPA renders an ADR-005 pairwise envelope as `L3_PAIRWISE_QUORUM`. Live tuning omits `epsilon` until that slider moves. `pnpm test:e2e` runs the Playwright suite in `frontend/e2e`.

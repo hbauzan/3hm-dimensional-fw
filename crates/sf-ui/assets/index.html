@@ -730,7 +730,7 @@
     <div>
       <label for="inputModeSelect">Input Mode</label><br />
       <select id="inputModeSelect">
-        <option value="catalog">Rompepepe 220 Catalog</option>
+        <option value="catalog">SCPB-220 (Sub-Clause Piggybacking Benchmark) Catalog</option>
         <option value="custom">Custom Prompt / Piggybacking Lab</option>
       </select>
     </div>
@@ -751,7 +751,7 @@
     <div>
       <label for="l3StrategySelect">Head 3 Strategy</label><br />
       <select id="l3StrategySelect">
-        <option value="mode_c" selected>Mode C: Spectral Quorum (K=103)</option>
+        <option value="mode_c" selected>Mode C: Subspace Coordinate Quorum (K-of-D L∞ Gate, K=103)</option>
         <option value="mode_a">Mode A: Top-K</option>
         <option value="mode_b">Mode B: Strict Box (1024D)</option>
       </select>
@@ -867,10 +867,10 @@
       </div>
     </div>
 
-    <!-- PANEL 3: 1024D Spectral Heatmap (32x32 Grid) -->
+    <!-- PANEL 3: 1024D Subspace Coordinate Heatmap (32x32 Grid) -->
     <div class="panel">
       <div class="panel-header">
-        <span class="panel-title">Panel 3 — 1024D Spectral Heatmap (32×32)</span>
+        <span class="panel-title">Panel 3 — 1024D Subspace Coordinate Heatmap (32×32)</span>
         <span class="panel-stat" id="heatmapSummaryStat">1,024 Coordinates</span>
       </div>
 
@@ -881,7 +881,7 @@
         <div class="legend">
           <div class="legend-item"><div class="legend-color" style="background: var(--color-pass);"></div>ACTIVE_PASS (In-Box)</div>
           <div class="legend-item"><div class="legend-color" style="background: var(--color-breach);"></div>ACTIVE_BREACH (Out-of-Box)</div>
-          <div class="legend-item"><div class="legend-color" style="background: var(--color-univ);"></div>PRUNED_UNIVERSAL (9 Dims)</div>
+          <div class="legend-item" title="Anisotropic Rogue Dimensions (Timkey & van Schijndel, 2021): 292, 297, 308, 329, 386, 404, 577, 616, 780"><div class="legend-color" style="background: var(--color-univ);"></div>PRUNED_ANISOTROPIC_ROGUE (9 Dims)</div>
           <div class="legend-item"><div class="legend-color" style="background: var(--color-snr);"></div>PRUNED_SNR (30 Dims)</div>
         </div>
       </div>
@@ -927,7 +927,7 @@
         <button type="button" class="secondary" id="chipPythonPass">🟢 Python Generator (PASS)</button>
         <button type="button" class="secondary" id="chipRecipeL1">🔴 Risotto Recipe (L1 Breach)</button>
         <button type="button" class="secondary" id="chipPiggybackL2">🟠 Piggybacking Attack (L2 Breach)</button>
-        <button type="button" class="secondary" id="chipNoiseL3">🟣 Spectral Noise (L3 Breach)</button>
+        <button type="button" class="secondary" id="chipNoiseL3">🟣 Subspace Coordinate Drift (L3 Breach)</button>
       </div>
       <form id="chatInputForm">
         <textarea id="chatPromptInput" placeholder="Prompt. Enter sends, Shift+Enter inserts a line."></textarea>
@@ -1000,7 +1000,7 @@
     const GRID_SIZE = 32;
     const CELL_SIZE = CANVAS_SIZE / GRID_SIZE; // 13px
 
-    let catalogData = { locks: [], rompepepe_vectors: [] };
+    let catalogData = { locks: [], scpb_220_vectors: [], rompepepe_vectors: [] };
     let currentInspection = null;
     let coordinatesData = [];
 
@@ -1013,6 +1013,7 @@
         const res = await fetch('/api/v1/catalog');
         if (!res.ok) throw new Error('Failed to load catalog');
         catalogData = await res.json();
+        const scpbVectors = catalogData.scpb_220_vectors || catalogData.rompepepe_vectors || [];
 
         // Populate Target Locks
         const lockSelect = document.getElementById('targetLockSelect');
@@ -1024,9 +1025,9 @@
         });
         bindChatDomains();
 
-        // Populate Rompepepe Vectors
+        // Populate SCPB-220 Vectors
         const vecSelect = document.getElementById('vectorIndexSelect');
-        catalogData.rompepepe_vectors.forEach(v => {
+        scpbVectors.forEach(v => {
           const opt = document.createElement('option');
           opt.value = v.index;
           opt.textContent = `#${v.index} [${v.category_label}] -> ${v.target_lock_id} (v${v.variant_id})`;
@@ -1049,7 +1050,8 @@
       if (mode === 'catalog') {
         catGroup.style.display = 'block';
         const vIdx = parseInt(document.getElementById('vectorIndexSelect').value || '0', 10);
-        const vec = catalogData.rompepepe_vectors.find(v => v.index === vIdx);
+        const vectors = catalogData.scpb_220_vectors || catalogData.rompepepe_vectors || [];
+        const vec = vectors.find(v => v.index === vIdx);
         if (vec) {
           promptBox.value = vec.sample_prompt;
           promptBox.readOnly = true;
@@ -1534,7 +1536,7 @@
       const section = document.createElement('section');
       section.className = 'rayos-tier';
       const title = document.createElement('h3');
-      title.textContent = 'Tier 3 — Spectral Quorum';
+      title.textContent = 'Tier 3 — Subspace Coordinate Quorum (K-of-D L∞ Gate)';
       section.appendChild(title);
       const line = document.createElement('div');
       if (l3.evaluated) {

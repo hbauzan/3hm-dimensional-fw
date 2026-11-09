@@ -1,0 +1,23 @@
+{
+  "title": "3HM (sf-core): Sub-Millisecond Coordinate-Wise Semantic Containment Proxy in Rust",
+  "upload_type": "software",
+  "description": "Deterministic L7 semantic firewall mitigating cosine dilution and sub-clause piggybacking on the 1024D contrastive embedding manifold (BAAI/bge-m3) via anisotropic rogue dimension pruning and SIMD-accelerated K-of-D coordinate subspace quorum gating.",
+  "creators": [
+    {
+      "name": "Bauzán, Héctor",
+      "affiliation": "Independent Security Researcher, Montevideo, Uruguay"
+    }
+  ],
+  "license": "Apache-2.0",
+  "keywords": [
+    "LLM Security",
+    "Semantic Firewall",
+    "Cosine Dilution",
+    "Anisotropy",
+    "Rogue Dimensions",
+    "SIMD",
+    "Rust",
+    "BAAI/bge-m3"
+  ]
+}
+

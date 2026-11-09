@@ -69,7 +69,7 @@ pub struct LockCatalogDto {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RompepepeVectorDto {
+pub struct Scpb220VectorDto {
     pub index: usize,
     pub target_lock_id: String,
     pub variant_id: usize,
@@ -78,12 +78,16 @@ pub struct RompepepeVectorDto {
     pub cosine_should_leak: bool,
 }
 
+pub type RompepepeVectorDto = Scpb220VectorDto;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CatalogResponse {
     pub product: String,
     pub version: String,
     pub locks: Vec<LockCatalogDto>,
-    pub rompepepe_vectors: Vec<RompepepeVectorDto>,
+    pub scpb_220_vectors: Vec<Scpb220VectorDto>,
+    #[serde(default)]
+    pub rompepepe_vectors: Vec<Scpb220VectorDto>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -231,7 +235,7 @@ pub async fn handle_catalog(State(state): State<Arc<UiAppState>>) -> impl IntoRe
                 )
             };
 
-            RompepepeVectorDto {
+            Scpb220VectorDto {
                 index: idx,
                 target_lock_id: target_lock.domain_id.clone(),
                 variant_id,
@@ -244,8 +248,9 @@ pub async fn handle_catalog(State(state): State<Arc<UiAppState>>) -> impl IntoRe
 
     Json(CatalogResponse {
         product: "Three-Headed Semantic Firewall".to_string(),
-        version: "0.2.0".to_string(),
+        version: "1.0.0".to_string(),
         locks,
+        scpb_220_vectors: rompepepe_vectors.clone(),
         rompepepe_vectors,
     })
 }

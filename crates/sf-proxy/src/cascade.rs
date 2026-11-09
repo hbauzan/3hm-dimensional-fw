@@ -93,10 +93,8 @@ pub fn evaluate_three_tier_cascade(
         })));
     }
 
-    let mut last_l2 = l1_cos;
     for (idx, clause_vec) in clause_vecs.iter().enumerate() {
         let clause_cos = cosine_similarity_1024(clause_vec, &lock.centroid);
-        last_l2 = clause_cos;
         if !tier_passes(lock.polarity, clause_cos, lock.l2_clause_threshold) {
             let clause_hash = sha256_hex(clauses_text.get(idx).copied().unwrap_or(""));
             return Err(Box::new(breach(BreachParts {
@@ -115,9 +113,7 @@ pub fn evaluate_three_tier_cascade(
                 ),
             })));
         }
-    }
 
-    for (idx, clause_vec) in clause_vecs.iter().enumerate() {
         let l3 = evaluate_l3_gate(clause_vec, lock, l3_mode, max_telemetry_coords);
         if !l3.passed {
             let clause_hash = sha256_hex(clauses_text.get(idx).copied().unwrap_or(""));
@@ -146,8 +142,8 @@ pub fn evaluate_three_tier_cascade(
                     l1_prompt_cosine: l1_cos,
                     l1_prompt_cosine_bits: f32_hex(l1_cos),
                     l1_threshold: lock.l1_cosine_threshold,
-                    l2_clause_cosine: Some(last_l2),
-                    l2_clause_cosine_bits: Some(f32_hex(last_l2)),
+                    l2_clause_cosine: Some(clause_cos),
+                    l2_clause_cosine_bits: Some(f32_hex(clause_cos)),
                     l2_threshold: lock.l2_clause_threshold,
                     l3_affirmative_votes: Some(l3.affirmative_votes),
                     l3_required_quorum: Some(l3.required_votes),
@@ -171,6 +167,7 @@ pub struct PairwiseBreach {
     pub domain_id: String,
     pub breaching_pair_lock: String,
     pub breaching_clause_index: Option<usize>,
+    pub clauses_skipped: Option<usize>,
     pub message: String,
 }
 
@@ -180,6 +177,8 @@ pub struct PairwiseTelemetry {
     pub breaching_pair_lock: String,
     pub breaching_clause_index: Option<usize>,
     pub failing_tier: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clauses_skipped: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -206,6 +205,7 @@ pub fn pairwise_breach_envelope(breach: PairwiseBreach) -> PairwiseBreachEnvelop
                 breaching_pair_lock: breach.breaching_pair_lock,
                 breaching_clause_index: breach.breaching_clause_index,
                 failing_tier: "L3_PAIRWISE_QUORUM",
+                clauses_skipped: breach.clauses_skipped,
             },
         },
     }
@@ -241,11 +241,21 @@ pub fn evaluate_pairwise_containment(
         let mut tuned = (**lock).clone();
         tuned.polarity = polarity;
         if !pairwise_l3_passes(prompt_vec, &tuned) {
-            return Err(pairwise_breach(target_domain, &lock.domain_id, None));
+            return Err(pairwise_breach(
+                target_domain,
+                &lock.domain_id,
+                None,
+                clause_vecs.len(),
+            ));
         }
         for (idx, clause_vec) in clause_vecs.iter().enumerate() {
             if !pairwise_l3_passes(clause_vec, &tuned) {
-                return Err(pairwise_breach(target_domain, &lock.domain_id, Some(idx)));
+                return Err(pairwise_breach(
+                    target_domain,
+                    &lock.domain_id,
+                    Some(idx),
+                    clause_vecs.len(),
+                ));
             }
         }
     }
@@ -267,7 +277,16 @@ fn pairwise_l3_passes(vector: &AlignedVec1024, lock: &DomainHypercubeLock) -> bo
     evaluate_l3_gate(vector, lock, L3InspectionMode::ModeCSpectralQuorum, 0).passed
 }
 
-fn pairwise_breach(domain_id: &str, pair_id: &str, clause_index: Option<usize>) -> PairwiseBreach {
+fn pairwise_breach(
+    domain_id: &str,
+    pair_id: &str,
+    clause_index: Option<usize>,
+    total_clauses: usize,
+) -> PairwiseBreach {
+    let clauses_skipped = match clause_index {
+        Some(idx) => Some(total_clauses.saturating_sub(1 + idx)),
+        None => Some(total_clauses),
+    };
     let message = match clause_index {
         Some(idx) => format!(
             "Fail-closed containment breach on pairwise lock '{pair_id}' for clause #{idx}."
@@ -280,6 +299,7 @@ fn pairwise_breach(domain_id: &str, pair_id: &str, clause_index: Option<usize>) 
         domain_id: domain_id.to_string(),
         breaching_pair_lock: pair_id.to_string(),
         breaching_clause_index: clause_index,
+        clauses_skipped,
         message,
     }
 }
@@ -340,6 +360,10 @@ fn breach(parts: BreachParts<'_>) -> BreachErrorEnvelope {
         metrics,
         message,
     } = parts;
+    let clauses_skipped = match breaching_clause_index {
+        Some(idx) => total_clauses_extracted.saturating_sub(1 + idx),
+        None => total_clauses_extracted,
+    };
     BreachErrorEnvelope {
         error: BreachErrorBody {
             kind: "ddi_ingress_breach",
@@ -354,7 +378,12 @@ fn breach(parts: BreachParts<'_>) -> BreachErrorEnvelope {
                 breaching_clause_index,
                 breaching_clause_sha256,
                 total_clauses_extracted,
+                clauses_skipped,
                 gate_latency_ns,
+                normalizer_segmenter_us: None,
+                embedding_inference_ms: None,
+                simd_gate_kernel_us: Some(gate_latency_ns / 1_000),
+                total_pipeline_ms: None,
                 metrics,
             },
         },

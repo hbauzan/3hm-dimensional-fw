@@ -22,15 +22,15 @@ Option 2C delimiters are newline, `;`, `,`, `#`, `.` `!` `?` when followed by wh
 
 - Mode A: every active Top-K coordinate lies inside the pre-dilated box.
 - Mode B: every active coordinate lies inside the box.
-- Mode C: affirmative votes reach **SpectralQuorum** `K` (default 103).
+- Mode C: affirmative votes reach **Subspace Coordinate Quorum (K-of-D L∞ Gate)** `K` (default 103).
 
 `epsilon = 0` across all 1024 coordinates and PCA reduction are rejected.
 
 ## ADR-005 — Pairwise containment
 
-A canonical domain request passes the primary **DomainHypercubeLock** (L1, L2, L3) and then Tier-3 Mode C on every **PairwiseDifferentialLock** whose id names that domain. Registries that contain no pairwise rows keep the single-lock cascade.
+A canonical domain request passes the primary **DomainHypercubeLock** (L1, L2, L3) and then Tier-3 Mode C on every **PairwiseDifferentialLock** (part of the **55 Pairwise OvO Cross-Lingual Subspace Masks**) whose id names that domain. Registries that contain no pairwise rows keep the single-lock cascade.
 
-The pair id is lexicographic `left_right`. The stored envelope is `left`'s coordinate range. Discriminative coordinates are those outside the nine universal noise indices whose ranges do not overlap; the mask keeps the 103 largest separations, or every remaining coordinate when fewer than 103 separate. Quorum is 103 in the first case and `ceil(0.10 * active)` in the second. An empty mask still stores quorum 1, and the kernel gate fail-closes if that mask is scored directly. `evaluate_pairwise_containment` skips `active_count == 0`: normalized `bge-m3` ranges overlap, so an allowlist quorum of 1 would reject every in-domain vector.
+The pair id is lexicographic `left_right`. The stored envelope is `left`'s coordinate range. Discriminative coordinates are those outside the nine Anisotropic Rogue Dimensions (Timkey & van Schijndel, 2021) `[292, 297, 308, 329, 386, 404, 577, 616, 780]` whose ranges do not overlap; the mask keeps the 103 largest separations, or every remaining coordinate when fewer than 103 separate. Quorum is 103 in the first case and `ceil(0.10 * active)` in the second. An empty mask still stores quorum 1, and the kernel gate fail-closes if that mask is scored directly. `evaluate_pairwise_containment` skips `active_count == 0`: normalized `bge-m3` ranges overlap, so an allowlist quorum of 1 would reject every in-domain vector.
 
 Evaluation polarity follows the side under test. Target `left` must sit inside the envelope. Target `right` must miss quorum inside that same envelope. The first failing vector aborts. The full prompt uses no clause index. A clause failure reports that index.
 
@@ -69,13 +69,13 @@ Request `quorum_k` is clamped to `[1, noise_mask.active_count()]` on the cloned 
 
 ## Hot path
 
-Ingress reads `POST /v1/chat/completions`, segments clauses, embeds one batch of shape `[1 + M, 1024]`, then runs L1, L2, L3. A pass streams the upstream body unchanged and sets `X-SF-Decision: PASS`. A breach returns HTTP 403 `SEMANTIC_CONTAINMENT_BREACH` and does not call the upstream model.
+Ingress reads `POST /v1/chat/completions`, runs **InputNormalizer** (NFKC, homoglyph mapping, invisible character stripping, Base64 inspection), segments clauses via **ClauseSegmenter**, embeds one batch of shape `[1 + M, 1024]`, then runs L1 Centroid Cosine, followed by a sequential clause loop short-circuiting on Tier 2 or Tier 3 failures (recording `clauses_skipped`). A pass streams the upstream body unchanged and sets `X-SF-Decision: PASS`. A breach returns HTTP 403 `SEMANTIC_CONTAINMENT_BREACH` and does not call the upstream model.
 
 Pre-dilated bounds (`lo - eps`, `hi + eps`) are computed when a lock is loaded, not per request on this path.
 
 ## Playground chat (`sf-ui`)
 
-`POST /api/v1/chat` gates the latest user message on one **DomainHypercubeLock** (the registry id, or the first loaded lock when `domain_id` is omitted). Tier 1 is centroid cosine, Tier 2 is **ClauseSegmenter** cosine, Tier 3 is Mode C **SpectralQuorum**. Comparisons follow lock polarity. Coordinates stay `f32`.
+`POST /api/v1/chat` gates the latest user message on one **DomainHypercubeLock** (the registry id, or the first loaded lock when `domain_id` is omitted). Tier 1 is centroid cosine, Tier 2 is **ClauseSegmenter** cosine, Tier 3 is Mode C **Subspace Coordinate Quorum (K-of-D L∞ Gate)**. Comparisons follow lock polarity. Coordinates stay `f32`. Sequential clause early-exit records `clauses_skipped` and returns disaggregated latency telemetry.
 
 The diagnostic binary does not call TEI. Python markers project onto the lock centroid inside the pre-dilated box and pass the cascade. Culinary markers project orthogonal to that centroid and breach Tier 1. A string that contains both stays in-domain at Tier 1, so the culinary clause can breach Tier 2. `PERMUTATION_NOISE` stays above the cosine floors and breaches Tier 3. Any other string keeps the SHA-256 projection.
 
