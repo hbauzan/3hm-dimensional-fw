@@ -2,7 +2,7 @@
 
 ## 1. Project Context & Current State (Ground Truth)
 
-* **Repository**: `3hm-dimentional-fw` (Three-Headed Semantic Firewall).
+* **Repository**: `3hm-dimensional-fw` (Three-Headed Semantic Firewall).
 * **Target Subsystems**:
   * **Frontend SPA**: React 19 + TypeScript 5.8 + Vite 8.3 + Tailwind CSS v4 in [`frontend/`](file:///Users/hbauzan/treepwood/3hm-dimentional-fw/frontend) (SF-Proxy Playground running on `http://127.0.0.1:5173`).
   * **Backend Gateway**: Rust `sf-proxy` running on `http://127.0.0.1:8088` (`/v1/chat/completions` and `/api/v1/chat`).

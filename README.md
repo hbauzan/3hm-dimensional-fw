@@ -5,7 +5,7 @@ A high-performance, deterministic, hardware-accelerated L7 semantic firewall and
 [![Rust](https://img.shields.io/badge/Rust-1.94.1-orange?logo=rust)](rust-toolchain.toml)
 [![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 [![DNPI](https://img.shields.io/badge/Registro%20DNPI-N%C2%BA%20226-green)](NOTICE)
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.14049872.svg)](https://doi.org/10.5281/zenodo.14049872)
+[![DOI](https://zenodo.org/badge/1438910240.svg)](https://doi.org/10.5281/zenodo.24094630)
 [![Latency](https://img.shields.io/badge/p99%20Gate%20Latency-0.127ms%20%40%201000%20RPS-brightgreen)](reports/scpb_220_matrix.json)
 [![Containment](https://img.shields.io/badge/SCPB--220-100%25%20Containment-purple)](reports/scpb_220_matrix.json)
 

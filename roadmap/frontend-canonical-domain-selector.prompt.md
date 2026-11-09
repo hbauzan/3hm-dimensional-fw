@@ -2,7 +2,7 @@
 
 ## 1. Project Context & Current State (Ground Truth)
 
-* **Repository**: `3hm-dimentional-fw` (Three-Headed Semantic Firewall).
+* **Repository**: `3hm-dimensional-fw` (Three-Headed Semantic Firewall).
 * **Module Affected**: `frontend/` (React 19 + TypeScript + Vite + Tailwind CSS v4).
 * **Storage & Backend Baseline**:
   * LanceDB (`data/sf-lancedb`) contains the **11 canonical domains**:

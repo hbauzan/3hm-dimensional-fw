@@ -66,7 +66,7 @@ Cada documento de especificación debe estructurarse siguiendo estas 5 secciones
 # TASK SPECIFICATION: [TÍTULO DE LA TAREA EN ALTA DENSIDAD]
 
 ## 1. Project Context & Current State
-* **Repository**: \`3hm-dimentional-fw\`
+* **Repository**: `3hm-dimensional-fw`
 * **Target Subsystem**: [ej. \`frontend/\` | \`crates/sf-proxy\`]
 * **Canonical Toolchain**: [ej. \`pnpm\` exclusively | \`cargo\` exclusively]
 * **Current Quality Baseline**:
