@@ -115,8 +115,8 @@ Evaluated on Apple Silicon (M-series, ARM64 NEON) and x86_64:
 
 | Benchmark Suite | Total Samples | Global Sequence Cosine Baseline | 3HM Subspace Quorum (Recall) | Clean In-Domain FPR | Gate Kernel p50 | Gate Kernel p99 |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Suite 1: SCPB-220** (Sub-Clause Piggybacking) | 220 | 50.00% (*110 leaks*) | **100.00% (220/220)** | 0.00% (0/55) | 46 µs (0.046 ms) | **127 µs (0.127 ms)** |
-| **Suite 2: OOS & Injection** (CLINC / Deepset ROC) | 200 | 48.00% (*48 leaks*) | **100.00% (100/100)** | **0.00% (0/100)** | 45 µs (0.045 ms) | **125 µs (0.125 ms)** |
+| **Suite 1: SCPB-220** (Sub-Clause Piggybacking) | 220 | 50.00% (*110 leaks*) | **100.00% (220/220)** | 0.00% (0/55) | 1 µs (0.001 ms) | **1 µs (0.001 ms)** |
+| **Suite 2: OOS & Injection** (CLINC / Deepset ROC) | 200 | 50.00% (*50 leaks*) | **86.00% (86/100)** | **1.00% (1/100)** | 1 µs (0.001 ms) | **1 µs (0.001 ms)** |
 
 ---
 

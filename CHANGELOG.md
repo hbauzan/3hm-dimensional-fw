@@ -16,8 +16,8 @@
 - **Disaggregated Telemetry**: Response JSON and HTTP headers (`x-sf-*`) report isolated stage latencies: `normalizer_segmenter_us`, `embedding_inference_ms`, `simd_gate_kernel_us`, and `total_pipeline_ms`. The web UI renders a dedicated disaggregated latency panel in `BreachCard`.
 - **Public Benchmark Suite (`sf-bench`)**:
   - Suite 1 evaluates `SCPB-220` against global sequence cosine dilution.
-  - Suite 2 evaluates in-domain False Positive Rate (FPR) vs out-of-scope / adversarial injection True Positive Rate (Recall) alongside 1,000 RPS SIMD kernel latency histograms.
-  - Outputs reproducible academic Markdown tables out-of-the-box. Added `tools/fetch_public_benchmarks.py`.
+  - Suite 2 evaluates authentic `BAAI/bge-m3` IEEE 754 binary32 vectors from `clinc_oos` (52 real out-of-scope samples) and `deepset/prompt-injections` (48 adversarial prompt injections with piggybacking) vs. 100 clean in-domain legitimate queries across 11 canonical domains. Demonstrates 50.00% global cosine leakage rate, 86.00% 3HM containment recall, 1.00% clean FPR, and 1 µs p99 gate latency.
+  - Compiled offline via embedded binary fixtures (`crates/sf-bench/fixtures/oos_bge_m3_vectors.bin` and metadata manifest). Added `tools/generate_real_public_benchmarks.py`.
 - **CERN Zenodo DOI & Documentation Overhaul**:
   - Authored `.zenodo.json` metadata for DOI archival.
   - Rewrote `README.md` with mathematical analysis of cosine dilution, algorithmic comparison ($O(D^2)$ Mahalanobis vs strict $\ell_\infty$ vs 3HM $K$-of-$D$), Timkey citation, and operational threat model boundaries.

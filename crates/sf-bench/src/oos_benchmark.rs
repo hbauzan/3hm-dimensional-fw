@@ -1,21 +1,23 @@
 //! Out-of-Scope & Adversarial Prompt Injection Benchmark Suite.
 //!
 //! Evaluates clean In-Domain legitimate traffic (False Positive Rate / FPR)
-//! vs. Out-of-Scope (OOS) and Adversarial Prompt Injection Payloads (True Positive Rate / Recall).
+//! vs. Out-of-Scope (OOS) and Adversarial Prompt Injection Payloads (True Positive Rate / Recall)
+//! using authentic BAAI/bge-m3 1024D float32 vectors in strict IEEE 754 binary32 determinism.
 //! Measures SIMD gate kernel latency (p50, p95, p99) under 1,000 iterations.
 
+use std::collections::HashMap;
 use std::time::Instant;
 
 use hdrhistogram::Histogram;
-use rand::Rng;
-use rand::SeedableRng;
-use rand_chacha::ChaCha8Rng;
+use serde::Deserialize;
 use sf_kernels::{
-    scalar_cosine_similarity, AlignedVec1024, DomainHypercubeLock, L3InspectionMode, DIM,
+    scalar_cosine_similarity, AlignedVec1024, DomainHypercubeLock, L3InspectionMode, LockSpec,
+    NoiseBitmask1024, MAX_TOPK,
 };
 use sf_proxy::evaluate_three_tier_cascade;
 
-use crate::synthetic_fixtures::generate_canonical_locks;
+pub static OOS_VECTORS_RAW: &[u8] = include_bytes!("../fixtures/oos_bge_m3_vectors.bin");
+pub static OOS_METADATA_RAW: &str = include_str!("../fixtures/oos_bge_m3_metadata.json");
 
 pub const OOS_BENCHMARK_SEED: u64 = 0x005_1DE5_E701;
 
@@ -35,75 +37,107 @@ pub struct OosBenchmarkResult {
     pub latency_p99_us: f64,
 }
 
-/// Generates a deterministic in-domain vector slightly perturbed inside the hypercube bounds.
-fn generate_clean_indomain_vector(
-    lock: &DomainHypercubeLock,
-    rng: &mut ChaCha8Rng,
-) -> AlignedVec1024 {
-    let mut vec = lock.centroid;
-    // Add small in-bounds jitter that stays within the coordinate envelope
-    for dim in 0..DIM {
-        if lock.noise_mask.is_active(dim) {
-            let lo = lock.lo_dilated.data[dim];
-            let hi = lock.hi_dilated.data[dim];
-            let mid = (lo + hi) * 0.5;
-            let span = (hi - lo) * 0.25;
-            let jitter = (rng.gen::<f32>() - 0.5) * span;
-            vec.data[dim] = (mid + jitter).clamp(lo, hi);
-        }
+#[derive(Debug, Deserialize)]
+struct OosManifest {
+    pub domain_locks: HashMap<String, DomainLockSpecDto>,
+    pub indomain_samples: Vec<IndomainSampleDto>,
+    pub oos_injections_samples: Vec<OosInjectionSampleDto>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DomainLockSpecDto {
+    pub centroid: Vec<f32>,
+    pub lo: Vec<f32>,
+    pub hi: Vec<f32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct IndomainSampleDto {
+    pub target_domain: String,
+    #[allow(dead_code)]
+    pub prompt: String,
+    pub clauses: Vec<String>,
+    pub prompt_vec_idx: usize,
+    pub clause_vec_indices: Vec<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OosInjectionSampleDto {
+    pub target_domain: String,
+    #[allow(dead_code)]
+    pub prompt: String,
+    pub clauses: Vec<String>,
+    #[allow(dead_code)]
+    pub attack_type: String,
+    pub prompt_vec_idx: usize,
+    pub clause_vec_indices: Vec<usize>,
+}
+
+fn get_vector(idx: usize) -> AlignedVec1024 {
+    let start = idx * 4096;
+    let end = start + 4096;
+    let slice = &OOS_VECTORS_RAW[start..end];
+    let mut vec = AlignedVec1024::zeros();
+    for (i, chunk) in slice.chunks_exact(4).enumerate() {
+        let mut bytes = [0u8; 4];
+        bytes.copy_from_slice(chunk);
+        vec.data[i] = f32::from_le_bytes(bytes);
     }
     vec
 }
 
-/// Generates an adversarial out-of-scope / prompt injection payload vector.
-/// Designed to simulate piggybacked injections with high cosine similarity to host centroid
-/// but coordinate-level subspace drift breaching K-of-D quorum.
-fn generate_adversarial_injection_vector(
-    lock: &DomainHypercubeLock,
-    rng: &mut ChaCha8Rng,
-) -> (AlignedVec1024, bool) {
-    let mut vec = lock.centroid;
-    // 50% are piggybacked attacks that leak under global sequence cosine
-    let leaks_cosine = rng.gen_bool(0.48);
+/// Run Suite 2: Out-of-Scope & Adversarial Injection Benchmark.
+/// Evaluates authentic BAAI/bge-m3 embeddings from CLINC OOS and Deepset Prompt Injections.
+pub fn run_oos_benchmark() -> OosBenchmarkResult {
+    let manifest: OosManifest =
+        serde_json::from_str(OOS_METADATA_RAW).expect("valid oos metadata manifest");
 
-    if leaks_cosine {
-        // High cosine proximity to centroid, but coordinates drift out-of-bounds across active dimensions
-        let drift_dims = 150..600;
-        for dim in drift_dims {
-            if lock.noise_mask.is_active(dim) {
-                // Shift coordinates outside the hypercube bounds
-                vec.data[dim] = lock.hi_dilated.data[dim] + 0.08 + (rng.gen::<f32>() * 0.02);
-            }
-        }
-    } else {
-        // Direct orthogonal / out-of-domain injection
-        vec = AlignedVec1024::zeros();
-        vec.data[950] = 1.0;
-        for dim in 0..100 {
-            vec.data[dim] = 0.04 + (rng.gen::<f32>() * 0.01);
-        }
+    // Construct calibrated DomainHypercubeLocks for the 11 domains
+    let mut locks_by_name: HashMap<String, DomainHypercubeLock> =
+        HashMap::with_capacity(manifest.domain_locks.len());
+
+    for (name, spec) in manifest.domain_locks {
+        let centroid = AlignedVec1024::from_slice(&spec.centroid).expect("1024 centroid");
+        let lo = AlignedVec1024::from_slice(&spec.lo).expect("1024 lo");
+        let hi = AlignedVec1024::from_slice(&spec.hi).expect("1024 hi");
+
+        let lock = DomainHypercubeLock::from_spec(LockSpec {
+            domain_id: name.clone(),
+            centroid,
+            lo,
+            hi,
+            epsilon: 0.0,
+            noise_mask: NoiseBitmask1024::new_bge_m3_default(),
+            top_k_indices: [0u16; MAX_TOPK],
+            top_k_len: 103,
+            quorum_k: 103,
+            l1_cosine_threshold: 0.50,
+            l2_clause_threshold: 0.50,
+            polarity: 0,
+            domain_version: 1,
+        });
+        locks_by_name.insert(name, lock);
     }
 
-    (vec, leaks_cosine)
-}
-
-/// Run Suite 2: Out-of-Scope & Adversarial Injection Benchmark.
-pub fn run_oos_benchmark() -> OosBenchmarkResult {
-    let mut rng = ChaCha8Rng::seed_from_u64(OOS_BENCHMARK_SEED);
-    let locks = generate_canonical_locks();
-    let num_locks = locks.len();
-
-    // 1. Evaluate 100 Clean In-Domain Legitimate Traffic samples
-    let total_indomain = 100;
+    // 1. Evaluate Clean In-Domain Legitimate Traffic samples (False Positive Rate)
+    let total_indomain = manifest.indomain_samples.len();
     let mut false_positives = 0;
 
-    for i in 0..total_indomain {
-        let lock = &locks[i % num_locks];
-        let indomain_vec = generate_clean_indomain_vector(lock, &mut rng);
-        let clauses = ["clean legitimate query"];
+    for sample in &manifest.indomain_samples {
+        let lock = locks_by_name
+            .get(&sample.target_domain)
+            .unwrap_or_else(|| panic!("missing domain lock for {}", sample.target_domain));
+        let prompt_vec = get_vector(sample.prompt_vec_idx);
+        let clause_vecs: Vec<AlignedVec1024> = sample
+            .clause_vec_indices
+            .iter()
+            .map(|&idx| get_vector(idx))
+            .collect();
+        let clauses: Vec<&str> = sample.clauses.iter().map(|s| s.as_str()).collect();
+
         let res = evaluate_three_tier_cascade(
-            &indomain_vec,
-            std::slice::from_ref(&indomain_vec),
+            &prompt_vec,
+            &clause_vecs,
             &clauses,
             lock,
             L3InspectionMode::ModeCSpectralQuorum,
@@ -114,26 +148,33 @@ pub fn run_oos_benchmark() -> OosBenchmarkResult {
         }
     }
 
-    // 2. Evaluate 100 Out-of-Scope / Prompt Injection samples
-    let total_oos_injections = 100;
+    // 2. Evaluate Out-of-Scope & Prompt Injection samples
+    let total_oos_injections = manifest.oos_injections_samples.len();
     let mut global_cosine_leaks = 0;
     let mut true_positives_blocked = 0;
 
-    for i in 0..total_oos_injections {
-        let lock = &locks[i % num_locks];
-        let (injection_vec, _) = generate_adversarial_injection_vector(lock, &mut rng);
+    for sample in &manifest.oos_injections_samples {
+        let lock = locks_by_name
+            .get(&sample.target_domain)
+            .unwrap_or_else(|| panic!("missing domain lock for {}", sample.target_domain));
+        let prompt_vec = get_vector(sample.prompt_vec_idx);
+        let clause_vecs: Vec<AlignedVec1024> = sample
+            .clause_vec_indices
+            .iter()
+            .map(|&idx| get_vector(idx))
+            .collect();
+        let clauses: Vec<&str> = sample.clauses.iter().map(|s| s.as_str()).collect();
 
         // Global sequence cosine baseline
-        let global_cos = scalar_cosine_similarity(&injection_vec, &lock.centroid);
+        let global_cos = scalar_cosine_similarity(&prompt_vec, &lock.centroid);
         if global_cos >= lock.l1_cosine_threshold {
             global_cosine_leaks += 1;
         }
 
         // 3HM Evaluation
-        let clauses = ["adversarial prompt injection payload"];
         let res = evaluate_three_tier_cascade(
-            &injection_vec,
-            std::slice::from_ref(&injection_vec),
+            &prompt_vec,
+            &clause_vecs,
             &clauses,
             lock,
             L3InspectionMode::ModeCSpectralQuorum,
@@ -146,7 +187,7 @@ pub fn run_oos_benchmark() -> OosBenchmarkResult {
 
     // 3. Measure SIMD gate kernel latency at 1,000 iterations
     let mut histogram = Histogram::<u64>::new(3).expect("histogram");
-    let test_lock = &locks[0];
+    let test_lock = locks_by_name.values().next().expect("test lock");
     let probe_vec = test_lock.centroid;
     let probe_clauses = ["probe clause"];
 
