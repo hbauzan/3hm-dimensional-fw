@@ -114,10 +114,19 @@ async fn test_get_catalog_returns_55_locks_and_220_vectors() {
     let json: serde_json::Value = res.json().await.expect("parse catalog JSON");
 
     assert_eq!(json["product"], "Three-Headed Semantic Firewall");
-    assert_eq!(json["version"], "0.2.0");
+    assert_eq!(json["version"], "1.0.0");
 
     let locks = json["locks"].as_array().expect("locks array");
     assert_eq!(locks.len(), 55, "must contain exactly 55 locks");
+
+    let scpb_vectors = json["scpb_220_vectors"]
+        .as_array()
+        .expect("scpb_220_vectors array");
+    assert_eq!(
+        scpb_vectors.len(),
+        220,
+        "must contain exactly 220 SCPB-220 vectors"
+    );
 
     let vectors = json["rompepepe_vectors"]
         .as_array()

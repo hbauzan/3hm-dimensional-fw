@@ -5357,6 +5357,7 @@ version = "0.2.0"
 dependencies = [
  "async-trait",
  "axum",
+ "base64 0.22.1",
  "bytes",
  "clap",
  "futures-util",
@@ -5376,6 +5377,7 @@ dependencies = [
  "tonic-prost-build",
  "tower",
  "tower-http",
+ "unicode-normalization",
 ]
 
 [[package]]

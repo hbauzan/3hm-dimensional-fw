@@ -1027,16 +1027,16 @@ run_quality_gates() {
 
 run_rompepepe_eval() {
     echo -e "\n${CYAN}${BOLD}======================================================================${RESET}"
-    echo -e "${CYAN}${BOLD}🦍 EVALUACIÓN ADVERSARIAL ROMPEPEPE 220...${RESET}"
+    echo -e "${CYAN}${BOLD}🦍 EVALUACIÓN ADVERSARIAL SCPB-220 (Sub-Clause Piggybacking Benchmark)...${RESET}"
     echo -e "${CYAN}${BOLD}======================================================================${RESET}"
-    echo -e "  ${DIM}«Me dijo la Sacerdotisa Vudú: Los tres monarcas no toleran brechas de contención.»${RESET}\n"
+    echo -e "  ${DIM}«Contención determinista: L3 Subspace Coordinate Quorum contra 220 vectores adversariales.»${RESET}\n"
 
-    cargo run -p sf-bench --bin rompepepe_eval
-    if [ $? -eq 0 ] && [ -f "reports/rompepepe_v3_matrix.json" ]; then
-        echo -e "\n${GREEN}${BOLD}✅ Matriz Rompepepe generada exitosamente en reports/rompepepe_v3_matrix.json${RESET}"
-        python3 -m json.tool reports/rompepepe_v3_matrix.json 2>/dev/null || cat reports/rompepepe_v3_matrix.json
+    cargo run -p sf-bench --bin scpb_220_eval
+    if [ $? -eq 0 ] && [ -f "reports/scpb_220_matrix.json" ]; then
+        echo -e "\n${GREEN}${BOLD}✅ Matriz SCPB-220 generada exitosamente en reports/scpb_220_matrix.json${RESET}"
+        python3 -m json.tool reports/scpb_220_matrix.json 2>/dev/null || cat reports/scpb_220_matrix.json
     else
-        echo -e "\n${RED}❌ Error al evaluar vectores Rompepepe.${RESET}"
+        echo -e "\n${RED}❌ Error al evaluar vectores SCPB-220.${RESET}"
     fi
     read -p "Presiona Enter para regresar al menú..."
 }
@@ -1413,7 +1413,7 @@ show_menu() {
     echo -e " ${GREEN}2.${RESET} ${BOLD}Iniciar Servicio en Primer Plano${RESET} ${DIM}(Foreground interactivo: Gateway, SPA o Studio)${RESET}"
     echo -e " ${BLUE}3.${RESET} ${BOLD}Ejecutar Suite de Tests Unificada${RESET} ${DIM}(cargo test workspace + vitest frontend)${RESET}"
     echo -e " ${BLUE}4.${RESET} ${BOLD}Quality Gates & Linters Estrictos${RESET} ${DIM}(cargo clippy/fmt + frontend tsc/oxlint)${RESET}"
-    echo -e " ${MAGENTA}5.${RESET} ${BOLD}Evaluar Ataques Rompepepe 220${RESET} ${DIM}(sf-bench rompepepe_eval → reports/)${RESET}"
+    echo -e " ${MAGENTA}5.${RESET} ${BOLD}Evaluar Ataques SCPB-220${RESET} ${DIM}(sf-bench scpb_220_eval → reports/)${RESET}"
     echo -e " ${MAGENTA}6.${RESET} ${BOLD}Benchmark de Carga & SLA 1000 RPS${RESET} ${DIM}(sf-bench load_benchmark · p99 < 2ms)${RESET}"
     echo -e " ${YELLOW}7.${RESET} ${BOLD}Gestión de LanceDB & Catálogo${RESET} ${DIM}(Auto-hidratar 55 locks canónicos / calibrar TEI / sf-ingest)${RESET}"
     echo -e " ${YELLOW}8.${RESET} ${BOLD}Limpiar Artefactos de Compilación${RESET} ${DIM}(cargo clean, cache vite, logs y temporales)${RESET}"

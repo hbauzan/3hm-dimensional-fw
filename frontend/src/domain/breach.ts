@@ -20,6 +20,11 @@ export function parseChatBreach(value: unknown): ParseResult<ChatBreachDto> {
     l1: l1.value,
     l2: l2.value,
     l3: l3.value,
+    clauses_skipped: typeof value.clauses_skipped === 'number' ? value.clauses_skipped : undefined,
+    normalizer_segmenter_us: typeof value.normalizer_segmenter_us === 'number' ? value.normalizer_segmenter_us : undefined,
+    embedding_inference_ms: typeof value.embedding_inference_ms === 'number' ? value.embedding_inference_ms : undefined,
+    simd_gate_kernel_us: typeof value.simd_gate_kernel_us === 'number' ? value.simd_gate_kernel_us : undefined,
+    total_pipeline_ms: typeof value.total_pipeline_ms === 'number' ? value.total_pipeline_ms : undefined,
   })
 }
 
@@ -38,6 +43,11 @@ export function parseChatTelemetry(value: unknown): ParseResult<ChatTelemetryDto
     l1: l1.value,
     l2: l2.value,
     l3: l3.value,
+    clauses_skipped: typeof value.clauses_skipped === 'number' ? value.clauses_skipped : undefined,
+    normalizer_segmenter_us: typeof value.normalizer_segmenter_us === 'number' ? value.normalizer_segmenter_us : undefined,
+    embedding_inference_ms: typeof value.embedding_inference_ms === 'number' ? value.embedding_inference_ms : undefined,
+    simd_gate_kernel_us: typeof value.simd_gate_kernel_us === 'number' ? value.simd_gate_kernel_us : undefined,
+    total_pipeline_ms: typeof value.total_pipeline_ms === 'number' ? value.total_pipeline_ms : undefined,
   })
 }
 

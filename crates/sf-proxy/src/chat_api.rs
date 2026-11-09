@@ -19,7 +19,6 @@ use crate::cascade::{
 };
 use crate::embedder::{contains_permutation_noise, project_spectral_drift};
 use crate::handler::ProxyAppState;
-use crate::segmenter::segment_prompt_clauses;
 use crate::upstream::ReqwestChatForwarder;
 
 const DECISION_BREACH: &str = "BREACH";
@@ -95,6 +94,16 @@ pub struct ChatBreachDto {
     pub l1: Tier1BreachDto,
     pub l2: Tier2BreachDto,
     pub l3: Tier3BreachDto,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clauses_skipped: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub normalizer_segmenter_us: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub embedding_inference_ms: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub simd_gate_kernel_us: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_pipeline_ms: Option<f64>,
 }
 
 #[derive(Debug, Clone)]
@@ -205,6 +214,7 @@ fn breach(
     l1: Tier1BreachDto,
     l2: Tier2BreachDto,
     l3: Tier3BreachDto,
+    clauses_skipped: Option<usize>,
 ) -> ChatBreachDto {
     ChatBreachDto {
         decision: DECISION_BREACH.to_string(),
@@ -212,6 +222,11 @@ fn breach(
         l1,
         l2,
         l3,
+        clauses_skipped,
+        normalizer_segmenter_us: None,
+        embedding_inference_ms: None,
+        simd_gate_kernel_us: None,
+        total_pipeline_ms: None,
     }
 }
 
@@ -230,12 +245,16 @@ pub fn evaluate_chat_cascade(
             l1_dto(false, l1_cosine, l1_threshold),
             l2_clear(lock.l2_clause_threshold),
             l3_skipped(),
+            Some(clauses.len()),
         )));
     }
 
     let l2_threshold = lock.l2_clause_threshold;
     let mut min_clause_cosine = f32::MAX;
     let mut min_clause_idx = 0;
+    let mut min_affirmative_votes = u16::MAX;
+    let mut required_votes = lock.quorum_k;
+
     for (idx, (clause, clause_vec)) in clauses.iter().zip(clause_vecs.iter()).enumerate() {
         let clause_cosine = cosine_similarity_1024(clause_vec, &lock.centroid);
         if clause_cosine < min_clause_cosine {
@@ -243,6 +262,7 @@ pub fn evaluate_chat_cascade(
             min_clause_idx = idx;
         }
         if !tier_passes(lock.polarity, clause_cosine, l2_threshold) {
+            let skipped = clauses.len().saturating_sub(1 + idx);
             return Err(Box::new(breach(
                 TIER_L2,
                 l1_dto(true, l1_cosine, l1_threshold),
@@ -254,19 +274,17 @@ pub fn evaluate_chat_cascade(
                     threshold: l2_threshold,
                 },
                 l3_skipped(),
+                Some(skipped),
             )));
         }
-    }
 
-    let mut min_affirmative_votes = u16::MAX;
-    let mut required_votes = lock.quorum_k;
-    for clause_vec in clause_vecs {
         let l3 = evaluate_l3_gate(clause_vec, lock, L3InspectionMode::ModeCSpectralQuorum, 0);
         if l3.affirmative_votes < min_affirmative_votes {
             min_affirmative_votes = l3.affirmative_votes;
         }
         required_votes = l3.required_votes;
         if !l3.passed {
+            let skipped = clauses.len().saturating_sub(1 + idx);
             return Err(Box::new(breach(
                 TIER_L3,
                 l1_dto(true, l1_cosine, l1_threshold),
@@ -277,6 +295,7 @@ pub fn evaluate_chat_cascade(
                     affirmative_votes: Some(l3.affirmative_votes),
                     required_votes: Some(l3.required_votes),
                 },
+                Some(skipped),
             )));
         }
     }
@@ -306,6 +325,11 @@ pub fn evaluate_chat_cascade(
             },
             required_votes: Some(required_votes),
         },
+        clauses_skipped: Some(0),
+        normalizer_segmenter_us: None,
+        embedding_inference_ms: None,
+        simd_gate_kernel_us: None,
+        total_pipeline_ms: None,
     })
 }
 
@@ -453,13 +477,21 @@ pub async fn handle_api_v1_chat(
         lock = apply_chat_overrides(&lock, overrides);
     }
 
-    let clauses = segment_prompt_clauses(&user_text);
+    let pipeline_start = std::time::Instant::now();
+
+    let t_norm_start = std::time::Instant::now();
+    let normalized = crate::normalizer::InputNormalizer::normalize(&user_text);
+    let clauses = normalized.segment_all_clauses();
+    let normalizer_segmenter_us = t_norm_start.elapsed().as_micros() as u64;
+
     if clauses.is_empty() {
         return json_error(StatusCode::BAD_REQUEST, "prompt produced no clauses");
     }
     let mut batch = Vec::with_capacity(1 + clauses.len());
-    batch.push(user_text.as_str());
+    batch.push(normalized.text.as_str());
     batch.extend(clauses.iter().copied());
+
+    let t_embed_start = std::time::Instant::now();
     let mut vectors = match state.embedder.embed_batch_f32(&batch).await {
         Ok(vectors) if vectors.len() == batch.len() => vectors,
         Ok(_) => {
@@ -475,6 +507,8 @@ pub async fn handle_api_v1_chat(
             );
         }
     };
+    let embedding_inference_ms = t_embed_start.elapsed().as_secs_f64() * 1000.0;
+
     if batch.iter().any(|text| contains_permutation_noise(text)) {
         let drifted = project_spectral_drift(&lock);
         for (idx, text) in batch.iter().enumerate() {
@@ -484,21 +518,58 @@ pub async fn handle_api_v1_chat(
         }
     }
 
-    let gate_dto = match evaluate_chat_cascade(&vectors[0], &clauses, &vectors[1..], &lock) {
+    let t_simd_start = std::time::Instant::now();
+    let mut gate_dto = match evaluate_chat_cascade(&vectors[0], &clauses, &vectors[1..], &lock) {
         Ok(dto) => dto,
-        Err(dto) => return (StatusCode::FORBIDDEN, Json(*dto)).into_response(),
+        Err(mut dto) => {
+            let simd_gate_kernel_us = t_simd_start.elapsed().as_micros() as u64;
+            let total_pipeline_ms = pipeline_start.elapsed().as_secs_f64() * 1000.0;
+            dto.normalizer_segmenter_us = Some(normalizer_segmenter_us);
+            dto.embedding_inference_ms = Some(embedding_inference_ms);
+            dto.simd_gate_kernel_us = Some(simd_gate_kernel_us);
+            dto.total_pipeline_ms = Some(total_pipeline_ms);
+            let skipped = dto.clauses_skipped.unwrap_or(0);
+            let mut res = (StatusCode::FORBIDDEN, Json(*dto)).into_response();
+            let h = res.headers_mut();
+            add_latency_headers(
+                h,
+                normalizer_segmenter_us,
+                embedding_inference_ms,
+                simd_gate_kernel_us,
+                total_pipeline_ms,
+                skipped,
+            );
+            return res;
+        }
     };
+    let simd_gate_kernel_us = t_simd_start.elapsed().as_micros() as u64;
+    let total_pipeline_ms = pipeline_start.elapsed().as_secs_f64() * 1000.0;
+    gate_dto.normalizer_segmenter_us = Some(normalizer_segmenter_us);
+    gate_dto.embedding_inference_ms = Some(embedding_inference_ms);
+    gate_dto.simd_gate_kernel_us = Some(simd_gate_kernel_us);
+    gate_dto.total_pipeline_ms = Some(total_pipeline_ms);
+
     let enforce_pairwise = !state.embedder.is_mock() || mock_batch_requires_pairwise(&batch);
     if enforce_pairwise {
         let pairs = state.registry.pairwise_locks_for(&lock.domain_id);
         if let Err(breach) =
             evaluate_pairwise_containment(&vectors[0], &vectors[1..], &lock.domain_id, &pairs)
         {
-            return (
+            let mut res = (
                 StatusCode::FORBIDDEN,
                 Json(pairwise_breach_envelope(breach)),
             )
                 .into_response();
+            let h = res.headers_mut();
+            add_latency_headers(
+                h,
+                normalizer_segmenter_us,
+                embedding_inference_ms,
+                simd_gate_kernel_us,
+                total_pipeline_ms,
+                0,
+            );
+            return res;
         }
     }
 
@@ -534,6 +605,14 @@ pub async fn handle_api_v1_chat(
             if let Ok(value) = HeaderValue::from_str(&clauses.len().to_string()) {
                 headers.insert("x-sf-clauses-evaluated", value);
             }
+            add_latency_headers(
+                headers,
+                normalizer_segmenter_us,
+                embedding_inference_ms,
+                simd_gate_kernel_us,
+                total_pipeline_ms,
+                0,
+            );
             if let Ok(json_str) = serde_json::to_string(&gate_dto) {
                 if let Ok(val) = HeaderValue::from_str(&json_str) {
                     headers.insert("x-sf-telemetry", val);
@@ -542,6 +621,31 @@ pub async fn handle_api_v1_chat(
             response
         }
         Err(err) => json_error(StatusCode::BAD_GATEWAY, err),
+    }
+}
+
+pub(crate) fn add_latency_headers(
+    headers: &mut HeaderMap,
+    normalizer_segmenter_us: u64,
+    embedding_inference_ms: f64,
+    simd_gate_kernel_us: u64,
+    total_pipeline_ms: f64,
+    clauses_skipped: usize,
+) {
+    if let Ok(val) = HeaderValue::from_str(&normalizer_segmenter_us.to_string()) {
+        headers.insert("x-sf-normalizer-segmenter-us", val);
+    }
+    if let Ok(val) = HeaderValue::from_str(&format!("{embedding_inference_ms:.3}")) {
+        headers.insert("x-sf-embedding-inference-ms", val);
+    }
+    if let Ok(val) = HeaderValue::from_str(&simd_gate_kernel_us.to_string()) {
+        headers.insert("x-sf-simd-gate-kernel-us", val);
+    }
+    if let Ok(val) = HeaderValue::from_str(&format!("{total_pipeline_ms:.3}")) {
+        headers.insert("x-sf-total-pipeline-ms", val);
+    }
+    if let Ok(val) = HeaderValue::from_str(&clauses_skipped.to_string()) {
+        headers.insert("x-sf-clauses-skipped", val);
     }
 }
 

@@ -5,7 +5,8 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "Rompepepe 220 harness and 1000 RPS gateway load SLA"
+description = "SCPB-220 (Sub-Clause Piggybacking Benchmark) harness, OOS validation, and 1000 RPS gateway load SLA"
+default-run = "sf_bench"
 
 [dependencies]
 sf-kernels = { path = "../sf-kernels" }
@@ -22,6 +23,14 @@ serde_json = { workspace = true }
 bytes = { workspace = true }
 http-body-util = "0.1"
 clap = { workspace = true }
+
+[[bin]]
+name = "sf_bench"
+path = "src/main.rs"
+
+[[bin]]
+name = "scpb_220_eval"
+path = "src/bin/scpb_220_eval.rs"
 
 [[bin]]
 name = "rompepepe_eval"

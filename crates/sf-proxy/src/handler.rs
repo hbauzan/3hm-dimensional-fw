@@ -4,7 +4,6 @@ use crate::chat_api::handle_api_v1_chat;
 use crate::cors::CorsAllow;
 use crate::embedder::BatchEmbedderClient;
 use crate::routing::{evaluate_route, RouteFailure, RouteInput};
-use crate::segmenter::segment_prompt_clauses;
 use crate::upstream::UpstreamLlmForwarder;
 use axum::extract::State;
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
@@ -101,6 +100,8 @@ pub async fn handle_v1_chat_completions(
         }
     };
 
+    let pipeline_start = std::time::Instant::now();
+
     let l3_mode = match headers
         .get("x-ddi-mode")
         .and_then(|value| value.to_str().ok())
@@ -110,11 +111,16 @@ pub async fn handle_v1_chat_completions(
         _ => L3InspectionMode::ModeCSpectralQuorum,
     };
 
-    let clauses = segment_prompt_clauses(&user_prompt);
+    let t_norm_start = std::time::Instant::now();
+    let normalized = crate::normalizer::InputNormalizer::normalize(&user_prompt);
+    let clauses = normalized.segment_all_clauses();
+    let normalizer_segmenter_us = t_norm_start.elapsed().as_micros() as u64;
+
     let mut batch_inputs = Vec::with_capacity(1 + clauses.len());
-    batch_inputs.push(user_prompt.as_str());
+    batch_inputs.push(normalized.text.as_str());
     batch_inputs.extend(clauses.iter().copied());
 
+    let t_embed_start = std::time::Instant::now();
     let vectors = match state.embedder.embed_batch_f32(&batch_inputs).await {
         Ok(vectors) if vectors.len() == batch_inputs.len() => vectors,
         Ok(_) => {
@@ -130,8 +136,10 @@ pub async fn handle_v1_chat_completions(
             );
         }
     };
+    let embedding_inference_ms = t_embed_start.elapsed().as_secs_f64() * 1000.0;
 
-    match evaluate_route(RouteInput {
+    let t_simd_start = std::time::Instant::now();
+    let route_res = evaluate_route(RouteInput {
         registry: &state.registry,
         headers: &headers,
         default_domain: &state.default_domain,
@@ -140,7 +148,11 @@ pub async fn handle_v1_chat_completions(
         clauses: &clauses,
         l3_mode,
         max_telemetry_coords: state.max_telemetry_coords,
-    }) {
+    });
+    let simd_gate_kernel_us = t_simd_start.elapsed().as_micros() as u64;
+    let total_pipeline_ms = pipeline_start.elapsed().as_secs_f64() * 1000.0;
+
+    match route_res {
         Ok(gate_latency_ns) => {
             match state
                 .upstream
@@ -156,6 +168,14 @@ pub async fn handle_v1_chat_completions(
                     if let Ok(value) = HeaderValue::from_str(&clauses.len().to_string()) {
                         header_map.insert("x-sf-clauses-evaluated", value);
                     }
+                    crate::chat_api::add_latency_headers(
+                        header_map,
+                        normalizer_segmenter_us,
+                        embedding_inference_ms,
+                        simd_gate_kernel_us,
+                        total_pipeline_ms,
+                        0,
+                    );
                     response
                 }
                 Err(err) => (
@@ -169,11 +189,35 @@ pub async fn handle_v1_chat_completions(
         }
         Err(failure) => match *failure {
             RouteFailure::Route(route_err) => forbidden(route_err.status_code, &route_err.message),
-            RouteFailure::Breach(envelope) => {
-                (StatusCode::FORBIDDEN, Json(*envelope)).into_response()
+            RouteFailure::Breach(mut envelope) => {
+                envelope.error.telemetry.normalizer_segmenter_us = Some(normalizer_segmenter_us);
+                envelope.error.telemetry.embedding_inference_ms = Some(embedding_inference_ms);
+                envelope.error.telemetry.simd_gate_kernel_us = Some(simd_gate_kernel_us);
+                envelope.error.telemetry.total_pipeline_ms = Some(total_pipeline_ms);
+                let skipped = envelope.error.telemetry.clauses_skipped;
+                let mut res = (StatusCode::FORBIDDEN, Json(*envelope)).into_response();
+                crate::chat_api::add_latency_headers(
+                    res.headers_mut(),
+                    normalizer_segmenter_us,
+                    embedding_inference_ms,
+                    simd_gate_kernel_us,
+                    total_pipeline_ms,
+                    skipped,
+                );
+                res
             }
             RouteFailure::Pairwise(envelope) => {
-                (StatusCode::FORBIDDEN, Json(*envelope)).into_response()
+                let skipped = envelope.error.telemetry.clauses_skipped.unwrap_or(0);
+                let mut res = (StatusCode::FORBIDDEN, Json(*envelope)).into_response();
+                crate::chat_api::add_latency_headers(
+                    res.headers_mut(),
+                    normalizer_segmenter_us,
+                    embedding_inference_ms,
+                    simd_gate_kernel_us,
+                    total_pipeline_ms,
+                    skipped,
+                );
+                res
             }
         },
     }

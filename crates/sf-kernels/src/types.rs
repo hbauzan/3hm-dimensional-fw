@@ -10,10 +10,13 @@ pub const NOISE_MASK_WORDS: usize = 16;
 pub const DEFAULT_QUORUM_K: u16 = 103;
 /// Storage capacity for Top-K indices. 128 keeps the tail 64-byte friendly.
 pub const MAX_TOPK: usize = 128;
-/// Background coordinates cleared by [`NoiseBitmask1024::new_bge_m3_default`].
+/// Anisotropic Rogue Dimensions (Timkey & van Schijndel, 2021).
+/// The nine universal background coordinates pruned by [`NoiseBitmask1024::new_bge_m3_default`]:
+/// `[292, 297, 308, 329, 386, 404, 577, 616, 780]`.
 pub const UNIVERSAL_NOISE_INDICES: [u16; 9] = [292, 297, 308, 329, 386, 404, 577, 616, 780];
 
-/// 64-byte aligned 1024-d binary32 tensor. Size is 4096 bytes.
+/// 64-byte aligned 1024-d binary32 tensor on the 1024D Contrastive Embedding Manifold ($S^{1023} \subset \mathbb{R}^{1024}$).
+/// Deterministic IEEE 754 binary32 evaluation with 0 ULP cross-architecture parity. Size is 4096 bytes.
 #[repr(C, align(64))]
 #[derive(Clone, Copy)]
 pub struct AlignedVec1024 {
@@ -190,11 +193,15 @@ impl DomainHypercubeLock {
     }
 }
 
-/// Tier-3 strategy.
+/// Tier-3 coordinate subspace strategy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum L3InspectionMode {
+    /// Mode A: Top-K coordinate bounding box.
     ModeATopK,
+    /// Mode B: Strict 1024-dimensional hypercube envelope.
     ModeBStrictHypercube,
+    /// Mode C: Subspace Coordinate Quorum (K-of-D L∞ Gate).
+    /// Operates in the canonical coordinate basis via ℓ_∞ bounding boxes and bitmask popcount.
     ModeCSpectralQuorum,
 }
 

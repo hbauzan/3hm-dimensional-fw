@@ -36,13 +36,19 @@ pub struct AttackCase {
     pub cosine_should_leak: bool,
 }
 
+/// SCPB-220 (Sub-Clause Piggybacking Benchmark) stand-in.
+/// Deterministic evaluation corpus with 55 Pairwise OvO Cross-Lingual Subspace Masks and 220 attack vectors.
 #[derive(Clone, Debug)]
-pub struct RompepepeCorpus {
+pub struct Scpb220Corpus {
     pub locks: Vec<DomainHypercubeLock>,
     pub attacks: Vec<AttackCase>,
 }
 
-pub fn generate_corpus() -> RompepepeCorpus {
+/// Backwards compatibility alias for RompepepeCorpus.
+pub type RompepepeCorpus = Scpb220Corpus;
+
+/// Generate the canonical SCPB-220 (Sub-Clause Piggybacking Benchmark) corpus.
+pub fn generate_scpb_220_corpus() -> Scpb220Corpus {
     let mut rng = ChaCha8Rng::seed_from_u64(FIXTURE_SEED);
     let mut locks = Vec::with_capacity(55);
     for left in 0..DOMAIN_NAMES.len() {
@@ -72,7 +78,12 @@ pub fn generate_corpus() -> RompepepeCorpus {
         let _ = lock;
     }
     debug_assert_eq!(attacks.len(), 220);
-    RompepepeCorpus { locks, attacks }
+    Scpb220Corpus { locks, attacks }
+}
+
+/// Generates the SCPB-220 benchmark corpus (retained for backward compatibility).
+pub fn generate_corpus() -> Scpb220Corpus {
+    generate_scpb_220_corpus()
 }
 
 fn pair_lock(left: usize, right: usize, spike: usize) -> DomainHypercubeLock {
