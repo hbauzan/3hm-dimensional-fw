@@ -33,6 +33,7 @@ fn registry(version: u64) -> Arc<DomainRegistry> {
             .into_iter()
             .collect(),
         all_locks: Vec::new(),
+        manifests: std::collections::HashMap::new(),
     })
 }
 

@@ -3,7 +3,7 @@
 use clap::Parser;
 use sf_bench::canonical_seed_corpus;
 use sf_proxy::{BatchEmbedderClient, TeiHttpEmbedder};
-use sf_storage::{assemble_canonical_locks, write_locks, CANONICAL_DOMAINS, DIM};
+use sf_storage::{assemble_canonical_catalog, write_locks_with_manifests, CANONICAL_DOMAINS, DIM};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -61,17 +61,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .iter()
         .map(|(name, rows)| (name.as_str(), rows.as_slice()))
         .collect();
-    let locks = assemble_canonical_locks(&borrowed).map_err(|err| err.to_string())?;
-    let pairs = locks
+    let catalog = assemble_canonical_catalog(&borrowed).map_err(|err| err.to_string())?;
+    let pairs = catalog
+        .locks
         .iter()
         .filter(|lock| lock.domain_id.contains('_'))
         .count();
-    let domains = locks.len() - pairs;
+    let domains = catalog.locks.len() - pairs;
     println!("[CALIBRATE] Built {domains} domain locks and {pairs} pairwise locks");
-    write_locks(&args.lancedb_uri, &args.table, &locks).await?;
+    write_locks_with_manifests(
+        &args.lancedb_uri,
+        &args.table,
+        &catalog.locks,
+        &catalog.manifests,
+    )
+    .await?;
     println!(
         "[CALIBRATE] Wrote {} locks to {} table {}",
-        locks.len(),
+        catalog.locks.len(),
         args.lancedb_uri,
         args.table
     );

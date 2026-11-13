@@ -1,7 +1,7 @@
 use clap::Parser;
 use sf_kernels::{AlignedVec1024, DomainHypercubeLock, LockSpec, MAX_TOPK};
 use sf_proxy::{BatchEmbedderClient, TeiHttpEmbedder};
-use sf_storage::{calibrate_matrix, write_locks, HotRegistry};
+use sf_storage::{calibrate_matrix, write_locks_with_manifests, CorpusManifest, HotRegistry};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -87,7 +87,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         epsilon: 0.0,
         noise_mask: calib.noise_mask,
         top_k_indices: top_k,
-        top_k_len: 103,
+        top_k_len: calib.top_k_len,
         quorum_k: 103,
         l1_cosine_threshold: args.l1_threshold,
         l2_clause_threshold: args.l2_threshold,
@@ -103,11 +103,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         lock.l2_clause_threshold
     );
 
-    // Merge with existing locks in LanceDB if present
     let mut all_locks = Vec::new();
+    let mut manifests = Vec::new();
     if let Ok(reg) = HotRegistry::load_from_lancedb(&args.lancedb_uri, &args.table).await {
         for existing in reg.locks() {
             if existing.domain_id != args.domain_id {
+                manifests.push(
+                    reg.manifest(&existing.domain_id)
+                        .unwrap_or(CorpusManifest::UNPROVIDED),
+                );
                 all_locks.push((*existing).clone());
             }
         }
@@ -118,6 +122,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     all_locks.push(lock);
+    manifests.push(calib.manifest());
 
     println!(
         "[CALIBRATE] Writing {} locks to LanceDB at '{}' (table '{}')...",
@@ -125,7 +130,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         args.lancedb_uri,
         args.table
     );
-    write_locks(&args.lancedb_uri, &args.table, &all_locks).await?;
+    write_locks_with_manifests(&args.lancedb_uri, &args.table, &all_locks, &manifests).await?;
 
     println!(
         "[CALIBRATE] Success! Domain '{}' calibrated and persisted in LanceDB.",

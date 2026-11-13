@@ -26,8 +26,75 @@ pub struct Calibration {
     pub mu: [f64; DIM],
     pub noise_mask: NoiseBitmask1024,
     pub top_k: [u16; 103],
+    pub top_k_len: u16,
     pub sha256: [u8; 32],
     pub rows: u64,
+}
+
+/// Corpus provenance stored beside a hypercube row.
+///
+/// `UNPROVIDED` is the only value legal when ingestion has no external file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CorpusManifest {
+    pub doc_count: u64,
+    pub sha256: [u8; 32],
+}
+
+impl CorpusManifest {
+    pub const UNPROVIDED: Self = Self {
+        doc_count: 0,
+        sha256: [0u8; 32],
+    };
+}
+
+impl Calibration {
+    pub fn manifest(&self) -> CorpusManifest {
+        CorpusManifest {
+            doc_count: self.rows,
+            sha256: self.sha256,
+        }
+    }
+}
+
+/// SHA-256 of the little-endian `f32` payload and the total row count.
+/// An empty list is [`CorpusManifest::UNPROVIDED`], not a one-row digest.
+pub fn manifest_from_matrices(matrices: &[&[f32]]) -> Result<CorpusManifest, CalibrationError> {
+    if matrices.is_empty() {
+        return Ok(CorpusManifest::UNPROVIDED);
+    }
+    for matrix in matrices {
+        if matrix.is_empty() || !matrix.len().is_multiple_of(DIM) {
+            return Err(CalibrationError {
+                message: format!(
+                    "matrix length {} is not a positive multiple of {DIM}",
+                    matrix.len()
+                ),
+            });
+        }
+        for (offset, value) in matrix.iter().copied().enumerate() {
+            if !value.is_finite() {
+                return Err(CalibrationError {
+                    message: format!("non-finite sample at flat index {offset}"),
+                });
+            }
+        }
+    }
+    Ok(digest_f32_rows(matrices))
+}
+
+fn digest_f32_rows(matrices: &[&[f32]]) -> CorpusManifest {
+    let mut hasher = sha2::Sha256::new();
+    let mut doc_count = 0u64;
+    for matrix in matrices {
+        doc_count += (matrix.len() / DIM) as u64;
+        for value in *matrix {
+            hasher.update(value.to_le_bytes());
+        }
+    }
+    let digest = hasher.finalize();
+    let mut sha256 = [0u8; 32];
+    sha256.copy_from_slice(&digest);
+    CorpusManifest { doc_count, sha256 }
 }
 
 pub fn calibrate_matrix(
@@ -77,13 +144,9 @@ pub fn calibrate_matrix(
     }
     let noise_mask = calibrate_noise_bitmask(&mu, &lo, &hi, extra_pruned_dims);
     let top_k = top_k_indices(&mu, &lo, &hi, &noise_mask);
-    let mut bytes = Vec::with_capacity(rows.len() * 4);
-    for value in rows {
-        bytes.extend_from_slice(&value.to_le_bytes());
-    }
-    let digest = sha2::Sha256::digest(&bytes);
-    let mut sha256 = [0u8; 32];
-    sha256.copy_from_slice(&digest);
+    let manifest = digest_f32_rows(&[rows]);
+    let active = usize::try_from(noise_mask.active_count()).unwrap_or(0);
+    let top_k_len = u16::try_from(active.min(usize::from(DEFAULT_QUORUM_K))).unwrap_or(0);
     Ok(Calibration {
         lo,
         hi,
@@ -91,8 +154,9 @@ pub fn calibrate_matrix(
         mu,
         noise_mask,
         top_k,
-        sha256,
-        rows: n as u64,
+        top_k_len,
+        sha256: manifest.sha256,
+        rows: manifest.doc_count,
     })
 }
 
@@ -283,10 +347,23 @@ pub fn calibrate_pairwise_lock(
     }))
 }
 
+#[derive(Clone, Debug)]
+pub struct CanonicalCatalog {
+    pub locks: Vec<DomainHypercubeLock>,
+    pub manifests: Vec<CorpusManifest>,
+}
+
 /// Eleven single-domain locks plus the 55 unordered pairwise locks.
 pub fn assemble_canonical_locks(
     domains: &[(&str, &[f32])],
 ) -> Result<Vec<DomainHypercubeLock>, CalibrationError> {
+    Ok(assemble_canonical_catalog(domains)?.locks)
+}
+
+/// Locks plus the corpus manifest each row was calibrated from.
+pub fn assemble_canonical_catalog(
+    domains: &[(&str, &[f32])],
+) -> Result<CanonicalCatalog, CalibrationError> {
     if domains.len() != CANONICAL_DOMAINS.len() {
         return Err(CalibrationError {
             message: format!(
@@ -318,16 +395,19 @@ pub fn assemble_canonical_locks(
         calibrated.push(calibrate_matrix(matrix, 0)?);
     }
     let mut locks = Vec::with_capacity(66);
+    let mut manifests = Vec::with_capacity(66);
     for (index, name) in CANONICAL_DOMAINS.iter().enumerate() {
+        manifests.push(calibrated[index].manifest());
         locks.push(domain_lock(name, &calibrated[index])?);
     }
     for left in 0..CANONICAL_DOMAINS.len() {
         for right in (left + 1)..CANONICAL_DOMAINS.len() {
             let (name_a, name_b, rows_a, rows_b) = ordered_pair(left, right, &rows);
+            manifests.push(manifest_from_matrices(&[rows_a, rows_b])?);
             locks.push(calibrate_pairwise_lock(name_a, name_b, rows_a, rows_b)?);
         }
     }
-    Ok(locks)
+    Ok(CanonicalCatalog { locks, manifests })
 }
 
 fn ordered_pair<'a>(
@@ -360,7 +440,7 @@ fn domain_lock(
         epsilon: 0.0,
         noise_mask: calibration.noise_mask,
         top_k_indices: top_k,
-        top_k_len: DEFAULT_QUORUM_K,
+        top_k_len: calibration.top_k_len,
         quorum_k: DEFAULT_QUORUM_K,
         l1_cosine_threshold: CANONICAL_COSINE,
         l2_clause_threshold: CANONICAL_COSINE,

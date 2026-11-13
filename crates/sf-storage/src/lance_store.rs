@@ -4,7 +4,7 @@ use crate::registry::{
     record_batch_from_calibration, record_batch_from_locks, DomainRegistry, LockMeta, RegistryError,
 };
 use crate::schema::TABLE_NAME;
-use crate::Calibration;
+use crate::{Calibration, CorpusManifest};
 use futures_util::TryStreamExt;
 use lancedb::arrow::arrow_array::RecordBatch;
 use lancedb::query::{ExecutableQuery, QueryBase};
@@ -49,7 +49,17 @@ pub async fn write_locks(
     table_name: &str,
     locks: &[DomainHypercubeLock],
 ) -> Result<(), RegistryError> {
-    let batch = record_batch_from_locks(locks)?;
+    let manifests = vec![CorpusManifest::UNPROVIDED; locks.len()];
+    write_locks_with_manifests(uri, table_name, locks, &manifests).await
+}
+
+pub async fn write_locks_with_manifests(
+    uri: &str,
+    table_name: &str,
+    locks: &[DomainHypercubeLock],
+    manifests: &[CorpusManifest],
+) -> Result<(), RegistryError> {
+    let batch = record_batch_from_locks(locks, manifests)?;
     let conn = lancedb::connect(uri).execute().await.map_err(err)?;
     conn.create_table(table_name, batch)
         .mode(lancedb::database::CreateTableMode::Overwrite)
