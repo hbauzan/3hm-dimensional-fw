@@ -2,7 +2,7 @@
 
 use crate::schema::domain_hypercube_arrow_schema;
 use crate::validate::{load_validated_vec1024, LoadError};
-use crate::Calibration;
+use crate::{Calibration, CorpusManifest};
 use arc_swap::ArcSwap;
 use lancedb::arrow::arrow_array::{
     Array, FixedSizeBinaryArray, FixedSizeListArray, Float32Array, RecordBatch, StringArray,
@@ -42,32 +42,38 @@ impl From<LoadError> for RegistryError {
 pub struct DomainRegistry {
     pub locks_by_id: HashMap<String, Arc<DomainHypercubeLock>>,
     pub all_locks: Vec<Arc<DomainHypercubeLock>>,
+    pub manifests: HashMap<String, CorpusManifest>,
 }
 
 impl DomainRegistry {
     pub fn from_record_batches(batches: Vec<RecordBatch>) -> Result<Self, RegistryError> {
         let mut locks_by_id = HashMap::new();
         let mut all_locks = Vec::new();
+        let mut manifests = HashMap::new();
         for batch in batches {
-            append_batch(&batch, &mut locks_by_id, &mut all_locks)?;
+            append_batch(&batch, &mut locks_by_id, &mut all_locks, &mut manifests)?;
         }
         Ok(Self {
             locks_by_id,
             all_locks,
+            manifests,
         })
     }
 
     pub fn from_locks(locks: impl IntoIterator<Item = DomainHypercubeLock>) -> Self {
         let mut locks_by_id = HashMap::new();
         let mut all_locks = Vec::new();
+        let mut manifests = HashMap::new();
         for lock in locks {
             let arc = Arc::new(lock);
+            manifests.insert(arc.domain_id.clone(), CorpusManifest::UNPROVIDED);
             locks_by_id.insert(arc.domain_id.clone(), Arc::clone(&arc));
             all_locks.push(arc);
         }
         Self {
             locks_by_id,
             all_locks,
+            manifests,
         }
     }
 
@@ -85,6 +91,10 @@ impl DomainRegistry {
 
     pub fn len(&self) -> usize {
         self.all_locks.len()
+    }
+
+    pub fn manifest(&self, domain_id: &str) -> Option<CorpusManifest> {
+        self.manifests.get(domain_id).copied()
     }
 }
 
@@ -136,6 +146,10 @@ impl HotRegistry {
 
     pub fn locks(&self) -> Vec<Arc<DomainHypercubeLock>> {
         self.load().locks().to_vec()
+    }
+
+    pub fn manifest(&self, domain_id: &str) -> Option<CorpusManifest> {
+        self.load().manifest(domain_id)
     }
 
     /// Pairwise locks whose id names `domain_id` on one side. Empty unless `domain_id` is canonical.
@@ -196,6 +210,10 @@ pub fn record_batch_from_calibration(
             Arc::new(lo),
             Arc::new(hi),
             Arc::new(top_k),
+            Arc::new(UInt16Array::from(vec![bounded_top_k_len(
+                calibration.top_k_len,
+                DEFAULT_QUORUM_K,
+            )])),
             Arc::new(mask),
             Arc::new(UInt64Array::from(vec![calibration.rows])),
             Arc::new(digest),
@@ -208,9 +226,20 @@ pub fn record_batch_from_calibration(
 
 pub fn record_batch_from_locks<'a>(
     locks: impl IntoIterator<Item = &'a DomainHypercubeLock>,
+    manifests: impl IntoIterator<Item = &'a CorpusManifest>,
 ) -> Result<RecordBatch, RegistryError> {
     let schema = domain_hypercube_arrow_schema();
     let locks: Vec<&'a DomainHypercubeLock> = locks.into_iter().collect();
+    let manifests: Vec<&'a CorpusManifest> = manifests.into_iter().collect();
+    if locks.len() != manifests.len() {
+        return Err(RegistryError {
+            message: format!(
+                "lock/manifest length mismatch: {} locks and {} manifests",
+                locks.len(),
+                manifests.len()
+            ),
+        });
+    }
     let n = locks.len();
 
     let mut domain_ids = Vec::with_capacity(n);
@@ -224,11 +253,12 @@ pub fn record_batch_from_locks<'a>(
     let mut lo_floats = Vec::with_capacity(n * DIM);
     let mut hi_floats = Vec::with_capacity(n * DIM);
     let mut top_k_u16 = Vec::with_capacity(n * usize::from(DEFAULT_QUORUM_K));
+    let mut top_k_lens = Vec::with_capacity(n);
     let mut mask_bytes = Vec::with_capacity(n * 128);
     let mut doc_counts = Vec::with_capacity(n);
-    let mut manifests = Vec::with_capacity(n * 32);
+    let mut digest_bytes = Vec::with_capacity(n * 32);
 
-    for lock in locks {
+    for (lock, manifest) in locks.into_iter().zip(manifests) {
         domain_ids.push(lock.domain_id.clone());
         versions.push(lock.domain_version);
         polarities.push(lock.polarity);
@@ -243,11 +273,12 @@ pub fn record_batch_from_locks<'a>(
         }
         let k = usize::from(DEFAULT_QUORUM_K);
         top_k_u16.extend_from_slice(&lock.top_k_indices[..k]);
+        top_k_lens.push(bounded_top_k_len(lock.top_k_len, DEFAULT_QUORUM_K));
         for word in lock.noise_mask.words {
             mask_bytes.extend_from_slice(&word.to_le_bytes());
         }
-        doc_counts.push(1u64);
-        manifests.extend_from_slice(&[0u8; 32]);
+        doc_counts.push(manifest.doc_count);
+        digest_bytes.extend_from_slice(&manifest.sha256);
     }
 
     let centroid_child = Float32Array::from(centroid_floats);
@@ -317,7 +348,7 @@ pub fn record_batch_from_locks<'a>(
             }
         })?;
     let digest_arr =
-        FixedSizeBinaryArray::try_new(32, Buffer::from(manifests), None).map_err(|err| {
+        FixedSizeBinaryArray::try_new(32, Buffer::from(digest_bytes), None).map_err(|err| {
             RegistryError {
                 message: err.to_string(),
             }
@@ -337,6 +368,7 @@ pub fn record_batch_from_locks<'a>(
             Arc::new(lo_arr),
             Arc::new(hi_arr),
             Arc::new(topk_arr),
+            Arc::new(UInt16Array::from(top_k_lens)),
             Arc::new(mask_arr),
             Arc::new(UInt64Array::from(doc_counts)),
             Arc::new(digest_arr),
@@ -391,10 +423,17 @@ fn mask_array(mask: &NoiseBitmask1024) -> Result<FixedSizeBinaryArray, RegistryE
     })
 }
 
+/// Declared Mode A length, capped by the in-memory slot array and the indices actually stored.
+/// A shorter real length is kept. `DEFAULT_QUORUM_K` is only the FixedSizeList width, not a substitute.
+fn bounded_top_k_len(declared: u16, index_width: u16) -> u16 {
+    declared.min(MAX_TOPK as u16).min(index_width)
+}
+
 fn append_batch(
     batch: &RecordBatch,
     locks_by_id: &mut HashMap<String, Arc<DomainHypercubeLock>>,
     all_locks: &mut Vec<Arc<DomainHypercubeLock>>,
+    manifests: &mut HashMap<String, CorpusManifest>,
 ) -> Result<(), RegistryError> {
     let domain_ids = col_string(batch, "domain_id")?;
     let versions = col_u64(batch, "version")?;
@@ -408,10 +447,28 @@ fn append_batch(
     let his = col_fsl(batch, "hi_vector")?;
     let topk = col_fsl(batch, "top_k_indices")?;
     let masks = col_bin(batch, "noise_mask")?;
+    let doc_counts = col_u64(batch, "corpus_doc_count")?;
+    let digests = col_bin(batch, "sha256_manifest")?;
     let centroid_vals = f32_child(centroids)?;
     let lo_vals = f32_child(los)?;
     let hi_vals = f32_child(his)?;
     let topk_vals = u16_child(topk)?;
+    let stored_lengths = match batch.column_by_name("top_k_len") {
+        Some(column) => Some(col_u16_array(column)?),
+        None => None,
+    };
+    let index_width = u16::try_from(topk.value_length()).map_err(|_| RegistryError {
+        message: format!(
+            "top_k_indices width {} does not fit in u16",
+            topk.value_length()
+        ),
+    })?;
+    let width = usize::from(index_width);
+    if width > MAX_TOPK {
+        return Err(RegistryError {
+            message: format!("top_k_indices width {width} exceeds MAX_TOPK {MAX_TOPK}"),
+        });
+    }
 
     for row in 0..batch.num_rows() {
         let centroid = row_f32(centroid_vals, row)?;
@@ -431,12 +488,32 @@ fn append_batch(
             buf.copy_from_slice(&mask_bytes[start..start + 8]);
             *word = u64::from_le_bytes(buf);
         }
-        let k = usize::from(DEFAULT_QUORUM_K);
         let mut top_k_indices = [0u16; MAX_TOPK];
-        for (slot, index) in top_k_indices.iter_mut().take(k).enumerate() {
-            *index = topk_vals.value(row * k + slot);
+        for (slot, index) in top_k_indices.iter_mut().take(width).enumerate() {
+            *index = topk_vals.value(row * width + slot);
         }
+        let declared = match stored_lengths {
+            Some(values) => values.value(row),
+            // Catalogs written before the column existed only have the fixed index list.
+            None => index_width,
+        };
+        let top_k_len = bounded_top_k_len(declared, index_width);
+        let digest = digests.value(row);
+        if digest.len() != 32 {
+            return Err(RegistryError {
+                message: format!("sha256_manifest width {}", digest.len()),
+            });
+        }
+        let mut sha256 = [0u8; 32];
+        sha256.copy_from_slice(digest);
         let domain_id = domain_ids.value(row).to_string();
+        manifests.insert(
+            domain_id.clone(),
+            CorpusManifest {
+                doc_count: doc_counts.value(row),
+                sha256,
+            },
+        );
         let lock = Arc::new(DomainHypercubeLock::from_spec(LockSpec {
             domain_id: domain_id.clone(),
             centroid,
@@ -445,7 +522,7 @@ fn append_batch(
             epsilon,
             noise_mask: NoiseBitmask1024 { words },
             top_k_indices,
-            top_k_len: DEFAULT_QUORUM_K,
+            top_k_len,
             quorum_k: quorums.value(row),
             l1_cosine_threshold: l1.value(row),
             l2_clause_threshold: l2.value(row),
@@ -456,6 +533,15 @@ fn append_batch(
         all_locks.push(lock);
     }
     Ok(())
+}
+
+fn col_u16_array(column: &dyn Array) -> Result<&UInt16Array, RegistryError> {
+    column
+        .as_any()
+        .downcast_ref::<UInt16Array>()
+        .ok_or_else(|| RegistryError {
+            message: "top_k_len is not UInt16".to_string(),
+        })
 }
 
 fn row_f32(values: &Float32Array, row: usize) -> Result<AlignedVec1024, RegistryError> {

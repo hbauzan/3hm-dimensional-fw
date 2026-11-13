@@ -8,12 +8,14 @@ mod schema;
 mod validate;
 
 pub use calibration::{
-    assemble_canonical_locks, calibrate_matrix, calibrate_noise_bitmask, calibrate_pairwise_lock,
-    is_canonical_domain, pair_lock_sides, read_f32_matrix, top_k_indices, Calibration,
-    CalibrationError, CANONICAL_DOMAINS,
+    assemble_canonical_catalog, assemble_canonical_locks, calibrate_matrix,
+    calibrate_noise_bitmask, calibrate_pairwise_lock, is_canonical_domain, manifest_from_matrices,
+    pair_lock_sides, read_f32_matrix, top_k_indices, Calibration, CalibrationError,
+    CanonicalCatalog, CorpusManifest, CANONICAL_DOMAINS,
 };
 pub use lance_store::{
-    load_registry, load_registry_table, write_calibration, write_locks, IngestSpec,
+    load_registry, load_registry_table, write_calibration, write_locks, write_locks_with_manifests,
+    IngestSpec,
 };
 pub use mem_registry::MemoryRegistry;
 pub use registry::{

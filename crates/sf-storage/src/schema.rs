@@ -38,6 +38,7 @@ pub fn domain_hypercube_arrow_schema() -> Arc<Schema> {
             DataType::FixedSizeList(u16_item, i32::from(DEFAULT_QUORUM_K)),
             false,
         ),
+        Field::new("top_k_len", DataType::UInt16, false),
         Field::new("noise_mask", DataType::FixedSizeBinary(128), false),
         Field::new("corpus_doc_count", DataType::UInt64, false),
         Field::new("sha256_manifest", DataType::FixedSizeBinary(32), false),

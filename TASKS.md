@@ -23,7 +23,7 @@ Close the verified v0.2 integrity gaps in `sf-storage`, `sf-proxy`, and `sf-ui`,
 - **Delivery**: local commit on the slice branch, then stop for audit. No push and no merge to `main` before an explicit OK.
 
 ## 3. Tracer Bullet Slices
-- [ ] **Slice 1** (`fix/slice-01-lancedb-topk`): Persist `top_k_len` and real `corpus_doc_count` / `sha256_manifest`. `append_batch` restores `top_k_len` capped by `min(MAX_TOPK)`, not `DEFAULT_QUORUM_K`. Round-trip `top_k_len = 27` and score 27 unique dims in `eval_mode_a`.
+- [x] **Slice 1** (`fix/slice-01-lancedb-topk`): Persist `top_k_len` and real `corpus_doc_count` / `sha256_manifest`. `append_batch` restores `top_k_len` capped by `min(MAX_TOPK)`, not `DEFAULT_QUORUM_K`. Round-trip `top_k_len = 27` and score 27 unique dims in `eval_mode_a`.
 - [ ] **Slice 2** (`fix/slice-02-http-override-validation`): Reject non-finite overrides, `epsilon < 0`, and thresholds outside `[-1.0, 1.0]` with HTTP 400 before dilation.
 - [ ] **Slice 3** (`fix/slice-03-sf-ui-clause-inspect`): Embed each inspect clause with its own vector. Skip pairwise containment when the embedder is mock.
 - [ ] **Slice 4** (`feat/slice-04-seeding-66-locks`): Hydrate 11 base locks plus 55 pairs. `MockBatchEmbedder` resolves by `domain_id`.

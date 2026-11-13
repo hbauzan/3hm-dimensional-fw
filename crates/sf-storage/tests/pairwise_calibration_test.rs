@@ -1,7 +1,7 @@
 use sf_kernels::{evaluate_l3_gate, AlignedVec1024, L3InspectionMode, DIM};
 use sf_storage::{
-    assemble_canonical_locks, calibrate_pairwise_lock, load_registry, write_locks,
-    CANONICAL_DOMAINS,
+    assemble_canonical_catalog, assemble_canonical_locks, calibrate_pairwise_lock, load_registry,
+    write_locks_with_manifests, CANONICAL_DOMAINS,
 };
 
 fn flat(rows: &[Vec<f32>]) -> Vec<f32> {
@@ -162,24 +162,35 @@ async fn assembled_locks_roundtrip_through_lancedb() {
         .iter()
         .map(|(name, row)| (*name, row.as_slice()))
         .collect();
-    let locks = assemble_canonical_locks(&borrowed).expect("registry");
+    let catalog = assemble_canonical_catalog(&borrowed).expect("registry");
     let dir = std::env::temp_dir().join(format!("sf-pairs-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let uri = dir.to_str().unwrap();
-    write_locks(uri, "domain_hypercubes", &locks).await.unwrap();
+    write_locks_with_manifests(uri, "domain_hypercubes", &catalog.locks, &catalog.manifests)
+        .await
+        .unwrap();
     let loaded = load_registry(uri).await.unwrap();
     assert_eq!(loaded.len(), 66);
-    let stored = loaded.get("python_receta").expect("pair row");
-    let fresh = locks
+    let pair_index = catalog
+        .locks
         .iter()
-        .find(|lock| lock.domain_id == "python_receta")
-        .unwrap();
+        .position(|lock| lock.domain_id == "python_receta")
+        .expect("pair");
+    let stored = loaded.get("python_receta").expect("pair row");
+    let fresh = &catalog.locks[pair_index];
     assert_eq!(stored.quorum_k, fresh.quorum_k);
+    assert_eq!(stored.top_k_len, fresh.top_k_len);
     assert_eq!(stored.noise_mask, fresh.noise_mask);
     assert_eq!(
         stored.centroid.data[0].to_bits(),
         fresh.centroid.data[0].to_bits()
     );
+    assert_eq!(
+        loaded.manifest("python_receta"),
+        Some(catalog.manifests[pair_index])
+    );
+    assert_eq!(catalog.manifests[pair_index].doc_count, 2);
+    assert_ne!(catalog.manifests[pair_index].sha256, [0u8; 32]);
     let _ = std::fs::remove_dir_all(&dir);
 }
