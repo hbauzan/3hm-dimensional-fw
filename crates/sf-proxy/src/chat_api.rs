@@ -8,6 +8,7 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use bytes::Bytes;
+use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
 use sf_kernels::{
     cosine_similarity_1024, evaluate_l3_gate, AlignedVec1024, DomainHypercubeLock,
@@ -34,9 +35,12 @@ pub struct ChatMessageDto {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ChatOverridesDto {
+    #[serde(default, deserialize_with = "de_override_f32")]
     pub l1_threshold: Option<f32>,
+    #[serde(default, deserialize_with = "de_override_f32")]
     pub l2_threshold: Option<f32>,
     pub quorum_k: Option<u16>,
+    #[serde(default, deserialize_with = "de_override_f32")]
     pub epsilon: Option<f32>,
 }
 
@@ -151,11 +155,299 @@ pub fn latest_chat_user_text(messages: &[ChatMessageDto]) -> Option<&str> {
         .filter(|text| !text.is_empty())
 }
 
+const THRESHOLD_MIN: f32 = -1.0;
+const THRESHOLD_MAX: f32 = 1.0;
+
+#[derive(Clone, Copy)]
+enum OverrideField {
+    L1Threshold,
+    L2Threshold,
+    Epsilon,
+}
+
+impl OverrideField {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::L1Threshold => "l1_threshold",
+            Self::L2Threshold => "l2_threshold",
+            Self::Epsilon => "epsilon",
+        }
+    }
+
+    const fn non_finite_message(self) -> &'static str {
+        match self {
+            Self::L1Threshold => "l1_threshold must be finite",
+            Self::L2Threshold => "l2_threshold must be finite",
+            Self::Epsilon => "epsilon must be finite",
+        }
+    }
+
+    const fn range_message(self) -> &'static str {
+        match self {
+            Self::L1Threshold => "l1_threshold must be inside [-1.0, 1.0]",
+            Self::L2Threshold => "l2_threshold must be inside [-1.0, 1.0]",
+            Self::Epsilon => "epsilon must be inside [-1.0, 1.0]",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum OverrideReject {
+    NonFinite(OverrideField),
+    NegativeEpsilon,
+    OutOfRange(OverrideField),
+}
+
+enum ChatDecodeError {
+    InvalidJson,
+    Override(OverrideReject),
+}
+
+impl From<OverrideReject> for ChatDecodeError {
+    fn from(reject: OverrideReject) -> Self {
+        Self::Override(reject)
+    }
+}
+
+impl IntoResponse for ChatDecodeError {
+    fn into_response(self) -> Response {
+        match self {
+            Self::InvalidJson => {
+                json_error(StatusCode::BAD_REQUEST, "request body is not valid JSON")
+            }
+            Self::Override(reject) => override_reject_response(reject),
+        }
+    }
+}
+
+fn override_reject_response(reject: OverrideReject) -> Response {
+    let (field, message) = match reject {
+        OverrideReject::NonFinite(field) => (field.as_str(), field.non_finite_message()),
+        OverrideReject::NegativeEpsilon => ("epsilon", "epsilon must be >= 0.0"),
+        OverrideReject::OutOfRange(field) => (field.as_str(), field.range_message()),
+    };
+    (
+        StatusCode::BAD_REQUEST,
+        Json(serde_json::json!({
+            "error": {
+                "type": "invalid_request_error",
+                "code": "invalid_chat_override",
+                "field": field,
+                "message": message,
+            }
+        })),
+    )
+        .into_response()
+}
+
+fn de_override_f32<'de, D>(deserializer: D) -> Result<Option<f32>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let Some(value) = Option::<serde_json::Value>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+    match value {
+        serde_json::Value::Number(number) => {
+            let parsed = number.as_f64().ok_or_else(|| {
+                serde::de::Error::custom("override number is not representable as f64")
+            })?;
+            Ok(Some(parsed as f32))
+        }
+        serde_json::Value::String(token) => match token.as_str() {
+            "NaN" | "+NaN" | "-NaN" => Ok(Some(f32::NAN)),
+            "Infinity" | "+Infinity" | "Inf" | "+Inf" => Ok(Some(f32::INFINITY)),
+            "-Infinity" | "-Inf" => Ok(Some(f32::NEG_INFINITY)),
+            _ => Err(serde::de::Error::custom("override number must be numeric")),
+        },
+        _ => Err(serde::de::Error::custom("override number must be numeric")),
+    }
+}
+
+fn validate_threshold(field: OverrideField, value: f32) -> Result<(), OverrideReject> {
+    if !value.is_finite() {
+        return Err(OverrideReject::NonFinite(field));
+    }
+    if !(THRESHOLD_MIN..=THRESHOLD_MAX).contains(&value) {
+        return Err(OverrideReject::OutOfRange(field));
+    }
+    Ok(())
+}
+
+fn validate_chat_overrides(overrides: &ChatOverridesDto) -> Result<(), OverrideReject> {
+    if let Some(value) = overrides.l1_threshold {
+        validate_threshold(OverrideField::L1Threshold, value)?;
+    }
+    if let Some(value) = overrides.l2_threshold {
+        validate_threshold(OverrideField::L2Threshold, value)?;
+    }
+    if let Some(value) = overrides.epsilon {
+        if !value.is_finite() {
+            return Err(OverrideReject::NonFinite(OverrideField::Epsilon));
+        }
+        if value < 0.0 {
+            return Err(OverrideReject::NegativeEpsilon);
+        }
+    }
+    Ok(())
+}
+
+fn decode_chat_request(body: &[u8]) -> Result<ChatRequestDto, ChatDecodeError> {
+    let text = std::str::from_utf8(body).map_err(|_| ChatDecodeError::InvalidJson)?;
+    let normalized = admit_non_finite_literals(text);
+    let payload: ChatRequestDto =
+        serde_json::from_str(&normalized).map_err(|_| ChatDecodeError::InvalidJson)?;
+    if let Some(overrides) = payload.overrides.as_ref() {
+        validate_chat_overrides(overrides)?;
+    }
+    Ok(payload)
+}
+
+/// JSON has no `NaN` / `Infinity` token. Quote those idents, and quote numeric
+/// literals that overflow `f64`, so the override deserializer can reject them.
+fn admit_non_finite_literals(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    let mut in_string = false;
+    let mut escape = false;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if in_string {
+            out.push(byte);
+            if escape {
+                escape = false;
+            } else if byte == b'\\' {
+                escape = true;
+            } else if byte == b'"' {
+                in_string = false;
+            }
+            index += 1;
+            continue;
+        }
+        if byte == b'"' {
+            in_string = true;
+            out.push(byte);
+            index += 1;
+            continue;
+        }
+        let boundary = index == 0 || !is_ident_byte(bytes[index - 1]);
+        if let Some((len, quoted)) = non_finite_ident(&bytes[index..], boundary) {
+            out.extend_from_slice(quoted);
+            index += len;
+            continue;
+        }
+        if let Some(len) = json_number_len(&bytes[index..]) {
+            let literal = &input[index..index + len];
+            if literal.parse::<f64>().is_ok_and(|value| !value.is_finite()) {
+                let quoted: &[u8] = if literal.starts_with('-') {
+                    b"\"-Infinity\""
+                } else {
+                    b"\"Infinity\""
+                };
+                out.extend_from_slice(quoted);
+            } else {
+                out.extend_from_slice(&bytes[index..index + len]);
+            }
+            index += len;
+            continue;
+        }
+        out.push(byte);
+        index += 1;
+    }
+    String::from_utf8(out).expect("non-finite scan preserves UTF-8")
+}
+
+fn is_ident_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_'
+}
+
+fn non_finite_ident(rest: &[u8], boundary: bool) -> Option<(usize, &'static [u8])> {
+    if !boundary {
+        return None;
+    }
+    const TOKENS: &[(&[u8], &[u8])] = &[
+        (b"+Infinity", b"\"Infinity\""),
+        (b"-Infinity", b"\"-Infinity\""),
+        (b"Infinity", b"\"Infinity\""),
+        (b"+NaN", b"\"NaN\""),
+        (b"-NaN", b"\"-NaN\""),
+        (b"NaN", b"\"NaN\""),
+        (b"+Inf", b"\"Infinity\""),
+        (b"-Inf", b"\"-Infinity\""),
+        (b"Inf", b"\"Infinity\""),
+    ];
+    for (token, quoted) in TOKENS {
+        if rest.starts_with(token) {
+            let next = rest.get(token.len()).copied();
+            if next.is_some_and(is_ident_byte) {
+                continue;
+            }
+            return Some((token.len(), quoted));
+        }
+    }
+    None
+}
+
+fn json_number_len(rest: &[u8]) -> Option<usize> {
+    let mut index = 0;
+    if rest.first() == Some(&b'-') {
+        index = 1;
+    }
+    let digits_at = index;
+    if rest.get(index) == Some(&b'0') {
+        index += 1;
+    } else if rest.get(index).is_some_and(u8::is_ascii_digit) {
+        while rest.get(index).is_some_and(u8::is_ascii_digit) {
+            index += 1;
+        }
+    } else {
+        return None;
+    }
+    if index == digits_at {
+        return None;
+    }
+    if rest.get(index) == Some(&b'.') {
+        index += 1;
+        let fraction_at = index;
+        while rest.get(index).is_some_and(u8::is_ascii_digit) {
+            index += 1;
+        }
+        if index == fraction_at {
+            return None;
+        }
+    }
+    if rest
+        .get(index)
+        .is_some_and(|byte| *byte == b'e' || *byte == b'E')
+    {
+        index += 1;
+        if rest
+            .get(index)
+            .is_some_and(|byte| *byte == b'+' || *byte == b'-')
+        {
+            index += 1;
+        }
+        let exponent_at = index;
+        while rest.get(index).is_some_and(u8::is_ascii_digit) {
+            index += 1;
+        }
+        if index == exponent_at {
+            return None;
+        }
+    }
+    Some(index)
+}
+
 /// Clone `lock` and apply request overrides. The caller's registry value is untouched.
+/// Invalid overrides return the clone unchanged: no dilation and no threshold write.
 pub fn apply_chat_overrides(
     lock: &DomainHypercubeLock,
     overrides: &ChatOverridesDto,
 ) -> DomainHypercubeLock {
+    if validate_chat_overrides(overrides).is_err() {
+        return lock.clone();
+    }
     let mut next = lock.clone();
     if let Some(threshold) = overrides.l1_threshold {
         next.l1_cosine_threshold = threshold;
@@ -440,6 +732,27 @@ fn json_error(status: StatusCode, message: impl Into<String>) -> Response {
     (status, Json(serde_json::json!({ "error": message.into() }))).into_response()
 }
 
+fn has_json_content_type(headers: &HeaderMap) -> bool {
+    let Some(value) = headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+    else {
+        return false;
+    };
+    let essence = value.trim();
+    if essence.eq_ignore_ascii_case("application/json") {
+        return true;
+    }
+    let Some((type_, subtype)) = essence.split_once('/') else {
+        return false;
+    };
+    type_.eq_ignore_ascii_case("application")
+        && subtype
+            .rsplit_once('+')
+            .is_some_and(|(_, suffix)| suffix.eq_ignore_ascii_case("json"))
+}
+
 fn resolve_lock(
     state: &ProxyAppState,
     domain_id: Option<&str>,
@@ -462,8 +775,25 @@ fn resolve_lock(
 
 pub async fn handle_api_v1_chat(
     State(state): State<Arc<ProxyAppState>>,
-    Json(payload): Json<ChatRequestDto>,
+    headers: HeaderMap,
+    body: Bytes,
 ) -> Response {
+    if !has_json_content_type(&headers) {
+        return (
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            Json(serde_json::json!({
+                "error": {
+                    "type": "invalid_request_error",
+                    "message": "expected Content-Type application/json"
+                }
+            })),
+        )
+            .into_response();
+    }
+    let payload = match decode_chat_request(&body) {
+        Ok(payload) => payload,
+        Err(error) => return error.into_response(),
+    };
     let Some(user_text) = latest_chat_user_text(&payload.messages) else {
         return json_error(StatusCode::BAD_REQUEST, "missing user message");
     };
@@ -701,6 +1031,88 @@ mod tests {
         assert_eq!(high.quorum_k, active);
         assert_eq!(low.quorum_k, 1);
         assert_eq!(source.quorum_k, 103);
+    }
+
+    #[test]
+    fn invalid_overrides_do_not_dilate_or_write_thresholds() {
+        let source = sample_lock(0.05);
+        let cases = [
+            ChatOverridesDto {
+                l1_threshold: Some(f32::NAN),
+                l2_threshold: None,
+                quorum_k: Some(1),
+                epsilon: None,
+            },
+            ChatOverridesDto {
+                l1_threshold: None,
+                l2_threshold: Some(f32::INFINITY),
+                quorum_k: Some(1),
+                epsilon: None,
+            },
+            ChatOverridesDto {
+                l1_threshold: Some(1.1),
+                l2_threshold: None,
+                quorum_k: Some(1),
+                epsilon: None,
+            },
+            ChatOverridesDto {
+                l1_threshold: Some(-1.1),
+                l2_threshold: None,
+                quorum_k: Some(1),
+                epsilon: None,
+            },
+            ChatOverridesDto {
+                l1_threshold: None,
+                l2_threshold: None,
+                quorum_k: Some(1),
+                epsilon: Some(-0.05),
+            },
+            ChatOverridesDto {
+                l1_threshold: None,
+                l2_threshold: None,
+                quorum_k: Some(1),
+                epsilon: Some(f32::NAN),
+            },
+        ];
+        for overrides in cases {
+            let updated = apply_chat_overrides(&source, &overrides);
+            assert_eq!(updated.epsilon.to_bits(), source.epsilon.to_bits());
+            assert_eq!(
+                updated.l1_cosine_threshold.to_bits(),
+                source.l1_cosine_threshold.to_bits()
+            );
+            assert_eq!(
+                updated.l2_clause_threshold.to_bits(),
+                source.l2_clause_threshold.to_bits()
+            );
+            assert_eq!(updated.quorum_k, source.quorum_k);
+            assert_eq!(
+                updated.lo_dilated.data[0].to_bits(),
+                source.lo_dilated.data[0].to_bits()
+            );
+            assert_eq!(
+                updated.hi_dilated.data[0].to_bits(),
+                source.hi_dilated.data[0].to_bits()
+            );
+        }
+    }
+
+    #[test]
+    fn threshold_endpoints_and_zero_epsilon_still_apply() {
+        let source = sample_lock(0.05);
+        let updated = apply_chat_overrides(
+            &source,
+            &ChatOverridesDto {
+                l1_threshold: Some(-1.0),
+                l2_threshold: Some(1.0),
+                quorum_k: None,
+                epsilon: Some(0.0),
+            },
+        );
+        assert_eq!(updated.l1_cosine_threshold.to_bits(), (-1.0f32).to_bits());
+        assert_eq!(updated.l2_clause_threshold.to_bits(), 1.0f32.to_bits());
+        assert_eq!(updated.epsilon.to_bits(), 0.0f32.to_bits());
+        assert_eq!(source.epsilon.to_bits(), 0.05f32.to_bits());
     }
 
     #[test]
