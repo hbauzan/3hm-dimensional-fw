@@ -113,10 +113,18 @@ async fn main() {
         .unwrap_or_else(|| die("registry returned no lock after the empty check"));
 
     let embedder: Arc<dyn BatchEmbedderClient> = match embedder_kind.as_str() {
-        "mock" => Arc::new(MockBatchEmbedder {
-            pass_vector,
-            breach_vector: AlignedVec1024::zeros(),
-        }),
+        "mock" => {
+            let centroids = registry
+                .locks()
+                .iter()
+                .map(|lock| (lock.domain_id.clone(), lock.centroid))
+                .collect();
+            Arc::new(MockBatchEmbedder {
+                pass_vector,
+                breach_vector: AlignedVec1024::zeros(),
+                centroids,
+            })
+        }
         "http" => {
             let url = pick(args.tei_http_url.clone(), "TEI_HTTP_URL")
                 .unwrap_or_else(|| die("SF_EMBEDDER=http requires --tei-http-url or TEI_HTTP_URL"));

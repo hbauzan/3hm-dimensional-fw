@@ -121,7 +121,19 @@ pub async fn handle_v1_chat_completions(
     batch_inputs.extend(clauses.iter().copied());
 
     let t_embed_start = std::time::Instant::now();
-    let vectors = match state.embedder.embed_batch_f32(&batch_inputs).await {
+    let requested_domain = headers
+        .get("x-semantic-domain")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or(state.default_domain.as_str());
+    let embedded = if state.embedder.is_mock() {
+        state
+            .embedder
+            .embed_batch_for_domain(Some(requested_domain), &batch_inputs)
+            .await
+    } else {
+        state.embedder.embed_batch_f32(&batch_inputs).await
+    };
+    let vectors = match embedded {
         Ok(vectors) if vectors.len() == batch_inputs.len() => vectors,
         Ok(_) => {
             return forbidden(
