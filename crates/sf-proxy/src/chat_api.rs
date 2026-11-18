@@ -827,7 +827,15 @@ pub async fn handle_api_v1_chat(
     batch.extend(clauses.iter().copied());
 
     let t_embed_start = std::time::Instant::now();
-    let mut vectors = match state.embedder.embed_batch_f32(&batch).await {
+    let embedded = if state.embedder.is_mock() {
+        state
+            .embedder
+            .embed_batch_for_domain(Some(lock.domain_id.as_str()), &batch)
+            .await
+    } else {
+        state.embedder.embed_batch_f32(&batch).await
+    };
+    let mut vectors = match embedded {
         Ok(vectors) if vectors.len() == batch.len() => vectors,
         Ok(_) => {
             return json_error(

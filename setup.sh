@@ -350,8 +350,8 @@ is_lancedb_hydrated() {
 hydrate_canonical_lancedb() {
     local uri="${LANCEDB_URI:-data/sf-lancedb}"
     local table="${LANCEDB_TABLE:-domain_hypercubes}"
-    echo -e "${BLUE}▶ Hidratando LanceDB en '${uri}' con 55 locks canónicos...${RESET}"
-    echo -e "  ${DIM}«¡Un mono de tres cabezas necesita sus 55 cerraduras hiperdimensionales forjadas!»${RESET}"
+    echo -e "${BLUE}▶ Hidratando LanceDB en '${uri}' con 66 locks canónicos (11 base + 55 pairs)...${RESET}"
+    echo -e "  ${DIM}«¡Un mono de tres cabezas necesita sus 66 cerraduras hiperdimensionales (11 base + 55 pairs) forjadas!»${RESET}"
 
     if [ -x "target/debug/seed_canonical_locks" ]; then
         target/debug/seed_canonical_locks --lancedb-uri "$uri" --table "$table"
@@ -360,7 +360,7 @@ hydrate_canonical_lancedb() {
     fi
 
     if is_lancedb_hydrated; then
-        echo -e "  ${GREEN}✓ LanceDB hidratado exitosamente con 55 locks canónicos en ${uri}.${RESET}"
+        echo -e "  ${GREEN}✓ LanceDB hidratado exitosamente con 66 locks canónicos (11 base + 55 pairs) en ${uri}.${RESET}"
         return 0
     else
         echo -e "  ${RED}❌ Falló la hidratación de LanceDB.${RESET}"

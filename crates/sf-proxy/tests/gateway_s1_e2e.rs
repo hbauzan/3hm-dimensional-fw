@@ -65,6 +65,7 @@ fn state(
         embedder: Arc::new(MockBatchEmbedder {
             pass_vector: centroid,
             breach_vector: AlignedVec1024::zeros(),
+            centroids: std::collections::HashMap::new(),
         }),
         upstream: Arc::clone(&upstream),
         mock_upstream: upstream,
@@ -399,6 +400,7 @@ async fn chat_mock_upstream_does_not_forward_to_unreachable_network_upstream() {
         embedder: Arc::new(MockBatchEmbedder {
             pass_vector: centroid,
             breach_vector: AlignedVec1024::zeros(),
+            centroids: std::collections::HashMap::new(),
         }),
         upstream: unreachable_upstream,
         mock_upstream: Arc::new(MockUpstreamForwarder),
@@ -483,6 +485,7 @@ async fn mock_embedder_skips_pairwise_unless_the_prompt_is_the_breach_sentinel()
         Arc::new(MockBatchEmbedder {
             pass_vector: centroid,
             breach_vector: centroid,
+            centroids: std::collections::HashMap::new(),
         }),
         rejecting_python_receta(&primary),
     );

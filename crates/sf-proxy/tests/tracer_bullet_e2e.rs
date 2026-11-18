@@ -47,6 +47,7 @@ fn app() -> axum::Router {
         embedder: Arc::new(MockBatchEmbedder {
             pass_vector: centroid,
             breach_vector: AlignedVec1024::zeros(),
+            centroids: std::collections::HashMap::new(),
         }),
         upstream: Arc::new(MockUpstreamForwarder),
         mock_upstream: Arc::new(MockUpstreamForwarder),

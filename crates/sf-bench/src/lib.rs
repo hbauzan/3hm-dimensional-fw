@@ -9,6 +9,6 @@ pub use oos_benchmark::{run_oos_benchmark, OosBenchmarkResult, OOS_BENCHMARK_SEE
 
 pub use synthetic_fixtures::{
     assert_publication_bounds, evaluate_matrix, generate_canonical_locks, generate_corpus,
-    generate_scpb_220_corpus, AttackCase, EvalMatrix, RompepepeCorpus, Scpb220Corpus, DOMAIN_NAMES,
-    FIXTURE_SEED,
+    generate_scpb_220_corpus, generate_seed_catalog, AttackCase, EvalMatrix, RompepepeCorpus,
+    Scpb220Corpus, DOMAIN_NAMES, FIXTURE_SEED,
 };
