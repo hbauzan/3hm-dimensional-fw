@@ -528,6 +528,11 @@ fn breach(
 }
 
 /// `Ok(ChatBreachDto)` releases the prompt with gate telemetry. `Err` is the playground breach card.
+///
+/// `prompt_vec` and `clause_vecs` are already embedded. Returning on the first
+/// failing clause skips later CPU/SIMD gates. `clauses_skipped` counts clause
+/// gates not run after that failure. This function does not embed and does not
+/// cancel an embedding batch.
 pub fn evaluate_chat_cascade(
     prompt_vec: &AlignedVec1024,
     clauses: &[&str],
@@ -778,6 +783,11 @@ fn resolve_lock(
         .ok_or_else(|| reject(StatusCode::SERVICE_UNAVAILABLE, "no domain lock is loaded"))
 }
 
+/// Gates one chat request.
+///
+/// One batch of `[normalized text, clauses...]` is embedded before the cascade,
+/// in a single embedder call. `clauses_skipped` counts clause gates not run
+/// after the first failure. That count does not skip or shrink the embedding batch.
 pub async fn handle_api_v1_chat(
     State(state): State<Arc<ProxyAppState>>,
     headers: HeaderMap,
