@@ -292,7 +292,12 @@ fn validate_chat_overrides(overrides: &ChatOverridesDto) -> Result<(), OverrideR
     Ok(())
 }
 
-fn decode_chat_request(body: &[u8]) -> Result<ChatRequestDto, ChatDecodeError> {
+/// Parse a chat body. Invalid JSON and invalid overrides are the existing HTTP 400 response.
+pub fn decode_chat_request(body: &[u8]) -> Result<ChatRequestDto, Box<Response>> {
+    parse_chat_request(body).map_err(|error| Box::new(error.into_response()))
+}
+
+fn parse_chat_request(body: &[u8]) -> Result<ChatRequestDto, ChatDecodeError> {
     let text = std::str::from_utf8(body).map_err(|_| ChatDecodeError::InvalidJson)?;
     let normalized = admit_non_finite_literals(text);
     let payload: ChatRequestDto =
@@ -792,7 +797,7 @@ pub async fn handle_api_v1_chat(
     }
     let payload = match decode_chat_request(&body) {
         Ok(payload) => payload,
-        Err(error) => return error.into_response(),
+        Err(response) => return *response,
     };
     let Some(user_text) = latest_chat_user_text(&payload.messages) else {
         return json_error(StatusCode::BAD_REQUEST, "missing user message");

@@ -357,7 +357,7 @@ pub async fn handle_inspect(
     for (idx, &c_str) in clauses_str.iter().enumerate() {
         let full_hash = sha256_hex(c_str);
         let prefix = full_hash[..16.min(full_hash.len())].to_string();
-        let clause_vec = query_vec;
+        let clause_vec = state.prompt_embedder.embed(c_str, &target_lock);
         let c_cos = cosine_similarity_1024(&clause_vec, &target_lock.centroid);
         let c_passed = tier_passes(target_lock.polarity, c_cos, target_lock.l2_clause_threshold);
         if !c_passed {
