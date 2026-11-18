@@ -59,6 +59,11 @@ pub async fn handle_api_v1_upstream_env() -> Response {
     (StatusCode::OK, axum::Json(catalog)).into_response()
 }
 
+/// Gates one completions request.
+///
+/// One batch of `[normalized text, clauses...]` is embedded in a single call.
+/// Clause short-circuit runs after that call returns. It skips the remaining
+/// CPU/SIMD clause gates and does not skip or shrink the embedding batch.
 pub async fn handle_v1_chat_completions(
     State(state): State<Arc<ProxyAppState>>,
     headers: HeaderMap,

@@ -12,7 +12,7 @@
   - Unicode NFKC canonicalization with Cyrillic and Greek homoglyph neutralization.
   - Invisible evasion code point stripping (`\u{200B}`, `\u{200C}`, `\u{200D}`, `\u{2060}`, `\u{FEFF}`, `\u{00AD}`).
   - High-entropy Base64 payload detection ($\ge 24$ chars), decoding UTF-8 cleartext and routing clauses into `ClauseSegmenter`.
-- **Sequential Clause Early-Exit**: Multi-clause evaluation short-circuits immediately upon first failing clause, avoiding redundant embedding and kernel evaluations while recording `clauses_skipped`.
+- **Sequential Clause Early-Exit**: Multi-clause evaluation records `clauses_skipped` and skips the remaining CPU/SIMD clause gates after the first failing clause. That early return does not skip or shrink the embedding batch that already ran.
 - **Disaggregated Telemetry**: Response JSON and HTTP headers (`x-sf-*`) report isolated stage latencies: `normalizer_segmenter_us`, `embedding_inference_ms`, `simd_gate_kernel_us`, and `total_pipeline_ms`. The web UI renders a dedicated disaggregated latency panel in `BreachCard`.
 - **Public Benchmark Suite (`sf-bench`)**:
   - Suite 1 evaluates `SCPB-220` against global sequence cosine dilution.
@@ -24,6 +24,7 @@
 
 ## Unreleased
 
+- Clause short-circuit records `clauses_skipped` and skips the remaining CPU/SIMD clause gates. It does not skip or shrink the embedding batch of the normalized prompt and every clause.
 - Seeding writes 11 base locks plus 55 pairs. The mock embedder uses the requested domain centroid with fallback to the default domain.
 - Inspect clause telemetry uses a per-clause embedding. The studio mock embedder skips pairwise containment unless the batch contains the exact token `BREACH`. `sf-ui` chat returns HTTP 400 for the same invalid overrides as the gateway before dilation.
 - `POST /api/v1/chat` rejects non-finite `l1_threshold`, `l2_threshold`, and `epsilon`, rejects `epsilon < 0.0`, and rejects thresholds outside `[-1.0, 1.0]` with HTTP 400 before dilation. A negative epsilon can no longer invert a denylist interval and open the gate.
