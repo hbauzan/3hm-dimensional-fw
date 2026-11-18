@@ -645,3 +645,82 @@ async fn stored_python_lock_spectral_marker_stays_above_l1_and_misses_quorum() {
     );
     assert!(l3.affirmative_votes < lock.quorum_k);
 }
+
+fn denylist_python_lock() -> DomainHypercubeLock {
+    let mut lock = python_lock(1.1);
+    lock.l2_clause_threshold = 1.1;
+    lock.polarity = 1;
+    // Half-width is 0, so epsilon -0.05 swaps lo_dilated above hi_dilated.
+    lock.lo_dilated.data.fill(0.0);
+    lock.hi_dilated.data.fill(0.0);
+    lock
+}
+
+fn chat_with_overrides(overrides: &str) -> Request<Body> {
+    Request::builder()
+        .method("POST")
+        .uri("/api/v1/chat")
+        .header("content-type", "application/json")
+        .body(Body::from(format!(
+            r#"{{"messages":[{{"role":"user","content":"hello kernel"}}],"domain_id":"python","overrides":{overrides}}}"#
+        )))
+        .unwrap()
+}
+
+#[tokio::test]
+async fn invalid_overrides_are_rejected_before_dilation() {
+    let app = app(denylist_python_lock());
+    let cases = [
+        (r#"{"epsilon":-0.05}"#, "epsilon"),
+        (r#"{"epsilon":NaN}"#, "epsilon"),
+        (r#"{"epsilon":Infinity}"#, "epsilon"),
+        (r#"{"epsilon":-Infinity}"#, "epsilon"),
+        (r#"{"epsilon":1e999}"#, "epsilon"),
+        (r#"{"l1_threshold":NaN}"#, "l1_threshold"),
+        (r#"{"l2_threshold":Infinity}"#, "l2_threshold"),
+        (r#"{"l1_threshold":1.1}"#, "l1_threshold"),
+        (r#"{"l1_threshold":-1.1}"#, "l1_threshold"),
+        (r#"{"l2_threshold":1.1}"#, "l2_threshold"),
+        (r#"{"l2_threshold":-1.1}"#, "l2_threshold"),
+    ];
+    for (overrides, field) in cases {
+        let (status, _, body) = oneshot(app.clone(), chat_with_overrides(overrides)).await;
+        assert_ne!(status, StatusCode::OK, "{overrides} -> {body}");
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{overrides} -> {body}");
+        let json: serde_json::Value = serde_json::from_str(&body)
+            .unwrap_or_else(|_| panic!("typed JSON error required for {overrides}, got {body}"));
+        assert_eq!(
+            json["error"]["type"], "invalid_request_error",
+            "{overrides} -> {body}"
+        );
+        assert_eq!(
+            json["error"]["code"], "invalid_chat_override",
+            "{overrides} -> {body}"
+        );
+        assert_eq!(json["error"]["field"], field, "{overrides} -> {body}");
+        let message = json["error"]["message"].as_str().unwrap_or("");
+        assert!(!message.is_empty(), "{overrides} -> {body}");
+        assert!(json.get("decision").is_none(), "{overrides} -> {body}");
+    }
+}
+
+#[tokio::test]
+async fn studio_override_edges_remain_on_the_chat_contract() {
+    let app = app(python_lock(0.5));
+    let cases = [
+        r#"{"l1_threshold":1.0}"#,
+        r#"{"l1_threshold":-1.0}"#,
+        r#"{"l1_threshold":0.0}"#,
+        r#"{"l2_threshold":0.0}"#,
+        r#"{"l2_threshold":1.0}"#,
+        r#"{"l2_threshold":-1.0}"#,
+        r#"{"epsilon":0.0}"#,
+        r#"{"epsilon":0.5}"#,
+        r#"{"l1_threshold":0.5,"l2_threshold":0.5,"quorum_k":11,"epsilon":0.0}"#,
+    ];
+    for overrides in cases {
+        let (status, _, body) = oneshot(app.clone(), chat_with_overrides(overrides)).await;
+        assert_ne!(status, StatusCode::BAD_REQUEST, "{overrides} -> {body}");
+        assert_eq!(status, StatusCode::OK, "{overrides} -> {body}");
+    }
+}

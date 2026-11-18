@@ -24,6 +24,7 @@
 
 ## Unreleased
 
+- `POST /api/v1/chat` rejects non-finite `l1_threshold`, `l2_threshold`, and `epsilon`, rejects `epsilon < 0.0`, and rejects thresholds outside `[-1.0, 1.0]` with HTTP 400 before dilation. A negative epsilon can no longer invert a denylist interval and open the gate.
 - LanceDB rows persist `top_k_len` and the corpus SHA-256 manifest. Mode A scores each selected coordinate once. A lock written without an external corpus file stores an explicit empty manifest (`doc_count = 0`) instead of a fake one-row digest.
 - Playground chat no longer false-breaches an in-domain prompt on an empty pairwise mask. `MockBatchEmbedder` skips pairwise containment unless the batch contains the exact token `BREACH`. `PERMUTATION_NOISE` still breaches Tier 3. The SPA renders an ADR-005 pairwise envelope as `L3_PAIRWISE_QUORUM`. Live tuning omits `epsilon` until that slider moves. `pnpm test:e2e` runs the Playwright suite in `frontend/e2e`.
 - Playground **Domain id** is a `<select>` of the 11 canonical domains (`CANONICAL_DOMAINS` in `frontend/src/domain/presets.ts`, same order as `sf-storage` calibration). A stored non-canonical id stays as an extra option so the session value remains selected.
