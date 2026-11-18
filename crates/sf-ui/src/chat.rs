@@ -13,9 +13,10 @@ use axum::Json;
 use bytes::Bytes;
 use sf_kernels::{AlignedVec1024, DomainHypercubeLock};
 use sf_proxy::{
-    apply_chat_overrides, chat_upstream_body, evaluate_chat_cascade, evaluate_pairwise_containment,
-    latest_chat_user_text, pairwise_breach_envelope, resolve_chat_upstream, ChatRequestDto,
-    ChatUpstream, MockUpstreamForwarder, UpstreamLlmForwarder,
+    apply_chat_overrides, chat_upstream_body, decode_chat_request, evaluate_chat_cascade,
+    evaluate_pairwise_containment, latest_chat_user_text, mock_batch_requires_pairwise,
+    pairwise_breach_envelope, resolve_chat_upstream, ChatUpstream, MockUpstreamForwarder,
+    UpstreamLlmForwarder,
 };
 
 pub use crate::embedder::{
@@ -95,10 +96,11 @@ fn resolve_lock(
     ))
 }
 
-pub async fn handle_chat(
-    State(state): State<Arc<UiAppState>>,
-    Json(payload): Json<ChatRequestDto>,
-) -> Response {
+pub async fn handle_chat(State(state): State<Arc<UiAppState>>, body: Bytes) -> Response {
+    let payload = match decode_chat_request(&body) {
+        Ok(payload) => payload,
+        Err(response) => return *response,
+    };
     let Some(user_text) = latest_chat_user_text(&payload.messages) else {
         return json_error(StatusCode::BAD_REQUEST, "missing user message");
     };
@@ -170,29 +172,35 @@ pub async fn handle_chat(
     gate_dto.simd_gate_kernel_us = Some(simd_gate_kernel_us);
     gate_dto.total_pipeline_ms = Some(total_pipeline_ms);
 
-    let pairs = state.registry.pairwise_locks_for(&lock.domain_id);
-    if let Err(breach) =
-        evaluate_pairwise_containment(&prompt_vec, &clause_vecs, &lock.domain_id, &pairs)
-    {
-        let mut res = (
-            StatusCode::FORBIDDEN,
-            Json(pairwise_breach_envelope(breach)),
-        )
-            .into_response();
-        let h = res.headers_mut();
-        if let Ok(val) = HeaderValue::from_str(&normalizer_segmenter_us.to_string()) {
-            h.insert("x-sf-normalizer-segmenter-us", val);
+    let mut batch = Vec::with_capacity(1 + clauses.len());
+    batch.push(normalized.text.as_str());
+    batch.extend(clauses.iter().copied());
+    let enforce_pairwise = !state.prompt_embedder.is_mock() || mock_batch_requires_pairwise(&batch);
+    if enforce_pairwise {
+        let pairs = state.registry.pairwise_locks_for(&lock.domain_id);
+        if let Err(breach) =
+            evaluate_pairwise_containment(&prompt_vec, &clause_vecs, &lock.domain_id, &pairs)
+        {
+            let mut res = (
+                StatusCode::FORBIDDEN,
+                Json(pairwise_breach_envelope(breach)),
+            )
+                .into_response();
+            let h = res.headers_mut();
+            if let Ok(val) = HeaderValue::from_str(&normalizer_segmenter_us.to_string()) {
+                h.insert("x-sf-normalizer-segmenter-us", val);
+            }
+            if let Ok(val) = HeaderValue::from_str(&format!("{embedding_inference_ms:.3}")) {
+                h.insert("x-sf-embedding-inference-ms", val);
+            }
+            if let Ok(val) = HeaderValue::from_str(&simd_gate_kernel_us.to_string()) {
+                h.insert("x-sf-simd-gate-kernel-us", val);
+            }
+            if let Ok(val) = HeaderValue::from_str(&format!("{total_pipeline_ms:.3}")) {
+                h.insert("x-sf-total-pipeline-ms", val);
+            }
+            return res;
         }
-        if let Ok(val) = HeaderValue::from_str(&format!("{embedding_inference_ms:.3}")) {
-            h.insert("x-sf-embedding-inference-ms", val);
-        }
-        if let Ok(val) = HeaderValue::from_str(&simd_gate_kernel_us.to_string()) {
-            h.insert("x-sf-simd-gate-kernel-us", val);
-        }
-        if let Ok(val) = HeaderValue::from_str(&format!("{total_pipeline_ms:.3}")) {
-            h.insert("x-sf-total-pipeline-ms", val);
-        }
-        return res;
     }
 
     let upstream = match resolve_chat_upstream(payload.upstream.as_ref()) {

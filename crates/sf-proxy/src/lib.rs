@@ -19,9 +19,9 @@ pub use cascade::{
     pairwise_breach_envelope, sha256_hex, PairwiseBreach, PairwiseBreachEnvelope,
 };
 pub use chat_api::{
-    apply_chat_overrides, chat_upstream_body, evaluate_chat_cascade, latest_chat_user_text,
-    resolve_chat_upstream, ChatBreachDto, ChatMessageDto, ChatOverridesDto, ChatReject,
-    ChatRequestDto, ChatUpstream, Tier1BreachDto, Tier2BreachDto, Tier3BreachDto,
+    apply_chat_overrides, chat_upstream_body, decode_chat_request, evaluate_chat_cascade,
+    latest_chat_user_text, resolve_chat_upstream, ChatBreachDto, ChatMessageDto, ChatOverridesDto,
+    ChatReject, ChatRequestDto, ChatUpstream, Tier1BreachDto, Tier2BreachDto, Tier3BreachDto,
     UpstreamConfigDto,
 };
 pub use cors::CorsAllow;

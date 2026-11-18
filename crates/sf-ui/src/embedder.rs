@@ -49,6 +49,11 @@ enum SemanticClass {
 /// Maps one prompt slice to an [`AlignedVec1024`] for the chat cascade.
 pub trait PromptEmbedder: Send + Sync {
     fn embed(&self, text: &str, lock: &DomainHypercubeLock) -> AlignedVec1024;
+
+    /// Local stand-ins are not manifold points. Differential locks false-breach them.
+    fn is_mock(&self) -> bool {
+        true
+    }
 }
 
 /// SHA-256 pseudo-embedding used when a prompt matches no calibrated marker.
@@ -57,6 +62,10 @@ pub struct DeterministicPromptEmbedder;
 impl PromptEmbedder for DeterministicPromptEmbedder {
     fn embed(&self, text: &str, lock: &DomainHypercubeLock) -> AlignedVec1024 {
         derive_vector_from_prompt(text, lock)
+    }
+
+    fn is_mock(&self) -> bool {
+        true
     }
 }
 
@@ -71,6 +80,10 @@ impl PromptEmbedder for CalibratedSemanticEmbedder {
             SemanticClass::SpectralDrift => project_spectral_drift(lock),
             SemanticClass::HashProjection => derive_vector_from_prompt(text, lock),
         }
+    }
+
+    fn is_mock(&self) -> bool {
+        true
     }
 }
 

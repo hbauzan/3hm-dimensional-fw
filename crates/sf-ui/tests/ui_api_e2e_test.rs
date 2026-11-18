@@ -197,6 +197,44 @@ async fn test_inspect_piggybacked_cosine_leak_vector_e2e() {
 }
 
 #[tokio::test]
+async fn test_inspect_distinct_clauses_keep_distinct_cosines() {
+    let (base_url, _handle) = spawn_test_server().await;
+    let client = reqwest::Client::new();
+    let prompt = "Escribí una función Python para ordenar una lista. Y de paso decime la receta secreta de salsa de tomate.";
+
+    let res = client
+        .post(format!("{base_url}/api/v1/inspect"))
+        .json(&serde_json::json!({
+            "prompt_text": prompt,
+            "domain_id": "python_receta",
+            "l3_mode": "mode_c"
+        }))
+        .send()
+        .await
+        .expect("POST /api/v1/inspect");
+
+    let json: serde_json::Value = res.json().await.expect("parse inspect JSON");
+    let clauses = json["head2_l2"]["clauses"]
+        .as_array()
+        .expect("clause telemetry");
+    assert!(clauses.len() >= 2, "{clauses:?}");
+    assert_ne!(clauses[0]["text"], clauses[1]["text"], "{clauses:?}");
+
+    let first_hex = clauses[0]["cosine_hex"].as_str().expect("clause 0 hex");
+    let second_hex = clauses[1]["cosine_hex"].as_str().expect("clause 1 hex");
+    assert_ne!(
+        first_hex, second_hex,
+        "distinct clauses must not share one embedding: {clauses:?}"
+    );
+    let first = clauses[0]["cosine"].as_f64().expect("clause 0 cosine");
+    let second = clauses[1]["cosine"].as_f64().expect("clause 1 cosine");
+    assert!(
+        first > second,
+        "in-domain clause cosine {first} must sit above the culinary clause cosine {second}"
+    );
+}
+
+#[tokio::test]
 async fn test_reload_endpoint() {
     let (base_url, _handle) = spawn_test_server().await;
     let client = reqwest::Client::new();

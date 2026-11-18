@@ -24,6 +24,7 @@
 
 ## Unreleased
 
+- Inspect clause telemetry uses a per-clause embedding. The studio mock embedder skips pairwise containment unless the batch contains the exact token `BREACH`. `sf-ui` chat returns HTTP 400 for the same invalid overrides as the gateway before dilation.
 - `POST /api/v1/chat` rejects non-finite `l1_threshold`, `l2_threshold`, and `epsilon`, rejects `epsilon < 0.0`, and rejects thresholds outside `[-1.0, 1.0]` with HTTP 400 before dilation. A negative epsilon can no longer invert a denylist interval and open the gate.
 - LanceDB rows persist `top_k_len` and the corpus SHA-256 manifest. Mode A scores each selected coordinate once. A lock written without an external corpus file stores an explicit empty manifest (`doc_count = 0`) instead of a fake one-row digest.
 - Playground chat no longer false-breaches an in-domain prompt on an empty pairwise mask. `MockBatchEmbedder` skips pairwise containment unless the batch contains the exact token `BREACH`. `PERMUTATION_NOISE` still breaches Tier 3. The SPA renders an ADR-005 pairwise envelope as `L3_PAIRWISE_QUORUM`. Live tuning omits `epsilon` until that slider moves. `pnpm test:e2e` runs the Playwright suite in `frontend/e2e`.
