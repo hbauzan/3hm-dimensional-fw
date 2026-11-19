@@ -51,3 +51,7 @@ path = "src/bin/calibrate_real_domain.rs"
 [[bin]]
 name = "calibrate_canonical_pairs"
 path = "src/bin/calibrate_canonical_pairs.rs"
+
+[[bin]]
+name = "suite2_string_dump"
+path = "src/bin/suite2_string_dump.rs"
