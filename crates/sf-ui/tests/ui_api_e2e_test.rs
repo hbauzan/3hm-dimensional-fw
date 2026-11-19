@@ -114,7 +114,7 @@ async fn test_get_catalog_returns_55_locks_and_220_vectors() {
     let json: serde_json::Value = res.json().await.expect("parse catalog JSON");
 
     assert_eq!(json["product"], "Three-Headed Semantic Firewall");
-    assert_eq!(json["version"], "1.0.0");
+    assert_eq!(json["version"], env!("CARGO_PKG_VERSION"));
 
     let locks = json["locks"].as_array().expect("locks array");
     assert_eq!(locks.len(), 55, "must contain exactly 55 locks");

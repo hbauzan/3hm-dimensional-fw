@@ -248,7 +248,7 @@ pub async fn handle_catalog(State(state): State<Arc<UiAppState>>) -> impl IntoRe
 
     Json(CatalogResponse {
         product: "Three-Headed Semantic Firewall".to_string(),
-        version: "1.0.0".to_string(),
+        version: env!("CARGO_PKG_VERSION").to_string(),
         locks,
         scpb_220_vectors: rompepepe_vectors.clone(),
         rompepepe_vectors,

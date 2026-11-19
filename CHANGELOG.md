@@ -1,28 +1,6 @@
 # Changelog
 
-## 1.0.0
-
-- **Terminology Sanitization**: Replaced all internal project terminology with formal academic and systems standards:
-  - Benchmark renamed to **SCPB-220** (**Sub-Clause Piggybacking Benchmark**).
-  - Tier 3 gate designated as **Subspace Coordinate Quorum (K-of-D L∞ Gate)**.
-  - Background noise coordinates documented as **Anisotropic Rogue Dimensions (Timkey & van Schijndel, 2021)**.
-  - 55 domain pairs formally designated as **55 Pairwise OvO (One-vs-One) Cross-Lingual Subspace Masks**.
-  - Output space defined as **1024D Contrastive Embedding Manifold ($S^{1023} \subset \mathbb{R}^{1024}$)** with **deterministic IEEE 754 binary32 evaluation with 0 ULP cross-architecture parity**.
-- **Pre-Segmentation Input Normalizer**: Added deterministic, zero-allocation pre-segmentation pipeline (`InputNormalizer`) in `sf-proxy`:
-  - Unicode NFKC canonicalization with Cyrillic and Greek homoglyph neutralization.
-  - Invisible evasion code point stripping (`\u{200B}`, `\u{200C}`, `\u{200D}`, `\u{2060}`, `\u{FEFF}`, `\u{00AD}`).
-  - High-entropy Base64 payload detection ($\ge 24$ chars), decoding UTF-8 cleartext and routing clauses into `ClauseSegmenter`.
-- **Sequential Clause Early-Exit**: Multi-clause evaluation records `clauses_skipped` and skips the remaining CPU/SIMD clause gates after the first failing clause. That early return does not skip or shrink the embedding batch that already ran.
-- **Disaggregated Telemetry**: Response JSON and HTTP headers (`x-sf-*`) report isolated stage latencies: `normalizer_segmenter_us`, `embedding_inference_ms`, `simd_gate_kernel_us`, and `total_pipeline_ms`. The web UI renders a dedicated disaggregated latency panel in `BreachCard`.
-- **Public Benchmark Suite (`sf-bench`)**:
-  - Suite 1 evaluates `SCPB-220` against global sequence cosine dilution.
-  - Suite 2 evaluates authentic `BAAI/bge-m3` IEEE 754 binary32 vectors from `clinc_oos` (52 real out-of-scope samples) and `deepset/prompt-injections` (48 adversarial prompt injections with piggybacking) vs. 100 clean in-domain legitimate queries across 11 canonical domains. Demonstrates 50.00% global cosine leakage rate, 86.00% 3HM containment recall, 1.00% clean FPR, and 1 µs p99 gate latency.
-  - Compiled offline via embedded binary fixtures (`crates/sf-bench/fixtures/oos_bge_m3_vectors.bin` and metadata manifest). Added `tools/generate_real_public_benchmarks.py`.
-- **CERN Zenodo DOI & Documentation Overhaul**:
-  - Authored `.zenodo.json` metadata for DOI archival.
-  - Rewrote `README.md` with mathematical analysis of cosine dilution, algorithmic comparison ($O(D^2)$ Mahalanobis vs strict $\ell_\infty$ vs 3HM $K$-of-$D$), Timkey citation, and operational threat model boundaries.
-
-## Unreleased
+## [Unreleased]
 
 - v0.2.x is an Ingress-Only Semantic Firewall. This version scores ingress. Egress Semantic Amplification stays a v1.1+ stream inspector and does not wrap upstream SSE.
 - Suite 2 records the first failing tier of each clean false positive. Mode A keeps the current pairwise check. Mode C calls `evaluate_pairwise_containment`.
@@ -58,6 +36,24 @@
 
 ## 0.2.0
 
+- **Terminology Sanitization**: Replaced all internal project terminology with formal academic and systems standards:
+  - Benchmark renamed to **SCPB-220** (**Sub-Clause Piggybacking Benchmark**).
+  - Tier 3 gate designated as **Subspace Coordinate Quorum (K-of-D L∞ Gate)**.
+  - Background noise coordinates documented as **Anisotropic Rogue Dimensions (Timkey & van Schijndel, 2021)**.
+  - 55 domain pairs formally designated as **55 Pairwise OvO (One-vs-One) Cross-Lingual Subspace Masks**.
+  - Output space defined as **1024D Contrastive Embedding Manifold ($S^{1023} \subset \mathbb{R}^{1024}$)** with **deterministic IEEE 754 binary32 evaluation with 0 ULP cross-architecture parity**.
+- **Pre-Segmentation Input Normalizer**: Added deterministic, zero-allocation pre-segmentation pipeline (`InputNormalizer`) in `sf-proxy`:
+  - Unicode NFKC canonicalization with Cyrillic and Greek homoglyph neutralization.
+  - Invisible evasion code point stripping (`\u{200B}`, `\u{200C}`, `\u{200D}`, `\u{2060}`, `\u{FEFF}`, `\u{00AD}`).
+  - High-entropy Base64 payload detection ($\ge 24$ chars), decoding UTF-8 cleartext and routing clauses into `ClauseSegmenter`.
+- **Sequential Clause Early-Exit**: Multi-clause evaluation records `clauses_skipped` and skips the remaining CPU/SIMD clause gates after the first failing clause. That early return does not skip or shrink the embedding batch that already ran.
+- **Disaggregated Telemetry**: Response JSON and HTTP headers (`x-sf-*`) report isolated stage latencies: `normalizer_segmenter_us`, `embedding_inference_ms`, `simd_gate_kernel_us`, and `total_pipeline_ms`. The web UI renders a dedicated disaggregated latency panel in `BreachCard`.
+- **Public Benchmark Suite (`sf-bench`)**:
+  - Suite 1 evaluates `SCPB-220` against global sequence cosine dilution.
+  - Compiled offline via embedded binary fixtures (`crates/sf-bench/fixtures/oos_bge_m3_vectors.bin` and metadata manifest). Added `tools/generate_real_public_benchmarks.py`.
+- **CERN Zenodo DOI & Documentation Overhaul**:
+  - Authored `.zenodo.json` metadata for DOI archival.
+  - Rewrote `README.md` with mathematical analysis of cosine dilution, algorithmic comparison ($O(D^2)$ Mahalanobis vs strict $\ell_\infty$ vs 3HM $K$-of-$D$), Timkey citation, and operational threat model boundaries.
 - `POST /api/v1/chat` on `sf-ui`: three-tier gate, HTTP 403 breach telemetry, and unbuffered SSE to a per-request OpenAI-compatible upstream.
 - Embedded Chat Playground in `sf-ui`: Diagnostic Studio / Chat Playground tabs, SSE thread, live lock overrides, and the Rayos X breach card. API keys stay in `localStorage`.
 - `ReqwestChatForwarder::forward_dynamic` joins a request base URL and sends `Authorization: Bearer` without changing `/v1/chat/completions`.
