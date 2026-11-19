@@ -24,6 +24,7 @@
 
 ## Unreleased
 
+- v0.2.x is an Ingress-Only Semantic Firewall. This version scores ingress. Egress Semantic Amplification stays a v1.1+ stream inspector and does not wrap upstream SSE.
 - Suite 2 records the first failing tier of each clean false positive. Mode A keeps the current pairwise check. Mode C calls `evaluate_pairwise_containment`.
 
   ```
