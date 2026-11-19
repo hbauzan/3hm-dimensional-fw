@@ -24,6 +24,7 @@
 
 ## Unreleased
 
+- Suite 2 normalizes and segments each prompt, then scores the primary lock in Mode C and every non-empty pairwise lock in Mode A. EN: n_clean=10, fp=3, fpr=3/10, n_attack=82, cosine_leaks=48, recall=64/82. ES: n_clean=90, fp=33, fpr=33/90, n_attack=90, cosine_leaks=41, recall=90/90. The width-weighted holistic gate is documented in `roadmap/future-holistic-resonance-gate.md` and is not implemented.
 - Clause short-circuit records `clauses_skipped` and skips the remaining CPU/SIMD clause gates. It does not skip or shrink the embedding batch of the normalized prompt and every clause.
 - Seeding writes 11 base locks plus 55 pairs. The mock embedder uses the requested domain centroid with fallback to the default domain.
 - Inspect clause telemetry uses a per-clause embedding. The studio mock embedder skips pairwise containment unless the batch contains the exact token `BREACH`. `sf-ui` chat returns HTTP 400 for the same invalid overrides as the gateway before dilation.

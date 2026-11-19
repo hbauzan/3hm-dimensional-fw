@@ -2,10 +2,15 @@
 
 mod canonical_corpus;
 mod oos_benchmark;
+mod suite2_catalog;
 mod synthetic_fixtures;
 
 pub use canonical_corpus::{canonical_seed_corpus, CanonicalDomainCorpus};
-pub use oos_benchmark::{run_oos_benchmark, OosBenchmarkResult, OOS_BENCHMARK_SEED};
+pub use oos_benchmark::{
+    format_suite2_metrics, run_oos_benchmark, suite2_embed_jsonl, suite2_locks, OosBenchmarkResult,
+    Suite2Matrix, Suite2Sample, OOS_BENCHMARK_SEED,
+};
+pub use suite2_catalog::{suite2_matrix_label, suite2_prompts, Suite2Kind, Suite2Prompt};
 
 pub use synthetic_fixtures::{
     assert_publication_bounds, evaluate_matrix, generate_canonical_locks, generate_corpus,

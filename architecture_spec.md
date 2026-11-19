@@ -109,3 +109,7 @@ Upstream SSE bytes still pass through `upstream.rs` unchanged after ingress allo
 4. On breach, drop the upstream connection and emit one SSE event: `event: sf_egress_breach` with `failing_tier: EGRESS_L3`.
 
 No production type implements this stream in the current milestone.
+
+## Future versions
+
+A later major version may replace the unweighted K-of-D quorum with a width-weighted resonance score. The seed note is [roadmap/future-holistic-resonance-gate.md](roadmap/future-holistic-resonance-gate.md). That scorer is out of scope for v0.2.x. This version keeps the unweighted gate with K = 103.
