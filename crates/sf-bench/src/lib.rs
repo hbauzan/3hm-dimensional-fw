@@ -8,7 +8,7 @@ mod synthetic_fixtures;
 pub use canonical_corpus::{canonical_seed_corpus, CanonicalDomainCorpus};
 pub use oos_benchmark::{
     format_suite2_metrics, run_oos_benchmark, suite2_embed_jsonl, suite2_locks, OosBenchmarkResult,
-    Suite2Matrix, Suite2Sample, OOS_BENCHMARK_SEED,
+    Suite2FpTier, Suite2Matrix, Suite2Sample, OOS_BENCHMARK_SEED,
 };
 pub use suite2_catalog::{suite2_matrix_label, suite2_prompts, Suite2Kind, Suite2Prompt};
 

@@ -1,6 +1,8 @@
 use std::collections::BTreeSet;
 
-use sf_bench::{format_suite2_metrics, run_oos_benchmark, suite2_locks, suite2_matrix_label};
+use sf_bench::{
+    format_suite2_metrics, run_oos_benchmark, suite2_locks, suite2_matrix_label, Suite2FpTier,
+};
 use sf_proxy::InputNormalizer;
 use sf_storage::pair_lock_sides;
 
@@ -154,6 +156,15 @@ fn suite2_scores_segmented_prompts_on_sixty_six_calibrated_locks() {
                 .filter(|sample| sample.kind == "attack" && !sample.contained)
                 .count()
         );
+        assert_eq!(bucket_sum(&matrix.fp_tier_mode_a), matrix.false_positives);
+        assert_eq!(matrix.fp_tier_mode_a.fp, matrix.false_positives);
+        assert_eq!(
+            matrix.fp_tier_mode_c.fp,
+            rows.iter()
+                .filter(|sample| sample.kind == "clean" && !sample.contained_prod)
+                .count()
+        );
+        assert_eq!(bucket_sum(&matrix.fp_tier_mode_c), matrix.fp_tier_mode_c.fp);
     }
     assert_eq!(report.pooled.n_clean, report.en.n_clean + report.es.n_clean);
     assert_eq!(
@@ -188,10 +199,25 @@ fn suite2_scores_segmented_prompts_on_sixty_six_calibrated_locks() {
             matrix.n_attack,
         );
         assert!(printed.contains(&needle), "{printed}");
+        let mode_a = fp_tier_line(matrix.label, "A", &matrix.fp_tier_mode_a);
+        let mode_c = fp_tier_line(matrix.label, "C", &matrix.fp_tier_mode_c);
+        assert!(printed.contains(&mode_a), "{printed}");
+        assert!(printed.contains(&mode_c), "{printed}");
     }
     assert!(printed.contains("matrix=EN"));
     assert!(printed.contains("matrix=ES"));
     assert!(printed.contains("matrix=pooled"));
     assert!(report.latency_p50_us.is_finite() && report.latency_p50_us > 0.0);
     assert!(report.latency_p99_us >= report.latency_p50_us);
+}
+
+fn bucket_sum(tier: &Suite2FpTier) -> usize {
+    tier.l1 + tier.l2 + tier.l3 + tier.pairs
+}
+
+fn fp_tier_line(label: &str, mode: &str, tier: &Suite2FpTier) -> String {
+    format!(
+        "suite2 fp_tier matrix={label} mode={mode} l1={} l2={} l3={} pairs={} fp={}",
+        tier.l1, tier.l2, tier.l3, tier.pairs, tier.fp
+    )
 }
