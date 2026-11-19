@@ -69,6 +69,8 @@ Request `quorum_k` is clamped to `[1, noise_mask.active_count()]` on the cloned 
 
 ## Hot path
 
+v0.2.x is an Ingress-Only Semantic Firewall. Ingress scoring is what this version does. The egress stream inspector is not in this version.
+
 Ingress reads `POST /v1/chat/completions`, runs **InputNormalizer** (NFKC, homoglyph mapping, invisible character stripping, Base64 inspection), segments clauses via **ClauseSegmenter**, embeds one batch of shape `[1 + M, 1024]`, then runs L1 Centroid Cosine, followed by a sequential clause loop short-circuiting on Tier 2 or Tier 3 failures (recording `clauses_skipped`). A pass streams the upstream body unchanged and sets `X-SF-Decision: PASS`. A breach returns HTTP 403 `SEMANTIC_CONTAINMENT_BREACH` and does not call the upstream model.
 
 Pre-dilated bounds (`lo - eps`, `hi + eps`) are computed when a lock is loaded, not per request on this path.
@@ -99,16 +101,16 @@ The `sf-proxy` binary loads a LanceDB registry and serves both ingress routes on
 
 The playground in `frontend/` is a separate origin. It posts to `/api/v1/chat` on this daemon and reads `ChatBreachDto` or the unbuffered event stream. The SPA maps an ADR-005 pairwise envelope onto `ChatBreachDto` with `failing_tier: L3_PAIRWISE_QUORUM` before drawing the breach card. The dev server does not proxy that call. API keys stay in browser `localStorage`. Live tuning starts disarmed. Headless checks live in `frontend/e2e` and run with `pnpm test:e2e` while this daemon is on `:8088` and Vite is on `:5173`.
 
-## Egress semantic amplification (next milestone, not implemented)
+## Egress semantic amplification (v1.1+, not implemented)
 
-Upstream SSE bytes still pass through `upstream.rs` unchanged after ingress allows the prompt. The next gate wraps that stream:
+Upstream SSE bytes still pass through `upstream.rs` unchanged after ingress allows the prompt. Egress Semantic Amplification is a v1.1+ stream inspector. v0.2.x does not wrap that stream. The v1.1+ gate, once it exists, wraps the stream:
 
 1. Buffer text deltas into word windows of 30 with stride 15.
 2. Embed each window with the local `BAAI/bge-m3` embedder.
 3. Score the window on the session's primary lock and on the ten pairwise locks that name that domain, using the same polarity rule as ADR-005.
 4. On breach, drop the upstream connection and emit one SSE event: `event: sf_egress_breach` with `failing_tier: EGRESS_L3`.
 
-No production type implements this stream in the current milestone.
+No production type in v0.2.x implements this stream inspector.
 
 ## Future versions
 

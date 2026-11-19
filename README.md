@@ -2,6 +2,8 @@
 
 A high-performance, deterministic, hardware-accelerated L7 semantic firewall and containment gateway for Large Language Models (LLMs) and 1024D vector manifolds.
 
+**v0.2.x is an Ingress-Only Semantic Firewall.** This version scores ingress. Egress Semantic Amplification (SSE streaming out-guard) is a v1.1+ stream inspector. This version does not wrap upstream SSE.
+
 [![Rust](https://img.shields.io/badge/Rust-1.94.1-orange?logo=rust)](rust-toolchain.toml)
 [![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 [![DNPI](https://img.shields.io/badge/Registro%20DNPI-N%C2%BA%20226-green)](NOTICE)
@@ -130,7 +132,7 @@ Evaluated on Apple Silicon (M-series, ARM64 NEON) and x86_64:
 5. **Base64 Payload Smuggling**: Contiguous Base64 tokens ($\ge 24$ chars) decoded, verified for UTF-8 cleartext entropy, and routed through `ClauseSegmenter`.
 
 ### Known Operational Boundaries
-- **Embedding Invariance**: Injections that map strictly inside the calibrated coordinate bounding box of the target domain without displacing coordinates are outside L7 coordinate boundaries and require egress analysis.
+- **Embedding Invariance**: Injections that map strictly inside the calibrated coordinate bounding box of the target domain without displacing coordinates sit outside the L7 coordinate boundary of this version. Egress Semantic Amplification would inspect that case as an SSE streaming out-guard. That inspector is v1.1+. This version does not implement it.
 - **Maximum Embedding Token Length**: Bound by `BAAI/bge-m3` maximum sequence length (8,192 tokens).
 
 ---
