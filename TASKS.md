@@ -1,6 +1,6 @@
 ---
 task_id: "TASK-007"
-status: "IN_PROGRESS"
+status: "DONE"
 assigned_architect: "maximum-architect-agent"
 protocol: "transparent-dev-protocol"
 title: "v0.2 Hardening, Empirical Benchmark Truth & Multi-Arch CI"
@@ -25,11 +25,11 @@ Close the verified v0.2 integrity gaps in `sf-storage`, `sf-proxy`, and `sf-ui`,
 ## 3. Tracer Bullet Slices
 - [x] **Slice 1** (`fix/slice-01-lancedb-topk`): Persist `top_k_len` and real `corpus_doc_count` / `sha256_manifest`. `append_batch` restores `top_k_len` capped by `min(MAX_TOPK)`, not `DEFAULT_QUORUM_K`. Round-trip `top_k_len = 27` and score 27 unique dims in `eval_mode_a`.
 - [x] **Slice 2** (`fix/slice-02-http-override-validation`): Reject non-finite overrides, `epsilon < 0`, and thresholds outside `[-1.0, 1.0]` with HTTP 400 before dilation.
-- [ ] **Slice 3** (`fix/slice-03-sf-ui-clause-inspect`): Embed each inspect clause with its own vector. Skip pairwise containment when the embedder is mock.
-- [ ] **Slice 4** (`feat/slice-04-seeding-66-locks`): Hydrate 11 base locks plus 55 pairs. `MockBatchEmbedder` resolves by `domain_id`.
-- [ ] **Slice 5** (`docs/slice-05-batch-rpc-truth`): Keep one `embed_batch_f32` call. Document that short-circuit saves CPU/SIMD, not the GPU batch.
-- [ ] **Slice 6** (`feat/slice-06-suite2-e2e-and-future-adr`): Run Suite 2 through the real pipeline on 66 locks, unify language, and seed `roadmap/future-holistic-resonance-gate.md` without changing the v0.2 scorer.
-- [ ] **Slice 7** (`docs/slice-07-ingress-only-scope`): Mark this version ingress-only. Assign egress semantic amplification to v1.1+.
-- [ ] **Slice 8** (`chore/slice-08-version-020-and-roadmaps`): Align `/health` and changelog with `0.2.0`. Archive the two merged prompts.
-- [ ] **Slice 9** (`feat/slice-09-truthful-benchmarks-and-readme`): Persist load-benchmark JSON and correct README latency, lock size, cosine normalization, and `ceil(0.10 * 1024) = 103`.
-- [ ] **Slice 10** (`ci/slice-10-multiarch-github-actions`): Add `.github/workflows/ci.yml` for `x86_64`, `arm64`, and the frontend only after slices 1–9 are on `main`.
+- [x] **Slice 3** (`fix/slice-03-sf-ui-clause-inspect`): Embed each inspect clause with its own vector. Skip pairwise containment when the embedder is mock.
+- [x] **Slice 4** (`feat/slice-04-seeding-66-locks`): Hydrate 11 base locks plus 55 pairs. `MockBatchEmbedder` resolves by `domain_id`.
+- [x] **Slice 5** (`docs/slice-05-batch-rpc-truth`): Keep one `embed_batch_f32` call. Document that short-circuit saves CPU/SIMD clause gates and does not skip the embedding batch.
+- [x] **Slice 6** (`feat/slice-06-suite2-e2e-and-future-adr`): Run Suite 2 through the real pipeline on 66 locks, unify language, and seed `roadmap/future-holistic-resonance-gate.md` without changing the v0.2 scorer.
+- [x] **Slice 7** (`docs/slice-07-ingress-only-scope`): Mark this version ingress-only. Assign egress semantic amplification to v1.1+.
+- [x] **Slice 8** (`chore/slice-08-version-020-and-roadmaps`): Align `/health` and changelog with `0.2.0`. Archive the two merged prompts.
+- [x] **Slice 9** (`feat/slice-09-truthful-benchmarks-and-readme`): Persist load-benchmark JSON and correct README latency, lock size, cosine normalization, and `ceil(0.10 * 1024) = 103`.
+- [x] **Slice 10** (`ci/slice-10-multiarch-github-actions`): Add `.github/workflows/ci.yml` for `x86_64`, `arm64`, and the frontend only after slices 1–9 are on `main`.

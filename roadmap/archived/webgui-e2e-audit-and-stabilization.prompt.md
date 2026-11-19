@@ -78,7 +78,7 @@ Implement an automated end-to-end (E2E) testing suite with Playwright in [`front
 | Slider Quorum | `getByRole('slider', { name: 'Quorum K' })` | Min 1, Max 1015, Step 1 |
 | Slider Epsilon | `getByRole('slider', { name: 'Epsilon' })` | Min 0, Max 0.5, Step 0.005 |
 | Use Env Checkbox | `getByRole('checkbox', { name: 'Usar keys de .env' })` | Toggles env sync |
-| Load Env Button | `getByRole('button', { name: 'Cargar de .env' })` | Calls `/api/v1/env/catalog` |
+| Load Env Button | `getByRole('button', { name: 'Cargar de .env' })` | Calls `/api/v1/upstream/env` |
 | Provider Dropdown | `getByLabelText('Provider')` / `#upstream-provider` | Options: mock, gemini, openai, deepseek, groq, ollama |
 | Pass Card | `getByText(/SEMANTIC CONTAINMENT PASS/i)` | Green diagnostic card on 200 |
 | Breach Card | `getByText(/SEMANTIC CONTAINMENT BREACH/i)` | Red diagnostic card on 403 |

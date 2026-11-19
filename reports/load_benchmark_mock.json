@@ -1,0 +1,16 @@
+{
+  "duration_secs": 5,
+  "gate_release": {
+    "iterations": 1000,
+    "p50_us": 0.542,
+    "p99_us": 0.583,
+    "profile": "release"
+  },
+  "mode": "mock",
+  "p50_ms": 0.141951,
+  "p95_ms": 0.166271,
+  "p99_ms": 0.187391,
+  "requests": 1000,
+  "rps": 200,
+  "rss_mb": 41.828125
+}

@@ -1,0 +1,8 @@
+{
+  "device": "mps",
+  "mode": "http+mps",
+  "p50_ms": 23.775,
+  "p95_ms": 629.247,
+  "p99_ms": 629.247,
+  "requests": 16
+}

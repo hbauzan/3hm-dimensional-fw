@@ -73,7 +73,7 @@ fn main() {
     fs::write("reports/scpb_220_matrix.json", &scpb_json).expect("write scpb report");
     fs::write("reports/rompepepe_v3_matrix.json", &scpb_json).expect("write legacy report");
 
-    // 2. Suite 2 — Out-of-Scope & Adversarial Injection Validation (ROC / FPR Curve)
+    // 2. Suite 2 — separate EN and ES matrices, plus an explicitly pooled row.
     let oos_res = run_oos_benchmark();
 
     // 3. Print Reproducible Academic Markdown Table
@@ -97,25 +97,28 @@ fn main() {
         s1_p99,
         s1_p99 / 1000.0
     );
-    println!(
-        "| **Suite 2: OOS & Injections** (ROC / FPR Curve) | {} | {:.2}% ({}/{} leaks) | **{:.2}%** ({}/{}) | **{:.2}%** ({}/{}) | {:.0} µs ({:.3} ms) | {:.0} µs ({:.3} ms) | **{:.0} µs ({:.3} ms)** |",
-        oos_res.total_indomain + oos_res.total_oos_injections,
-        oos_res.global_cosine_leak_rate * 100.0,
-        oos_res.global_cosine_leaks,
-        oos_res.total_oos_injections,
-        oos_res.recall * 100.0,
-        oos_res.true_positives_blocked,
-        oos_res.total_oos_injections,
-        oos_res.fpr * 100.0,
-        oos_res.false_positives,
-        oos_res.total_indomain,
-        oos_res.latency_p50_us,
-        oos_res.latency_p50_us / 1000.0,
-        oos_res.latency_p95_us,
-        oos_res.latency_p95_us / 1000.0,
-        oos_res.latency_p99_us,
-        oos_res.latency_p99_us / 1000.0
-    );
+    for matrix in [&oos_res.en, &oos_res.es, &oos_res.pooled] {
+        println!(
+            "| **Suite 2 {label}** | {} | {:.2}% ({}/{} leaks) | **{:.2}%** ({}/{}) | **{:.2}%** ({}/{}) | {:.0} µs ({:.3} ms) | {:.0} µs ({:.3} ms) | **{:.0} µs ({:.3} ms)** |",
+            matrix.n_clean + matrix.n_attack,
+            matrix.leak_rate * 100.0,
+            matrix.cosine_leaks,
+            matrix.n_attack,
+            matrix.recall * 100.0,
+            matrix.blocked,
+            matrix.n_attack,
+            matrix.fpr * 100.0,
+            matrix.false_positives,
+            matrix.n_clean,
+            oos_res.latency_p50_us,
+            oos_res.latency_p50_us / 1000.0,
+            oos_res.latency_p95_us,
+            oos_res.latency_p95_us / 1000.0,
+            oos_res.latency_p99_us,
+            oos_res.latency_p99_us / 1000.0,
+            label = matrix.label,
+        );
+    }
     println!("\n=========================================================================================");
     println!("  Hardware: ARM64 NEON SIMD / IEEE 754 binary32 (0 ULP parity)");
     println!("  Cache footprint: 8 KB (L1 bound) | Reports: reports/scpb_220_matrix.json");

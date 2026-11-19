@@ -59,6 +59,11 @@ pub async fn handle_api_v1_upstream_env() -> Response {
     (StatusCode::OK, axum::Json(catalog)).into_response()
 }
 
+/// Gates one completions request.
+///
+/// One batch of `[normalized text, clauses...]` is embedded in a single call.
+/// Clause short-circuit runs after that call returns. It skips the remaining
+/// CPU/SIMD clause gates and does not skip or shrink the embedding batch.
 pub async fn handle_v1_chat_completions(
     State(state): State<Arc<ProxyAppState>>,
     headers: HeaderMap,
@@ -121,7 +126,19 @@ pub async fn handle_v1_chat_completions(
     batch_inputs.extend(clauses.iter().copied());
 
     let t_embed_start = std::time::Instant::now();
-    let vectors = match state.embedder.embed_batch_f32(&batch_inputs).await {
+    let requested_domain = headers
+        .get("x-semantic-domain")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or(state.default_domain.as_str());
+    let embedded = if state.embedder.is_mock() {
+        state
+            .embedder
+            .embed_batch_for_domain(Some(requested_domain), &batch_inputs)
+            .await
+    } else {
+        state.embedder.embed_batch_f32(&batch_inputs).await
+    };
+    let vectors = match embedded {
         Ok(vectors) if vectors.len() == batch_inputs.len() => vectors,
         Ok(_) => {
             return forbidden(

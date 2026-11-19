@@ -10,7 +10,7 @@ use bytes::Bytes;
 use sf_bench::{generate_canonical_locks, generate_corpus};
 use sf_kernels::{
     cosine_similarity_1024, evaluate_l3_gate, AlignedVec1024, DomainHypercubeLock,
-    L3InspectionMode, DIM,
+    L3InspectionMode, LockSpec, NoiseBitmask1024, DIM, MAX_TOPK, NOISE_MASK_WORDS,
 };
 use sf_storage::HotRegistry;
 use sf_ui::chat::{PromptEmbedder, RecordingMockForwarder};
@@ -69,15 +69,21 @@ fn mid_cosine_in_box(lock: &DomainHypercubeLock) -> AlignedVec1024 {
 }
 
 async fn spawn_chat_server(embedder: Arc<dyn PromptEmbedder>) -> ChatServer {
+    spawn_chat_server_with(
+        Arc::new(HotRegistry::from_locks(generate_canonical_locks())),
+        embedder,
+    )
+    .await
+}
+
+async fn spawn_chat_server_with(
+    registry: Arc<HotRegistry>,
+    embedder: Arc<dyn PromptEmbedder>,
+) -> ChatServer {
     let recorder = RecordingMockForwarder::new();
     let hits = Arc::clone(&recorder.hits);
     let last_body = Arc::clone(&recorder.last_body);
-    let mut state = UiAppState::diagnostic(
-        Arc::new(HotRegistry::from_locks(generate_canonical_locks())),
-        generate_corpus(),
-        None,
-        "domain_hypercubes",
-    );
+    let mut state = UiAppState::diagnostic(registry, generate_corpus(), None, "domain_hypercubes");
     state.prompt_embedder = embedder;
     state.upstream = Arc::new(recorder);
     let app = router(Arc::new(state));
@@ -255,4 +261,193 @@ async fn test_chat_runtime_overrides_alter_gate_decision() {
     );
     assert!(body.contains("chat.completion.chunk"), "{body}");
     assert_eq!(server.hits.load(Ordering::SeqCst), 1);
+}
+
+fn unit_axis() -> AlignedVec1024 {
+    let mut vector = AlignedVec1024::zeros();
+    vector.data[0] = 1.0;
+    vector
+}
+
+fn wide_python_lock() -> DomainHypercubeLock {
+    let mut lo = AlignedVec1024::zeros();
+    let mut hi = AlignedVec1024::zeros();
+    lo.data.fill(-0.1);
+    hi.data.fill(1.1);
+    let mut top_k = [0u16; MAX_TOPK];
+    for (idx, slot) in top_k.iter_mut().enumerate().take(4) {
+        *slot = u16::try_from(idx).unwrap();
+    }
+    DomainHypercubeLock::from_spec(LockSpec {
+        domain_id: "python".to_string(),
+        centroid: unit_axis(),
+        lo,
+        hi,
+        epsilon: 0.0,
+        noise_mask: NoiseBitmask1024::new_bge_m3_default(),
+        top_k_indices: top_k,
+        top_k_len: 4,
+        quorum_k: 103,
+        l1_cosine_threshold: 0.5,
+        l2_clause_threshold: 0.5,
+        polarity: 0,
+        domain_version: 1,
+    })
+}
+
+fn rejecting_python_receta(primary: &DomainHypercubeLock) -> DomainHypercubeLock {
+    let mut pair = primary.clone();
+    pair.domain_id = "python_receta".to_string();
+    pair.noise_mask = NoiseBitmask1024 {
+        words: [0; NOISE_MASK_WORDS],
+    };
+    pair.quorum_k = 1;
+    pair.noise_mask.words[0] = 1;
+    pair.lo_dilated.data[0] = 5.0;
+    pair.hi_dilated.data[0] = 6.0;
+    pair
+}
+
+fn python_chat_body(content: &str, overrides: Option<&str>) -> String {
+    let overrides = overrides
+        .map(|value| format!(r#","overrides":{value}"#))
+        .unwrap_or_default();
+    format!(
+        r#"{{"messages":[{{"role":"user","content":"{content}"}}],"domain_id":"python","upstream":{{"provider":"mock","model":"mock-model"}}{overrides}}}"#
+    )
+}
+
+async fn post_raw(server: &ChatServer, body: &str) -> (u16, String, reqwest::header::HeaderMap) {
+    let response = http_client()
+        .post(format!("{}/api/v1/chat", server.base_url))
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .body(body.to_string())
+        .send()
+        .await
+        .expect("POST /api/v1/chat");
+    let status = response.status().as_u16();
+    let headers = response.headers().clone();
+    let text = response.text().await.expect("response body");
+    (status, text, headers)
+}
+
+#[tokio::test]
+async fn mock_embedder_skips_pairwise_unless_the_prompt_is_breach() {
+    let primary = wide_python_lock();
+    let registry = Arc::new(HotRegistry::from_locks([
+        primary.clone(),
+        rejecting_python_receta(&primary),
+    ]));
+    let server = spawn_chat_server_with(registry, Arc::new(FixedEmbedder(primary.centroid))).await;
+
+    let (status, body, _) = post_raw(
+        &server,
+        &python_chat_body("Cómo implementar un generador con yield en Python", None),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    assert!(body.contains("chat.completion.chunk"), "{body}");
+    assert_eq!(server.hits.load(Ordering::SeqCst), 1);
+
+    let (status, body, _) = post_raw(&server, &python_chat_body("BREACH", None)).await;
+    assert_eq!(status, 403, "{body}");
+    let parsed: serde_json::Value = serde_json::from_str(&body).expect("pairwise json");
+    assert_eq!(
+        parsed["error"]["telemetry"]["failing_tier"], "L3_PAIRWISE_QUORUM",
+        "{body}"
+    );
+    assert_eq!(
+        parsed["error"]["telemetry"]["breaching_pair_lock"], "python_receta",
+        "{body}"
+    );
+    assert!(parsed.get("decision").is_none(), "{body}");
+    assert_eq!(server.hits.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn invalid_chat_overrides_return_400_before_dilation() {
+    let lock = python_lock();
+    let original = f64::from(lock.l1_cosine_threshold);
+    let server = spawn_chat_server(Arc::new(FixedEmbedder(orthogonal_to(&lock)))).await;
+    let cases = [
+        (r#"{"epsilon":-0.05}"#, "epsilon"),
+        (r#"{"epsilon":NaN}"#, "epsilon"),
+        (r#"{"epsilon":Infinity}"#, "epsilon"),
+        (r#"{"epsilon":-Infinity}"#, "epsilon"),
+        (r#"{"l1_threshold":NaN}"#, "l1_threshold"),
+        (r#"{"l2_threshold":Infinity}"#, "l2_threshold"),
+        (r#"{"l1_threshold":1.1}"#, "l1_threshold"),
+        (r#"{"l2_threshold":-1.1}"#, "l2_threshold"),
+    ];
+    for (overrides, field) in cases {
+        let (status, body, _) = post_raw(
+            &server,
+            &format!(
+                r#"{{"messages":[{{"role":"user","content":"threshold probe"}}],"domain_id":"{PYTHON_DOMAIN}","upstream":{{"provider":"mock","model":"mock-model"}},"overrides":{overrides}}}"#
+            ),
+        )
+        .await;
+        assert_eq!(status, 400, "{overrides} -> {body}");
+        let json: serde_json::Value = serde_json::from_str(&body)
+            .unwrap_or_else(|_| panic!("typed JSON error required for {overrides}, got {body}"));
+        assert_eq!(
+            json["error"]["type"], "invalid_request_error",
+            "{overrides} -> {body}"
+        );
+        assert_eq!(
+            json["error"]["code"], "invalid_chat_override",
+            "{overrides} -> {body}"
+        );
+        assert_eq!(json["error"]["field"], field, "{overrides} -> {body}");
+        let message = json["error"]["message"].as_str().unwrap_or("");
+        assert!(!message.is_empty(), "{overrides} -> {body}");
+        assert!(json.get("decision").is_none(), "{overrides} -> {body}");
+        assert_eq!(server.hits.load(Ordering::SeqCst), 0, "{overrides}");
+    }
+
+    let (status, _content_type, body) =
+        post_chat(&server, chat_body("threshold probe", None, None)).await;
+    assert_eq!(status, 403, "{body}");
+    let parsed: serde_json::Value = serde_json::from_str(&body).expect("breach json");
+    assert_eq!(parsed["decision"], "BREACH");
+    assert_eq!(parsed["failing_tier"], "L1_CENTROID_COSINE");
+    let threshold = parsed["l1"]["threshold"].as_f64().expect("threshold");
+    assert!(
+        (threshold - original).abs() < 1e-6,
+        "follow-up saw {threshold}, original lock is {original}"
+    );
+    assert_eq!(server.hits.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn threshold_endpoints_and_zero_epsilon_still_apply() {
+    let lock = python_lock();
+    let server = spawn_chat_server(Arc::new(FixedEmbedder(lock.centroid))).await;
+    let cases = [
+        (r#"{"l1_threshold":-1.0}"#, -1.0f64),
+        (r#"{"l1_threshold":1.0}"#, 1.0),
+        (r#"{"epsilon":0.0}"#, f64::from(lock.l1_cosine_threshold)),
+    ];
+    for (index, (overrides, expected_l1)) in cases.iter().enumerate() {
+        let (status, body, headers) = post_raw(
+            &server,
+            &format!(
+                r#"{{"messages":[{{"role":"user","content":"threshold probe"}}],"domain_id":"{PYTHON_DOMAIN}","upstream":{{"provider":"mock","model":"mock-model"}},"overrides":{overrides}}}"#
+            ),
+        )
+        .await;
+        assert_eq!(status, 200, "{overrides} -> {body}");
+        let telemetry = headers
+            .get("x-sf-telemetry")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("");
+        let parsed: serde_json::Value = serde_json::from_str(telemetry)
+            .unwrap_or_else(|_| panic!("{overrides} telemetry {telemetry}"));
+        let threshold = parsed["l1"]["threshold"].as_f64().expect("threshold");
+        assert!(
+            (threshold - expected_l1).abs() < 1e-6,
+            "{overrides} applied {threshold}, expected {expected_l1}"
+        );
+        assert_eq!(server.hits.load(Ordering::SeqCst), index + 1);
+    }
 }

@@ -50,6 +50,8 @@ temp/
 # Test & telemetry dumps
 reports/*.json
 !reports/.gitkeep
+!reports/load_benchmark_mock.json
+!reports/load_benchmark_mps_http.json
 
 # LanceDB local datasets and benchmark working sets
 data/

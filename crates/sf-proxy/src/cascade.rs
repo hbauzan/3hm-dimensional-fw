@@ -62,6 +62,10 @@ impl GateClock {
     }
 }
 
+/// Scores vectors that are already embedded.
+///
+/// Returning on the first failing clause skips later CPU/SIMD gates. This
+/// function does not embed and does not cancel an embedding batch.
 pub fn evaluate_three_tier_cascade(
     full_prompt_vec: &AlignedVec1024,
     clause_vecs: &[AlignedVec1024],

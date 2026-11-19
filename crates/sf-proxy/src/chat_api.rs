@@ -292,7 +292,12 @@ fn validate_chat_overrides(overrides: &ChatOverridesDto) -> Result<(), OverrideR
     Ok(())
 }
 
-fn decode_chat_request(body: &[u8]) -> Result<ChatRequestDto, ChatDecodeError> {
+/// Parse a chat body. Invalid JSON and invalid overrides are the existing HTTP 400 response.
+pub fn decode_chat_request(body: &[u8]) -> Result<ChatRequestDto, Box<Response>> {
+    parse_chat_request(body).map_err(|error| Box::new(error.into_response()))
+}
+
+fn parse_chat_request(body: &[u8]) -> Result<ChatRequestDto, ChatDecodeError> {
     let text = std::str::from_utf8(body).map_err(|_| ChatDecodeError::InvalidJson)?;
     let normalized = admit_non_finite_literals(text);
     let payload: ChatRequestDto =
@@ -523,6 +528,11 @@ fn breach(
 }
 
 /// `Ok(ChatBreachDto)` releases the prompt with gate telemetry. `Err` is the playground breach card.
+///
+/// `prompt_vec` and `clause_vecs` are already embedded. Returning on the first
+/// failing clause skips later CPU/SIMD gates. `clauses_skipped` counts clause
+/// gates not run after that failure. This function does not embed and does not
+/// cancel an embedding batch.
 pub fn evaluate_chat_cascade(
     prompt_vec: &AlignedVec1024,
     clauses: &[&str],
@@ -773,6 +783,11 @@ fn resolve_lock(
         .ok_or_else(|| reject(StatusCode::SERVICE_UNAVAILABLE, "no domain lock is loaded"))
 }
 
+/// Gates one chat request.
+///
+/// One batch of `[normalized text, clauses...]` is embedded before the cascade,
+/// in a single embedder call. `clauses_skipped` counts clause gates not run
+/// after the first failure. That count does not skip or shrink the embedding batch.
 pub async fn handle_api_v1_chat(
     State(state): State<Arc<ProxyAppState>>,
     headers: HeaderMap,
@@ -792,7 +807,7 @@ pub async fn handle_api_v1_chat(
     }
     let payload = match decode_chat_request(&body) {
         Ok(payload) => payload,
-        Err(error) => return error.into_response(),
+        Err(response) => return *response,
     };
     let Some(user_text) = latest_chat_user_text(&payload.messages) else {
         return json_error(StatusCode::BAD_REQUEST, "missing user message");
@@ -822,7 +837,15 @@ pub async fn handle_api_v1_chat(
     batch.extend(clauses.iter().copied());
 
     let t_embed_start = std::time::Instant::now();
-    let mut vectors = match state.embedder.embed_batch_f32(&batch).await {
+    let embedded = if state.embedder.is_mock() {
+        state
+            .embedder
+            .embed_batch_for_domain(Some(lock.domain_id.as_str()), &batch)
+            .await
+    } else {
+        state.embedder.embed_batch_f32(&batch).await
+    };
+    let mut vectors = match embedded {
         Ok(vectors) if vectors.len() == batch.len() => vectors,
         Ok(_) => {
             return json_error(

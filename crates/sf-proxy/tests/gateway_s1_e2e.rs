@@ -1,7 +1,7 @@
 //! Daemon seam: CORS, dual breach JSON, ephemeral chat overrides, concurrent SSE.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -15,7 +15,7 @@ use sf_kernels::{
     AlignedVec1024, DomainHypercubeLock, LockSpec, NoiseBitmask1024, MAX_TOPK, NOISE_MASK_WORDS,
 };
 use sf_proxy::{
-    router, router_with_cors, BatchEmbedderClient, CorsAllow, MockBatchEmbedder,
+    router, router_with_cors, BatchEmbedderClient, CorsAllow, InputNormalizer, MockBatchEmbedder,
     MockUpstreamForwarder, ProxyAppState, ReqwestChatForwarder, UpstreamLlmForwarder,
 };
 use sf_storage::HotRegistry;
@@ -65,6 +65,7 @@ fn state(
         embedder: Arc::new(MockBatchEmbedder {
             pass_vector: centroid,
             breach_vector: AlignedVec1024::zeros(),
+            centroids: std::collections::HashMap::new(),
         }),
         upstream: Arc::clone(&upstream),
         mock_upstream: upstream,
@@ -399,6 +400,7 @@ async fn chat_mock_upstream_does_not_forward_to_unreachable_network_upstream() {
         embedder: Arc::new(MockBatchEmbedder {
             pass_vector: centroid,
             breach_vector: AlignedVec1024::zeros(),
+            centroids: std::collections::HashMap::new(),
         }),
         upstream: unreachable_upstream,
         mock_upstream: Arc::new(MockUpstreamForwarder),
@@ -483,6 +485,7 @@ async fn mock_embedder_skips_pairwise_unless_the_prompt_is_the_breach_sentinel()
         Arc::new(MockBatchEmbedder {
             pass_vector: centroid,
             breach_vector: centroid,
+            centroids: std::collections::HashMap::new(),
         }),
         rejecting_python_receta(&primary),
     );
@@ -722,5 +725,100 @@ async fn studio_override_edges_remain_on_the_chat_contract() {
         let (status, _, body) = oneshot(app.clone(), chat_with_overrides(overrides)).await;
         assert_ne!(status, StatusCode::BAD_REQUEST, "{overrides} -> {body}");
         assert_eq!(status, StatusCode::OK, "{overrides} -> {body}");
+    }
+}
+
+struct CountingFirstClauseEmbedder {
+    calls: AtomicUsize,
+    batches: Mutex<Vec<Vec<String>>>,
+    pass_vector: AlignedVec1024,
+    breach_vector: AlignedVec1024,
+    breaching_clause: String,
+}
+
+#[async_trait]
+impl BatchEmbedderClient for CountingFirstClauseEmbedder {
+    async fn embed_batch_f32(&self, texts: &[&str]) -> Result<Vec<AlignedVec1024>, String> {
+        let recorded: Vec<String> = texts.iter().copied().map(str::to_string).collect();
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.batches.lock().expect("embed batch log").push(recorded);
+        let breaching = self.breaching_clause.as_str();
+        Ok(texts
+            .iter()
+            .map(|text| {
+                if *text == breaching {
+                    self.breach_vector
+                } else {
+                    self.pass_vector
+                }
+            })
+            .collect())
+    }
+}
+
+#[tokio::test]
+async fn one_embed_batch_keeps_skipped_clauses_when_the_first_clause_breaches() {
+    let prompt = "orthogonal clause, retained clause";
+    let normalized = InputNormalizer::normalize(prompt);
+    let clauses = normalized.segment_all_clauses();
+    assert!(
+        clauses.len() >= 2,
+        "prompt must segment into at least two clauses, got {clauses:?}"
+    );
+
+    let lock = python_lock(0.5);
+    let mut breach_vector = AlignedVec1024::zeros();
+    breach_vector.data[100] = 1.0;
+    let embedder = Arc::new(CountingFirstClauseEmbedder {
+        calls: AtomicUsize::new(0),
+        batches: Mutex::new(Vec::new()),
+        pass_vector: lock.centroid,
+        breach_vector,
+        breaching_clause: clauses[0].to_string(),
+    });
+    let app = router(Arc::new(ProxyAppState {
+        registry: Arc::new(HotRegistry::from_locks([lock])),
+        embedder: Arc::clone(&embedder) as Arc<dyn BatchEmbedderClient>,
+        upstream: Arc::new(MockUpstreamForwarder),
+        mock_upstream: Arc::new(MockUpstreamForwarder),
+        default_domain: "python".to_string(),
+        max_telemetry_coords: 4,
+    }));
+
+    let (status, _, body) = oneshot(
+        app,
+        Request::builder()
+            .method("POST")
+            .uri("/api/v1/chat")
+            .header("content-type", "application/json")
+            .body(chat_body(prompt))
+            .unwrap(),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    let breach: serde_json::Value = serde_json::from_str(&body).expect(&body);
+    assert_eq!(breach["decision"], "BREACH", "{body}");
+    assert_eq!(breach["failing_tier"], "L2_CLAUSE_GATE", "{body}");
+    assert_eq!(breach["l2"]["breached_clause_index"], 0, "{body}");
+    let skipped = breach["clauses_skipped"].as_u64().expect("clauses_skipped") as usize;
+    assert!(skipped > 0, "{body}");
+    assert!(skipped < clauses.len(), "{body}");
+
+    assert_eq!(embedder.calls.load(Ordering::SeqCst), 1);
+    let batches = embedder.batches.lock().expect("embed batch log");
+    assert_eq!(batches.len(), 1, "embed_batch_f32 must run once");
+    let batch = &batches[0];
+    let mut expected = Vec::with_capacity(1 + clauses.len());
+    expected.push(normalized.text.clone());
+    expected.extend(clauses.iter().copied().map(str::to_string));
+    assert_eq!(batch, &expected);
+    let ungated = &clauses[clauses.len() - skipped..];
+    assert!(!ungated.is_empty());
+    for clause in ungated {
+        assert!(
+            batch.iter().any(|text| text == *clause),
+            "clause counted by clauses_skipped was absent from the embed batch: {clause}"
+        );
     }
 }
