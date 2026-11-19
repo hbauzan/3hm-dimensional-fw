@@ -135,6 +135,27 @@ async fn test_get_catalog_returns_55_locks_and_220_vectors() {
 }
 
 #[tokio::test]
+async fn test_get_health_returns_package_version() {
+    let (base_url, _handle) = spawn_test_server().await;
+    let client = reqwest::Client::new();
+
+    let res = client
+        .get(format!("{base_url}/health"))
+        .send()
+        .await
+        .expect("GET /health");
+
+    assert_eq!(res.status(), reqwest::StatusCode::OK);
+    let json: serde_json::Value = res.json().await.expect("parse health JSON");
+    assert_eq!(json["version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(
+        json.as_object().expect("health object").len(),
+        1,
+        "health body has only version"
+    );
+}
+
+#[tokio::test]
 async fn test_inspect_piggybacked_cosine_leak_vector_e2e() {
     let (base_url, _handle) = spawn_test_server().await;
     let client = reqwest::Client::new();
