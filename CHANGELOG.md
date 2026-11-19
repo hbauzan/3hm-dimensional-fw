@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- The README now cites the measured release CPU gate (p50 0.542 µs, p99 0.583 µs), the measured embedder (MPS, p50 23.775 ms, p99 629.247 ms), and the Suite 2 autopsy (3/100, 31/100, 36/100).
 - `GET /health` on `sf-ui` returns the package version and no other fields.
 - v0.2.x is an Ingress-Only Semantic Firewall. This version scores ingress. Egress Semantic Amplification stays a v1.1+ stream inspector and does not wrap upstream SSE.
 - Suite 2 records the first failing tier of each clean false positive. Mode A keeps the current pairwise check. Mode C calls `evaluate_pairwise_containment`.
