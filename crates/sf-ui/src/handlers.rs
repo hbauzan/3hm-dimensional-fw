@@ -164,11 +164,24 @@ pub struct InspectResponse {
 pub fn router(state: Arc<UiAppState>) -> axum::Router {
     axum::Router::new()
         .route("/", get(handle_index))
+        .route("/health", get(handle_health))
         .route("/api/v1/catalog", get(handle_catalog))
         .route("/api/v1/inspect", post(handle_inspect))
         .route("/api/v1/reload", post(handle_reload))
         .route("/api/v1/chat", post(handle_chat))
         .with_state(state)
+}
+
+#[derive(Debug, Serialize)]
+struct HealthResponse {
+    version: String,
+}
+
+/// GET /health -> package version from the crate manifest.
+pub async fn handle_health() -> impl IntoResponse {
+    Json(HealthResponse {
+        version: env!("CARGO_PKG_VERSION").to_string(),
+    })
 }
 
 /// GET / -> Self-contained embedded HTML5 diagnostic interface.
@@ -248,7 +261,7 @@ pub async fn handle_catalog(State(state): State<Arc<UiAppState>>) -> impl IntoRe
 
     Json(CatalogResponse {
         product: "Three-Headed Semantic Firewall".to_string(),
-        version: "1.0.0".to_string(),
+        version: env!("CARGO_PKG_VERSION").to_string(),
         locks,
         scpb_220_vectors: rompepepe_vectors.clone(),
         rompepepe_vectors,
