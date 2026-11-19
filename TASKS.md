@@ -32,4 +32,4 @@ Close the verified v0.2 integrity gaps in `sf-storage`, `sf-proxy`, and `sf-ui`,
 - [x] **Slice 7** (`docs/slice-07-ingress-only-scope`): Mark this version ingress-only. Assign egress semantic amplification to v1.1+.
 - [x] **Slice 8** (`chore/slice-08-version-020-and-roadmaps`): Align `/health` and changelog with `0.2.0`. Archive the two merged prompts.
 - [x] **Slice 9** (`feat/slice-09-truthful-benchmarks-and-readme`): Persist load-benchmark JSON and correct README latency, lock size, cosine normalization, and `ceil(0.10 * 1024) = 103`.
-- [ ] **Slice 10** (`ci/slice-10-multiarch-github-actions`): Add `.github/workflows/ci.yml` for `x86_64`, `arm64`, and the frontend only after slices 1–9 are on `main`.
+- [x] **Slice 10** (`ci/slice-10-multiarch-github-actions`): Add `.github/workflows/ci.yml` for `x86_64`, `arm64`, and the frontend only after slices 1–9 are on `main`.

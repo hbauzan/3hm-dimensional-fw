@@ -165,11 +165,11 @@ chmod +x setup.sh
 ```
 
 ### Main Menu:
-- **`1`**: **🚀 Desplegar Stack Completo**: Launches `sf-proxy` (:8088), the `frontend` SPA (:5173), and auto-seeds 55 canonical locks into LanceDB.
+- **`1`**: **🚀 Desplegar Stack Completo**: Launches `sf-proxy` (:8088), the `frontend` SPA (:5173), and auto-seeds 66 locks (11 base + 55 pairs) into LanceDB.
 - **`2`**: **Iniciar Servicio en Primer Plano**: Runs `sf-proxy`, `frontend`, or `sf-ui` in the foreground.
 - **`3`**: **Ejecutar Suite de Tests Unificada**: Runs `cargo test --workspace` + Vitest in `frontend/`.
 - **`4`**: **Quality Gates & Linters Estrictos**: Executes `cargo fmt`, `cargo clippy`, TypeScript checks, and Oxlint.
-- **`5`**: **Evaluar Ataques SCPB-220**: Runs the 220 adversarial attack test matrix against 55 locks.
+- **`5`**: **Evaluar Ataques SCPB-220**: Runs the 220 adversarial attack test matrix against 55 pair locks.
 - **`6`**: **Benchmark de Carga & SLA 1000 RPS**: Verifies the p99 latency SLA (< 2ms) under concurrent load.
 - **`7`**: **Gestión de LanceDB & Catálogo**: Seeds canonical locks, calibrates domains, and runs `sf-ingest`.
 
@@ -198,6 +198,14 @@ cd frontend
 pnpm test
 pnpm run lint
 ```
+
+### Continuous integration
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on push and pull request:
+
+- `rust-x86_64` on `ubuntu-latest`: `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, and `cargo test --workspace`. This is the `x86_64` AVX2/FMA build.
+- `rust-arm64` on `macos-latest`: `cargo clippy --workspace --all-targets -- -D warnings` and `cargo test --workspace`. This is the `arm64` NEON build.
+- `frontend` on `ubuntu-latest`: `pnpm --dir frontend install --frozen-lockfile`, then `pnpm --dir frontend lint`, `pnpm --dir frontend build`, and `pnpm --dir frontend test`.
 
 ---
 
