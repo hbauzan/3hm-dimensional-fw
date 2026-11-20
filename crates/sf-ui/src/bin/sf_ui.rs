@@ -14,7 +14,7 @@ use tokio::net::TcpListener;
 #[derive(Debug, Parser)]
 #[command(
     name = "sf-ui",
-    about = "Three-Headed Semantic Firewall Diagnostic Studio v0.2.0"
+    about = concat!("Three-Headed Semantic Firewall Diagnostic Studio v", env!("CARGO_PKG_VERSION"))
 )]
 pub struct CliArgs {
     /// Address and port to bind TCP listener.
@@ -35,7 +35,10 @@ async fn main() {
     let args = CliArgs::parse();
 
     println!("===============================================================================");
-    println!("  THREE-HEADED SEMANTIC FIREWALL — DIAGNOSTIC STUDIO v0.2.0 (sf-ui)            ");
+    println!(
+        "  THREE-HEADED SEMANTIC FIREWALL — DIAGNOSTIC STUDIO v{} (sf-ui)",
+        env!("CARGO_PKG_VERSION")
+    );
     println!("===============================================================================");
 
     let (registry, resolved_uri) = match &args.lancedb_uri {

@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+## 0.2.1 - 2026-11-19
+
+- Release `v0.2.1` closing `TASK-007`: archived `roadmap/archived/v0.2-hardening-and-empirical-truth.prompt.md` and added `roadmap/HANDOFF-v0.2.1-AND-VNEXT-AUDIT.md` as the baseline audit handoff for vNext.
 - CI runs the x86_64 and arm64 Rust jobs and the frontend job.
 - The README now cites the measured release CPU gate (p50 0.542 µs, p99 0.583 µs), the measured embedder (MPS, p50 23.775 ms, p99 629.247 ms), and the Suite 2 autopsy (3/100, 31/100, 36/100).
 - `GET /health` on `sf-ui` returns the package version and no other fields.
