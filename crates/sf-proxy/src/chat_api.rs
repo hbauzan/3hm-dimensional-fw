@@ -826,21 +826,11 @@ pub async fn handle_api_v1_chat(
         Err(response) => return response,
     };
     if filter_mode == "fhv1" {
-        if let Err(response) = crate::fhv1_api::run_realtime_chat(
-            &state,
-            crate::fhv1_api::RealtimeChatFhv1 {
-                payload: &payload,
-                user_text: &user_text,
-                preserve_3hm_breach: false,
-                reused_texts: &[],
-                reused_vectors: &[],
-                embedding_ms: 0.0,
-            },
-        )
-        .await
-        {
-            return response;
-        }
+        let fhv1_trace =
+            match run_fhv1_chat_gate(&state, &payload, &user_text, false, &[], &[], 0.0).await {
+                Ok(trace_id) => trace_id,
+                Err(response) => return response,
+            };
         return forward_accepted_chat(
             &state,
             &payload,
@@ -852,6 +842,7 @@ pub async fn handle_api_v1_chat(
                 total_pipeline_ms: 0.0,
                 gate_dto: None,
             },
+            fhv1_trace.as_deref(),
         )
         .await;
     }
@@ -935,16 +926,14 @@ pub async fn handle_api_v1_chat(
                 skipped,
             );
             if filter_mode == "3hm_plus_fhv1" {
-                if let Err(response) = crate::fhv1_api::run_realtime_chat(
+                if let Err(response) = run_fhv1_chat_gate(
                     &state,
-                    crate::fhv1_api::RealtimeChatFhv1 {
-                        payload: &payload,
-                        user_text: &user_text,
-                        preserve_3hm_breach: true,
-                        reused_texts: &batch,
-                        reused_vectors: &vectors,
-                        embedding_ms: embedding_inference_ms,
-                    },
+                    &payload,
+                    &user_text,
+                    true,
+                    &batch,
+                    &vectors,
+                    embedding_inference_ms,
                 )
                 .await
                 {
@@ -982,16 +971,14 @@ pub async fn handle_api_v1_chat(
                 0,
             );
             if filter_mode == "3hm_plus_fhv1" {
-                if let Err(response) = crate::fhv1_api::run_realtime_chat(
+                if let Err(response) = run_fhv1_chat_gate(
                     &state,
-                    crate::fhv1_api::RealtimeChatFhv1 {
-                        payload: &payload,
-                        user_text: &user_text,
-                        preserve_3hm_breach: true,
-                        reused_texts: &batch,
-                        reused_vectors: &vectors,
-                        embedding_ms: embedding_inference_ms,
-                    },
+                    &payload,
+                    &user_text,
+                    true,
+                    &batch,
+                    &vectors,
+                    embedding_inference_ms,
                 )
                 .await
                 {
@@ -1002,23 +989,24 @@ pub async fn handle_api_v1_chat(
         }
     }
 
-    if filter_mode == "3hm_plus_fhv1" {
-        if let Err(response) = crate::fhv1_api::run_realtime_chat(
+    let fhv1_trace = if filter_mode == "3hm_plus_fhv1" {
+        match run_fhv1_chat_gate(
             &state,
-            crate::fhv1_api::RealtimeChatFhv1 {
-                payload: &payload,
-                user_text: &user_text,
-                preserve_3hm_breach: false,
-                reused_texts: &batch,
-                reused_vectors: &vectors,
-                embedding_ms: embedding_inference_ms,
-            },
+            &payload,
+            &user_text,
+            false,
+            &batch,
+            &vectors,
+            embedding_inference_ms,
         )
         .await
         {
-            return response;
+            Ok(trace_id) => trace_id,
+            Err(response) => return response,
         }
-    }
+    } else {
+        None
+    };
 
     forward_accepted_chat(
         &state,
@@ -1030,6 +1018,30 @@ pub async fn handle_api_v1_chat(
             simd_gate_kernel_us,
             total_pipeline_ms,
             gate_dto: Some(&gate_dto),
+        },
+        fhv1_trace.as_deref(),
+    )
+    .await
+}
+
+async fn run_fhv1_chat_gate<'a>(
+    state: &'a ProxyAppState,
+    payload: &'a ChatRequestDto,
+    user_text: &'a str,
+    preserve_3hm_breach: bool,
+    reused_texts: &'a [&'a str],
+    reused_vectors: &'a [AlignedVec1024],
+    embedding_ms: f64,
+) -> Result<Option<String>, Response> {
+    crate::fhv1_api::run_realtime_chat(
+        state,
+        crate::fhv1_api::RealtimeChatFhv1 {
+            payload,
+            user_text,
+            preserve_3hm_breach,
+            reused_texts,
+            reused_vectors,
+            embedding_ms,
         },
     )
     .await
@@ -1048,6 +1060,7 @@ async fn forward_accepted_chat(
     state: &ProxyAppState,
     payload: &ChatRequestDto,
     accepted: AcceptedChat<'_>,
+    fhv1_trace_id: Option<&str>,
 ) -> Response {
     let upstream = match resolve_chat_upstream(payload.upstream.as_ref()) {
         Ok(upstream) => upstream,
@@ -1095,6 +1108,12 @@ async fn forward_accepted_chat(
                         headers.insert("x-sf-telemetry", val);
                     }
                 }
+            }
+            if let Some(trace_id) = fhv1_trace_id {
+                if let Ok(value) = HeaderValue::from_str(trace_id) {
+                    headers.insert("x-sf-trace-id", value);
+                }
+                headers.insert("x-sf-fhv1-decision", HeaderValue::from_static("PASS"));
             }
             response
         }

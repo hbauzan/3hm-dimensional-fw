@@ -317,6 +317,199 @@ fn zero_span_norm_pos_is_absent_and_batch_does_not_stop_early() {
     );
 }
 
+#[test]
+fn variance_and_std_dev_metrics_split_equal_spans() {
+    let mut rows = [[0.0; DIM]; 4];
+    rows[3][0] = 4.0;
+    rows[1][1] = 4.0;
+    rows[3][1] = 4.0;
+    rows[1][2] = 1.0;
+    rows[2][2] = 3.0;
+    rows[3][2] = 4.0;
+    rows[1][3] = 2.0;
+    rows[2][3] = 2.0;
+    rows[3][3] = 4.0;
+
+    let span_stats =
+        compute_fhv1_profile_stats(&rows, 0, MovementMetric::Span, standard()).expect("span");
+    for dim in 0..4 {
+        assert_eq!(span_stats.span[dim].to_bits(), 4.0f64.to_bits());
+        assert_eq!(
+            span_stats.movement_tier_codes[dim],
+            MovementTier::LowAnchor.code()
+        );
+    }
+    for dim in 4..DIM {
+        assert_eq!(
+            span_stats.movement_tier_codes[dim],
+            MovementTier::ZeroSpan.code()
+        );
+    }
+
+    let variance: [f64; 4] = [3.0, 4.0, 2.5, 2.0];
+    let var_stats =
+        compute_fhv1_profile_stats(&rows, 0, MovementMetric::Variance, standard()).expect("var");
+    assert_eq!(var_stats.metric, MovementMetric::Variance);
+    for (dim, expected) in variance.iter().enumerate() {
+        assert_eq!(var_stats.variance[dim].to_bits(), expected.to_bits());
+    }
+    let mut sorted_variance = variance;
+    sorted_variance.sort_by(f64::total_cmp);
+    assert_eq!(
+        var_stats.cutoffs.p25.to_bits(),
+        linear_reference(&sorted_variance, 0.25).to_bits()
+    );
+    assert_eq!(
+        var_stats.cutoffs.p75.to_bits(),
+        linear_reference(&sorted_variance, 0.75).to_bits()
+    );
+    assert_eq!(
+        var_stats.cutoffs.p90.to_bits(),
+        linear_reference(&sorted_variance, 0.90).to_bits()
+    );
+    assert_eq!(
+        var_stats.movement_tier_codes[3],
+        MovementTier::LowAnchor.code()
+    );
+    assert_eq!(
+        var_stats.movement_tier_codes[2],
+        MovementTier::Moderate.code()
+    );
+    assert_eq!(
+        var_stats.movement_tier_codes[0],
+        MovementTier::Moderate.code()
+    );
+    assert_eq!(
+        var_stats.movement_tier_codes[1],
+        MovementTier::ExtremeMovement.code()
+    );
+    for dim in 4..DIM {
+        assert_eq!(
+            var_stats.movement_tier_codes[dim],
+            MovementTier::ZeroSpan.code()
+        );
+    }
+    let reclass = classify_movement_tiers(
+        &var_stats.span,
+        &var_stats.variance,
+        &var_stats.std_dev,
+        MovementMetric::Variance,
+        standard(),
+    )
+    .expect("reclass variance");
+    assert_eq!(reclass.codes.as_ref(), &var_stats.movement_tier_codes);
+    assert_eq!(
+        reclass.cutoffs.p90.to_bits(),
+        var_stats.cutoffs.p90.to_bits()
+    );
+
+    let std_dev: [f64; 4] = [3.0f64.sqrt(), 2.0, 2.5f64.sqrt(), 2.0f64.sqrt()];
+    let std_stats =
+        compute_fhv1_profile_stats(&rows, 0, MovementMetric::StdDev, standard()).expect("std");
+    assert_eq!(std_stats.metric, MovementMetric::StdDev);
+    for (dim, expected) in std_dev.iter().enumerate() {
+        assert_eq!(std_stats.std_dev[dim].to_bits(), expected.to_bits());
+        assert_eq!(std_stats.variance[dim].to_bits(), variance[dim].to_bits());
+    }
+    let mut sorted_std = std_dev;
+    sorted_std.sort_by(f64::total_cmp);
+    assert_eq!(
+        std_stats.cutoffs.p25.to_bits(),
+        linear_reference(&sorted_std, 0.25).to_bits()
+    );
+    assert_eq!(
+        std_stats.cutoffs.p75.to_bits(),
+        linear_reference(&sorted_std, 0.75).to_bits()
+    );
+    assert_eq!(
+        std_stats.cutoffs.p90.to_bits(),
+        linear_reference(&sorted_std, 0.90).to_bits()
+    );
+    assert_eq!(
+        std_stats.movement_tier_codes[3],
+        MovementTier::LowAnchor.code()
+    );
+    assert_eq!(
+        std_stats.movement_tier_codes[2],
+        MovementTier::Moderate.code()
+    );
+    assert_eq!(
+        std_stats.movement_tier_codes[0],
+        MovementTier::Moderate.code()
+    );
+    assert_eq!(
+        std_stats.movement_tier_codes[1],
+        MovementTier::ExtremeMovement.code()
+    );
+    for dim in 4..DIM {
+        assert_eq!(
+            std_stats.movement_tier_codes[dim],
+            MovementTier::ZeroSpan.code()
+        );
+    }
+    let reclass_std = classify_movement_tiers(
+        &std_stats.span,
+        &std_stats.variance,
+        &std_stats.std_dev,
+        MovementMetric::StdDev,
+        standard(),
+    )
+    .expect("reclass std");
+    assert_eq!(reclass_std.codes.as_ref(), &std_stats.movement_tier_codes);
+}
+
+#[test]
+fn envelope_edges_record_norm_pos_and_a_negative_mean_delta() {
+    let stats = envelope(1.0, 2.0);
+    let at_min = evaluate_fhv1_chunk(&stats, &[1.0; DIM], false).expect("min");
+    assert!(at_min.chunk_passed);
+    assert_eq!(
+        at_min.dimensions[0].norm_pos.unwrap().to_bits(),
+        0.0f64.to_bits()
+    );
+    assert_eq!(
+        at_min.dimensions[0].delta_vs_mean.to_bits(),
+        (-0.5f64).to_bits()
+    );
+    assert!(at_min.dimensions[0].delta_vs_mean < 0.0);
+
+    let at_max = evaluate_fhv1_chunk(&stats, &[2.0; DIM], false).expect("max");
+    assert!(at_max.chunk_passed);
+    assert_eq!(
+        at_max.dimensions[7].norm_pos.unwrap().to_bits(),
+        1.0f64.to_bits()
+    );
+    assert_eq!(at_max.dimensions[7].status, DimBoundStatus::InBounds);
+}
+
+#[test]
+fn evaluate_chunk_rejects_bad_dim_and_non_finite() {
+    let stats = envelope(0.0, 1.0);
+    let short = [0.5; 3];
+    assert_eq!(
+        evaluate_fhv1_chunk(&stats, &short, false).unwrap_err(),
+        Fhv1Error::BadDim { len: 3 }
+    );
+    let mut nan = [0.5; DIM];
+    nan[4] = f64::NAN;
+    assert_eq!(
+        evaluate_fhv1_chunk(&stats, &nan, false).unwrap_err(),
+        Fhv1Error::NonFinite {
+            sample_index: 0,
+            dim: 4
+        }
+    );
+    let mut infinite = [0.5; DIM];
+    infinite[9] = f64::NEG_INFINITY;
+    assert_eq!(
+        evaluate_fhv1_chunk(&stats, &infinite, false).unwrap_err(),
+        Fhv1Error::NonFinite {
+            sample_index: 0,
+            dim: 9
+        }
+    );
+}
+
 fn linear_reference(sorted: &[f64], p: f64) -> f64 {
     let n = sorted.len();
     let rank = p * (n as f64 - 1.0);

@@ -12,7 +12,7 @@ mod schema;
 mod validate;
 
 pub use fhv1_calibration::{
-    assemble_calibration, profile_id_for, trace_summaries_json, Fhv1AuditTrace,
+    assemble_calibration, profile_id_for, stats_from_profile, trace_summaries_json, Fhv1AuditTrace,
     Fhv1AuditTraceSummary, Fhv1BenchmarkRun, Fhv1CalibrationRequest, Fhv1CalibrationSample,
     Fhv1ProfileRecord, Fhv1RawSample, Fhv1StorageError, Fhv1TraceChunkDrilldown,
     Fhv1TraceDrilldown, Fhv1TracePage, Fhv1TraceQuery,

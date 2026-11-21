@@ -4,8 +4,7 @@ use std::collections::BTreeSet;
 use std::time::Instant;
 
 use sf_kernels::{
-    evaluate_fhv1_batch, Fhv1BatchEval, Fhv1EvalGranularity, Fhv1ProfileStats, Fhv1QuantileCutoffs,
-    Fhv1Quantiles, MovementMetric, DIM,
+    evaluate_fhv1_batch, Fhv1BatchEval, Fhv1EvalGranularity, Fhv1Quantiles, MovementMetric, DIM,
 };
 use sf_storage::{Fhv1CalibrationRequest, Fhv1ProfileRecord, Fhv1RawSample, Fhv1Store};
 use sha2::{Digest, Sha256};
@@ -401,28 +400,6 @@ where
         .map_err(|err| err.to_string())
 }
 
-#[inline(never)]
-fn profile_stats(profile: &Fhv1ProfileRecord) -> Box<Fhv1ProfileStats> {
-    Box::new(Fhv1ProfileStats {
-        min: *profile.min_vector.as_ref(),
-        max: *profile.max_vector.as_ref(),
-        mean: *profile.mean_vector.as_ref(),
-        span: *profile.span_vector.as_ref(),
-        variance: *profile.variance_vector.as_ref(),
-        std_dev: *profile.std_dev_vector.as_ref(),
-        movement_tier_codes: *profile.movement_tier_codes.as_ref(),
-        quantiles: Fhv1Quantiles::standard(),
-        sample_count: profile.sample_count,
-        polarity: profile.polarity,
-        metric: MovementMetric::Span,
-        cutoffs: Fhv1QuantileCutoffs {
-            p25: 0.0,
-            p75: 0.0,
-            p90: 0.0,
-        },
-    })
-}
-
 /// Embed every chunk of one input and score it against a stored profile. No early exit.
 pub async fn evaluate_fhv1_input<E>(
     embedder: &E,
@@ -440,7 +417,7 @@ where
     let vectors = embed_chunks(embedder, &chunks, spec.normalize_embeddings).await?;
     let embedding_ms = started.elapsed().as_secs_f64() * 1_000.0;
     let eval_started = Instant::now();
-    let stats = profile_stats(profile);
+    let stats = sf_storage::stats_from_profile(profile);
     let rows: Vec<&[f64]> = vectors.iter().map(|row| row.as_slice()).collect();
     let batch = evaluate_fhv1_batch(&stats, &rows, spec.granularity, spec.use_rogue_mask)
         .map_err(|err| err.to_string())?;

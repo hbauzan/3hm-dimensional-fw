@@ -265,7 +265,7 @@ pub fn trace_summaries_json(rows: &[Fhv1AuditTraceSummary]) -> Result<String, Fh
 
 /// Separate frame so the inline kernel arrays are not part of an async state machine.
 #[inline(never)]
-pub(crate) fn stats_from_profile(profile: &Fhv1ProfileRecord) -> Box<Fhv1ProfileStats> {
+pub fn stats_from_profile(profile: &Fhv1ProfileRecord) -> Box<Fhv1ProfileStats> {
     Box::new(Fhv1ProfileStats {
         min: *profile.min_vector.as_ref(),
         max: *profile.max_vector.as_ref(),

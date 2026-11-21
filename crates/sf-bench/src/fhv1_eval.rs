@@ -4,10 +4,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::time::Instant;
 
 use serde_json::{json, Value};
-use sf_kernels::{
-    evaluate_fhv1_batch, DimBoundStatus, Fhv1EvalGranularity, Fhv1ProfileStats,
-    Fhv1QuantileCutoffs, MovementMetric, DIM,
-};
+use sf_kernels::{evaluate_fhv1_batch, DimBoundStatus, Fhv1EvalGranularity, DIM};
 use sf_proxy::{expand_for_granularity, expand_text_multi_granularity, BatchEmbedderClient};
 use sf_storage::{Fhv1AuditTrace, Fhv1BenchmarkRun, Fhv1ProfileRecord, Fhv1Store};
 use sha2::{Digest, Sha256};
@@ -288,34 +285,12 @@ where
     Ok(prepared)
 }
 
-#[inline(never)]
-fn profile_stats(profile: &Fhv1ProfileRecord) -> Box<Fhv1ProfileStats> {
-    Box::new(Fhv1ProfileStats {
-        min: *profile.min_vector.as_ref(),
-        max: *profile.max_vector.as_ref(),
-        mean: *profile.mean_vector.as_ref(),
-        span: *profile.span_vector.as_ref(),
-        variance: *profile.variance_vector.as_ref(),
-        std_dev: *profile.std_dev_vector.as_ref(),
-        movement_tier_codes: *profile.movement_tier_codes.as_ref(),
-        quantiles: sf_kernels::Fhv1Quantiles::standard(),
-        sample_count: profile.sample_count,
-        polarity: profile.polarity,
-        metric: MovementMetric::Span,
-        cutoffs: Fhv1QuantileCutoffs {
-            p25: 0.0,
-            p75: 0.0,
-            p90: 0.0,
-        },
-    })
-}
-
 pub fn score_view(
     profile: &Fhv1ProfileRecord,
     view: &PreparedView,
     use_rogue_mask: bool,
 ) -> Result<ScoredView, String> {
-    let stats = profile_stats(profile);
+    let stats = sf_storage::stats_from_profile(profile);
     let rows: Vec<&[f64]> = view.vectors.iter().map(|row| row.as_slice()).collect();
     let started = Instant::now();
     let batch = evaluate_fhv1_batch(&stats, &rows, view.granularity, use_rogue_mask)
@@ -513,10 +488,7 @@ pub async fn persist_benchmark_run(
         let mut traces = Vec::with_capacity(view.chunks.len());
         for (index, chunk) in view.chunks.iter().enumerate() {
             traces.push(Fhv1AuditTrace {
-                trace_id: format!(
-                    "{}-{}-{index}",
-                    request.run_id, prepared_prompt.prompt.input_id
-                ),
+                trace_id: format!("{}-{}", request.run_id, prepared_prompt.prompt.input_id),
                 run_id: request.run_id.to_string(),
                 source_kind: "BENCHMARK".to_string(),
                 profile_id: profile.profile_id.clone(),

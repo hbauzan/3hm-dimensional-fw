@@ -1,8 +1,9 @@
 //! `/api/v1/fhv1` routes and the realtime chat gate.
 #![allow(clippy::result_large_err)]
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
@@ -16,8 +17,8 @@ use sf_kernels::{
     Fhv1EvalGranularity, Fhv1Quantiles, MovementMetric, DIM,
 };
 use sf_storage::{
-    export_csv, export_parquet, export_xlsx, Fhv1AuditTrace, Fhv1BenchmarkRun, Fhv1ProfileRecord,
-    Fhv1Store, Fhv1TraceQuery, Fhv1XlsxPayload, FHV1_XLSX_MAX_ROWS,
+    export_csv, export_parquet, export_xlsx, stats_from_profile, Fhv1AuditTrace, Fhv1BenchmarkRun,
+    Fhv1ProfileRecord, Fhv1Store, Fhv1TraceQuery, Fhv1XlsxPayload, FHV1_XLSX_MAX_ROWS,
 };
 use sha2::{Digest, Sha256};
 
@@ -69,10 +70,10 @@ pub fn chat_filter_mode(payload: &ChatRequestDto) -> Result<&str, Response> {
 pub async fn run_realtime_chat(
     state: &ProxyAppState,
     request: RealtimeChatFhv1<'_>,
-) -> Result<(), Response> {
+) -> Result<Option<String>, Response> {
     let mode = chat_filter_mode(request.payload)?;
     if mode == "3hm_default" {
-        return Ok(());
+        return Ok(None);
     }
     let store = require_store(state)?;
     let profile_id =
@@ -125,8 +126,11 @@ pub async fn run_realtime_chat(
         &evaluated.scored,
     )
     .await?;
-    if request.preserve_3hm_breach || evaluated.scored.batch.overall_passed {
-        return Ok(());
+    if request.preserve_3hm_breach {
+        return Ok(None);
+    }
+    if evaluated.scored.batch.overall_passed {
+        return Ok(Some(trace_id));
     }
     Err(fhv1_breach_response(
         &profile,
@@ -170,15 +174,17 @@ async fn score_realtime(
     if reuse {
         let vectors: Vec<Box<[f64; DIM]>> = reused.vectors.iter().map(promote_f32).collect();
         let rows: Vec<&[f64]> = vectors.iter().map(|row| row.as_slice()).collect();
-        let stats = profile_stats(profile);
+        let stats = stats_from_profile(profile);
+        let eval_started = Instant::now();
         let batch = evaluate_fhv1_batch(&stats, &rows, granularity, use_rogue_mask)
             .map_err(|err| error_response(StatusCode::BAD_REQUEST, &err.to_string()))?;
+        let eval_latency_ns = u64::try_from(eval_started.elapsed().as_nanos()).unwrap_or(u64::MAX);
         let scored = crate::fhv1_pipeline::Fhv1EvaluatedInput {
             chunks: chunks.clone(),
             vectors: vectors.clone(),
             batch,
             embedding_ms: reused.embedding_ms,
-            eval_latency_ns: 0,
+            eval_latency_ns,
         };
         return Ok(ScoredRealtime {
             chunks,
@@ -217,28 +223,6 @@ fn promote_f32(vector: &AlignedVec1024) -> Box<[f64; DIM]> {
     }
     let boxed: Box<[f64]> = row.into_boxed_slice();
     boxed.try_into().unwrap_or_else(|_| unreachable!("dim"))
-}
-
-#[inline(never)]
-fn profile_stats(profile: &Fhv1ProfileRecord) -> Box<sf_kernels::Fhv1ProfileStats> {
-    Box::new(sf_kernels::Fhv1ProfileStats {
-        min: *profile.min_vector.as_ref(),
-        max: *profile.max_vector.as_ref(),
-        mean: *profile.mean_vector.as_ref(),
-        span: *profile.span_vector.as_ref(),
-        variance: *profile.variance_vector.as_ref(),
-        std_dev: *profile.std_dev_vector.as_ref(),
-        movement_tier_codes: *profile.movement_tier_codes.as_ref(),
-        quantiles: Fhv1Quantiles::standard(),
-        sample_count: profile.sample_count,
-        polarity: profile.polarity,
-        metric: MovementMetric::Span,
-        cutoffs: sf_kernels::Fhv1QuantileCutoffs {
-            p25: 0.0,
-            p75: 0.0,
-            p90: 0.0,
-        },
-    })
 }
 
 fn fhv1_breach_response(
@@ -634,11 +618,12 @@ async fn run_benchmark(
             Err(err) => return error_response(StatusCode::BAD_GATEWAY, &err),
         };
         passed_flags.push(scored.batch.overall_passed);
+        let prompt_trace_id = format!("{run_id}-{}", prompt.input_id);
         push_traces(
             &mut traces,
             &profile,
             &TraceMeta {
-                trace_id: &run_id,
+                trace_id: &prompt_trace_id,
                 run_id: &run_id,
                 source_kind: "BENCHMARK",
                 category: &prompt.category,
@@ -1085,5 +1070,7 @@ fn now_ms() -> i64 {
 }
 
 fn new_trace_id(prefix: &str) -> String {
-    format!("{prefix}-{}", now_ms())
+    static TRACE_SEQ: AtomicU64 = AtomicU64::new(0);
+    let seq = TRACE_SEQ.fetch_add(1, Ordering::Relaxed);
+    format!("{prefix}-{}-{seq}", now_ms())
 }

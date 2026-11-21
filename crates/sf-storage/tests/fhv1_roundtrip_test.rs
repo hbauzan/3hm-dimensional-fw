@@ -8,8 +8,8 @@ use lancedb::arrow::arrow_array::{Array, Float64Array};
 use lancedb::arrow::arrow_schema::DataType;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use sf_kernels::{
-    AlignedVec1024, DomainHypercubeLock, Fhv1Quantiles, LockSpec, MovementMetric, NoiseBitmask1024,
-    DIM, MAX_TOPK,
+    AlignedVec1024, DimBoundStatus, DomainHypercubeLock, Fhv1Quantiles, LockSpec, MovementMetric,
+    NoiseBitmask1024, DIM, MAX_TOPK, UNIVERSAL_NOISE_INDICES,
 };
 use sf_storage::{
     export_csv, export_parquet, export_xlsx, fhv1_audit_trace_schema, fhv1_benchmark_run_schema,
@@ -376,6 +376,148 @@ async fn lance_xlsx_csv_parquet_and_zip_keep_raw_f64_bits() {
                 "missing split value {bits:016x}"
             );
         }
+    }
+}
+
+#[tokio::test]
+async fn trace_summaries_filter_by_profile_category_and_failure_page() {
+    let dir = TempUri::new("trace-filter");
+    let store = Fhv1Store::new(dir.uri());
+    let profile_id = "python-v1-filter";
+    let other_profile = "python-v9-other";
+    let mut rows = Vec::new();
+    for (trace_id, created_at_ms) in [("fail-a", 300), ("fail-b", 200), ("fail-c", 100)] {
+        let mut row = trace(profile_id, trace_id, 0, 0.25, false);
+        row.category = "ADVERSARIAL_FUZZING".to_string();
+        row.created_at_ms = created_at_ms;
+        row.overall_passed = false;
+        row.chunk_passed = false;
+        rows.push(row);
+    }
+    let mut passed = trace(profile_id, "pass-late", 0, 0.25, true);
+    passed.category = "ADVERSARIAL_FUZZING".to_string();
+    passed.created_at_ms = 400;
+    rows.push(passed);
+    let mut other_category = trace(profile_id, "other-cat", 0, 0.25, false);
+    other_category.category = "IN_DOMAIN_VALID".to_string();
+    other_category.created_at_ms = 450;
+    other_category.overall_passed = false;
+    rows.push(other_category);
+    let mut other_profile_row = trace(other_profile, "other-profile", 0, 0.25, false);
+    other_profile_row.category = "ADVERSARIAL_FUZZING".to_string();
+    other_profile_row.created_at_ms = 500;
+    other_profile_row.overall_passed = false;
+    rows.push(other_profile_row);
+    store.append_audit_traces(&rows).await.expect("append");
+
+    let query = Fhv1TraceQuery {
+        run_id: None,
+        profile_id: Some(profile_id.to_string()),
+        source_kind: None,
+        category: Some("ADVERSARIAL_FUZZING".to_string()),
+        passed: Some(false),
+        page: 2,
+        page_size: 1,
+    };
+    let page = store
+        .query_audit_trace_summaries(&query)
+        .await
+        .expect("filtered page");
+    assert_eq!(page.page, 2);
+    assert_eq!(page.page_size, 1);
+    assert_eq!(page.total, 3);
+    assert_eq!(page.rows.len(), 1);
+    assert_eq!(page.rows[0].trace_id, "fail-b");
+    assert_eq!(page.rows[0].profile_id, profile_id);
+    assert_eq!(page.rows[0].category, "ADVERSARIAL_FUZZING");
+    assert!(!page.rows[0].overall_passed);
+
+    let orphan = trace("missing-profile", "orphan-trace", 0, 0.5, true);
+    store.append_audit_traces(&[orphan]).await.expect("orphan");
+    let err = store
+        .get_trace_drilldown("orphan-trace")
+        .await
+        .expect_err("missing profile");
+    assert!(
+        err.message.contains("missing fhv1 profile missing-profile"),
+        "{}",
+        err.message
+    );
+}
+
+#[tokio::test]
+async fn rogue_mask_drilldown_keeps_pruned_observed_bits() {
+    let dir = TempUri::new("rogue-drill");
+    let store = Fhv1Store::new(dir.uri());
+    let profile_id = {
+        let batch = request(vec![filled_sample("lo", 0.0), filled_sample("hi", 1.0)]);
+        store
+            .save_calibration_profile(&batch)
+            .await
+            .expect("profile")
+            .profile_id
+    };
+    let mut observed = vec![0.5; DIM];
+    let mut planted = [0.0; UNIVERSAL_NOISE_INDICES.len()];
+    for (slot, index) in UNIVERSAL_NOISE_INDICES.iter().enumerate() {
+        let value = f64::from_bits(0x4000_0000_0000_0001 + slot as u64);
+        planted[slot] = value;
+        observed[*index as usize] = value;
+    }
+    let vector = box_f64(&observed);
+    let mut row = trace(&profile_id, "rogue-trace", 0, 0.5, true);
+    row.use_rogue_mask = true;
+    row.evaluated_dims = 1015;
+    row.input_vector = vector;
+    row.overall_passed = true;
+    row.chunk_passed = true;
+    store.append_audit_traces(&[row]).await.expect("trace");
+
+    let drill = store
+        .get_trace_drilldown("rogue-trace")
+        .await
+        .expect("drill")
+        .expect("present");
+    assert_eq!(drill.chunks.len(), 1);
+    assert!(drill.chunks[0].trace.use_rogue_mask);
+    assert_eq!(drill.chunks[0].trace.evaluated_dims, 1015);
+    let dimensions = &drill.chunks[0].dimensions;
+    let pruned = dimensions
+        .iter()
+        .filter(|dim| dim.status == DimBoundStatus::PrunedRogue)
+        .count();
+    assert_eq!(pruned, UNIVERSAL_NOISE_INDICES.len());
+    assert_eq!(dimensions.len() - pruned, 1015);
+    for (slot, index) in UNIVERSAL_NOISE_INDICES.iter().enumerate() {
+        let dim = &dimensions[*index as usize];
+        assert_eq!(dim.status, DimBoundStatus::PrunedRogue);
+        assert_eq!(dim.observed_bits, planted[slot].to_bits());
+        assert_eq!(dim.observed.to_bits(), planted[slot].to_bits());
+        assert_eq!(
+            drill.chunks[0].trace.input_vector[*index as usize].to_bits(),
+            planted[slot].to_bits()
+        );
+        assert_eq!(dim.violation_delta.to_bits(), 0.0f64.to_bits());
+    }
+    assert_eq!(dimensions[0].status, DimBoundStatus::InBounds);
+    assert_eq!(dimensions[0].observed.to_bits(), 0.5f64.to_bits());
+}
+
+fn filled_sample(id: &str, value: f64) -> Fhv1RawSample {
+    let mut row = sample(id, value);
+    row.vector = filled_vector(value);
+    row
+}
+
+fn filled_vector(value: f64) -> Box<[f64; DIM]> {
+    box_f64(&vec![value; DIM])
+}
+
+fn box_f64(values: &[f64]) -> Box<[f64; DIM]> {
+    let boxed: Box<[f64]> = values.to_vec().into_boxed_slice();
+    match boxed.try_into() {
+        Ok(vector) => vector,
+        Err(_) => unreachable!("fhv1 dim"),
     }
 }
 
