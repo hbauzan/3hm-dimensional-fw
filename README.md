@@ -119,13 +119,13 @@ Measured on this Apple M4. The v0.2 engine was not changed. Suite 2 below is the
 
 **Suite 1 (SCPB-220)** is a synthetic algebraic smoke test. The smoke harness still scores **220** attacks. Its containment is not the product false-positive rate, and this page does not use it as one.
 
-**Suite 2** clean samples = 100. Primary Mode C only: L1 = 0, L2 = 3, L3 = 0, so the primary false-positive rate is **3/100**. Production pairwise (`evaluate_pairwise_containment`, Mode C) on that cascade: pairs = 28, total false positives **31/100**. Suite pairwise Mode A on that cascade: pairs = 33, total false positives **36/100**.
+**Suite 2** clean samples = 100. Primary Mode C only: L1 = 0, L2 = 3, L3 = 0, so the primary false-positive rate is **3/100**. Production pairwise (`evaluate_pairwise_containment`, Mode C) on that cascade: pairs = 28, total false positives **31/100**. Suite pairwise Mode A on that cascade: pairs = 33, total false positives **36/100**. Attack recall under that same production path matches Mode A on these fixtures.
 
-| Matrix | Clean | Primary Mode C | Production pairs (Mode C) | Suite pairs (Mode A) | Attacks | Cosine leaks | Blocked |
-| :--- | :---: | :--- | :--- | :--- | :---: | :---: | :---: |
-| **EN** | 10 | L1 = 0, L2 = 0, L3 = 0 | pairs = 3, fp = **3/10** | pairs = 3, fp = **3/10** | 82 | 48/82 | 64/82 |
-| **ES** | 90 | L2 = 3 | pairs = 25, fp = **28/90** | pairs = 30, fp = **33/90** | 90 | 41/90 | 90/90 |
-| **Pooled** | 100 | L1 = 0, L2 = 3, L3 = 0, fp = **3/100** | pairs = 28, fp = **31/100** | pairs = 33, fp = **36/100** | 172 | 89/172 | 154/172 |
+| Matrix | Clean | Primary Mode C | Production pairs (Mode C) | Suite pairs (Mode A) | Attacks | Cosine leaks | Blocked (Mode A) | Blocked prod (Mode C) |
+| :--- | :---: | :--- | :--- | :--- | :---: | :---: | :---: | :---: |
+| **EN** | 10 | L1 = 0, L2 = 0, L3 = 0 | pairs = 3, fp = **3/10** | pairs = 3, fp = **3/10** | 82 | 48/82 | 64/82 | 64/82 |
+| **ES** | 90 | L2 = 3 | pairs = 25, fp = **28/90** | pairs = 30, fp = **33/90** | 90 | 41/90 | 90/90 | 90/90 |
+| **Pooled** | 100 | L1 = 0, L2 = 3, L3 = 0, fp = **3/100** | pairs = 28, fp = **31/100** | pairs = 33, fp = **36/100** | 172 | 89/172 | 154/172 | 154/172 |
 
 ---
 
@@ -203,8 +203,8 @@ pnpm run lint
 
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on push and pull request:
 
-- `rust-x86_64` on `ubuntu-latest`: `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, and `cargo test --workspace`. This is the `x86_64` AVX2/FMA build.
-- `rust-arm64` on `macos-latest`: `cargo clippy --workspace --all-targets -- -D warnings` and `cargo test --workspace`. This is the `arm64` NEON build.
+- `rust-x86_64` on `ubuntu-latest`: `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, and `cargo test --workspace`. The job compiles `avx2.rs` and `avx512.rs` (`#[cfg(target_arch = "x86_64")]`). Dispatch runs `avx512f` when the runner exposes it, otherwise AVX2+FMA. The log does not record which path ran.
+- `rust-arm64` on `macos-latest`: `cargo clippy --workspace --all-targets -- -D warnings` and `cargo test --workspace`. This is the `arm64` NEON build. It does not compile or execute `avx512f`.
 - `frontend` on `ubuntu-latest`: `pnpm --dir frontend install --frozen-lockfile`, then `pnpm --dir frontend lint`, `pnpm --dir frontend build`, and `pnpm --dir frontend test`.
 
 ---

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Suite 2 reports `blocked_prod` and `recall_prod` beside Mode A `blocked` / `recall`. The new count is attacks with `!contained_prod` (primary Mode C cascade, then `evaluate_pairwise_containment`). On the v0.2.1 fixtures the attack counts match Mode A: EN 64/82, ES 90/90, pooled 154/172. Clean false positives are unchanged (Mode A 36/100, production Mode C 31/100).
+
 ## 0.2.1 - 2026-11-19
 
 - Release `v0.2.1` closing `TASK-007`: archived `roadmap/archived/v0.2-hardening-and-empirical-truth.prompt.md` and added `roadmap/HANDOFF-v0.2.1-AND-VNEXT-AUDIT.md` as the baseline audit handoff for vNext.

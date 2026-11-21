@@ -56,6 +56,10 @@ pub struct Suite2Matrix {
     pub leak_rate: f64,
     pub blocked: usize,
     pub recall: f64,
+    /// Attacks with `!contained_prod`: primary Mode C cascade, then
+    /// `evaluate_pairwise_containment`.
+    pub blocked_prod: usize,
+    pub recall_prod: f64,
     /// Mode A suite: primary Mode C cascade, then eligible pairwise locks in Mode A.
     pub fp_tier_mode_a: Suite2FpTier,
     /// Same cascade, then `evaluate_pairwise_containment`.
@@ -96,7 +100,8 @@ struct ModeAGate {
     primary_fail: Option<FpBucket>,
 }
 
-/// Suite 2 report. Rates are `fp/n_clean`, `leaks/n_attack`, and `blocked/n_attack`.
+/// Suite 2 report. Rates are `fp/n_clean`, `leaks/n_attack`, `blocked/n_attack`
+/// (Mode A), and `blocked_prod/n_attack` (production Mode C).
 #[derive(Debug, Clone, PartialEq)]
 pub struct OosBenchmarkResult {
     pub en: Suite2Matrix,
@@ -395,6 +400,7 @@ fn matrix_from(label: &'static str, samples: &[&Suite2Sample]) -> Suite2Matrix {
     let mut n_attack = 0usize;
     let mut cosine_leaks = 0usize;
     let mut blocked = 0usize;
+    let mut blocked_prod = 0usize;
     let mut fp_tier_mode_a = Suite2FpTier::default();
     let mut fp_tier_mode_c = Suite2FpTier::default();
     for sample in samples {
@@ -439,6 +445,9 @@ fn matrix_from(label: &'static str, samples: &[&Suite2Sample]) -> Suite2Matrix {
             if !sample.contained {
                 blocked += 1;
             }
+            if !sample.contained_prod {
+                blocked_prod += 1;
+            }
             if sample.fp_bucket_mode_a.is_some() || sample.fp_bucket_mode_c.is_some() {
                 panic!(
                     "suite 2 {label} attack sample in {} recorded a clean false-positive tier",
@@ -460,6 +469,8 @@ fn matrix_from(label: &'static str, samples: &[&Suite2Sample]) -> Suite2Matrix {
         leak_rate: cosine_leaks as f64 / n_attack as f64,
         blocked,
         recall: blocked as f64 / n_attack as f64,
+        blocked_prod,
+        recall_prod: blocked_prod as f64 / n_attack as f64,
         fp_tier_mode_a,
         fp_tier_mode_c,
     }
@@ -617,13 +628,14 @@ pub fn format_suite2_metrics(result: &OosBenchmarkResult) -> String {
     let mut lines = Vec::with_capacity(10);
     for matrix in [&result.en, &result.es, &result.pooled] {
         lines.push(format!(
-            "suite2 matrix={label} n_clean={n_clean} fp={fp} fpr={fp}/{n_clean} n_attack={n_attack} cosine_leaks={leaks} leak_rate={leaks}/{n_attack} blocked={blocked} recall={blocked}/{n_attack}",
+            "suite2 matrix={label} n_clean={n_clean} fp={fp} fpr={fp}/{n_clean} n_attack={n_attack} cosine_leaks={leaks} leak_rate={leaks}/{n_attack} blocked={blocked} recall={blocked}/{n_attack} blocked_prod={blocked_prod} recall_prod={blocked_prod}/{n_attack}",
             label = matrix.label,
             n_clean = matrix.n_clean,
             fp = matrix.false_positives,
             n_attack = matrix.n_attack,
             leaks = matrix.cosine_leaks,
             blocked = matrix.blocked,
+            blocked_prod = matrix.blocked_prod,
         ));
     }
     for matrix in [&result.en, &result.es, &result.pooled] {
