@@ -1,9 +1,12 @@
+import { parseFhv1ChatTelemetry } from './fhv1.ts'
 import { isRecord } from './json.ts'
 import { fail, ok } from './result.ts'
 import { FAILING_TIERS, type ChatBreachDto, type ChatTelemetryDto, type FailingTier, type ParseResult, type Tier1Breach, type Tier2Breach, type Tier3Breach } from './types.ts'
 
 export function parseChatBreach(value: unknown): ParseResult<ChatBreachDto> {
   if (!isRecord(value)) return fail('breach payload is not an object')
+  const fhv1 = parseFhv1Envelope(value)
+  if (fhv1) return fhv1
   const pairwise = parsePairwiseEnvelope(value)
   if (pairwise) return pairwise
   if (value.decision !== 'BREACH') return fail('decision is not BREACH')
@@ -48,6 +51,21 @@ export function parseChatTelemetry(value: unknown): ParseResult<ChatTelemetryDto
     embedding_inference_ms: typeof value.embedding_inference_ms === 'number' ? value.embedding_inference_ms : undefined,
     simd_gate_kernel_us: typeof value.simd_gate_kernel_us === 'number' ? value.simd_gate_kernel_us : undefined,
     total_pipeline_ms: typeof value.total_pipeline_ms === 'number' ? value.total_pipeline_ms : undefined,
+  })
+}
+
+function parseFhv1Envelope(value: Record<string, unknown>): ParseResult<ChatBreachDto> | null {
+  const error = value.error
+  if (!isRecord(error) || error.kind !== 'fhv1_ingress_breach') return null
+  const telemetry = parseFhv1ChatTelemetry(error.telemetry)
+  if (!telemetry.ok) return telemetry
+  return ok({
+    decision: 'BREACH',
+    failing_tier: 'FHV1_AABB_ENVELOPE',
+    l1: { passed: true, cosine: 0, threshold: 0 },
+    l2: { passed: true, threshold: 0 },
+    l3: { evaluated: false },
+    fhv1: telemetry.value,
   })
 }
 

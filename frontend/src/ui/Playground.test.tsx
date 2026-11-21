@@ -84,6 +84,7 @@ describe('Playground', () => {
     expect(body.domain_id).toBe('python')
     expect(body.upstream.provider).toBe('mock')
     expect(body.overrides).toBeUndefined()
+    expect(body).not.toHaveProperty('filter_mode')
     expect(sent[0]?.url).toBe('http://127.0.0.1:8088/api/v1/chat')
 
     await user.type(screen.getByRole('textbox', { name: 'Prompt' }), 'de nuevo')
@@ -322,6 +323,118 @@ describe('Playground', () => {
     const domain = screen.getByRole('combobox', { name: 'Domain id' })
     expect(fieldValue(domain)).toBe('python_receta')
     expect(screen.getByRole('option', { name: 'python_receta (custom)' })).toBeTruthy()
+  })
+
+  it('switches to fhv1, evaluates a sentence, and keeps the audit collapsed until opened', async () => {
+    const user = userEvent.setup()
+    const calls: { url: string; body: unknown }[] = []
+    const profile = {
+      profile_id: 'python-v1-abc',
+      policy_id: 'python',
+      sample_count: 1,
+      normalize: true,
+      use_rogue_mask_default: false,
+    }
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = String(input)
+      const raw = init?.body
+      calls.push({ url, body: typeof raw === 'string' ? JSON.parse(raw) : null })
+      if (url.endsWith('/api/v1/fhv1/profiles')) return jsonResponse(200, [profile])
+      if (url.includes('/api/v1/fhv1/evaluate')) {
+        return jsonResponse(200, {
+          trace_id: 'lab-1',
+          profile_id: 'python-v1-abc',
+          policy_id: 'python',
+          eval_granularity: 'clauses',
+          use_rogue_mask: false,
+          overall_passed: false,
+          full_text_passed: false,
+          all_chunks_passed: false,
+          embedding_ms: 0.1,
+          eval_latency_ns: 7,
+          chunks: [
+            {
+              chunk_index: 0,
+              chunk_strategy: 'full_doc',
+              chunk_passed: false,
+              failed_dims_count: 1,
+              max_violation_delta: 0.1,
+            },
+          ],
+        })
+      }
+      if (url.includes('/api/v1/fhv1/traces')) {
+        return jsonResponse(200, {
+          page: 1,
+          page_size: 20,
+          total: 1,
+          rows: [
+            {
+              trace_id: 'chat-1',
+              source_kind: 'REALTIME_CHAT',
+              profile_id: 'python-v1-abc',
+              chunk_index: 0,
+              overall_passed: false,
+              failed_dims_count: 1,
+              max_violation_delta: 0.1,
+            },
+          ],
+        })
+      }
+      return jsonResponse(403, {
+        error: {
+          kind: 'fhv1_ingress_breach',
+          code: 'SEMANTIC_CONTAINMENT_BREACH',
+          message: 'fhv1 AABB envelope rejected the prompt',
+          telemetry: {
+            trace_id: 'chat-1',
+            profile_id: 'python-v1-abc',
+            policy_id: 'python',
+            failing_tier: 'FHV1_AABB_ENVELOPE',
+            eval_granularity: 'clauses',
+            use_rogue_mask: false,
+            full_text_passed: false,
+            all_chunks_passed: false,
+            failing_chunk_index: 0,
+            failed_dims_count: 1,
+            underflow_count: 0,
+            overflow_count: 1,
+            max_violation_delta: 0.1,
+            embedding_ms: 0.1,
+            eval_latency_ns: 7,
+          },
+        },
+      })
+    }
+    render(<Playground fetchImpl={fetchImpl} store={memorySessionStore()} />)
+    expect(screen.getByRole('combobox', { name: 'Domain id' }).querySelectorAll('option')).toHaveLength(11)
+    const audit = screen.getByRole('button', { name: 'Live audit' })
+    expect(audit.getAttribute('aria-expanded')).toBe('false')
+
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Filter mode' }), 'fhv1')
+    expect(await screen.findByRole('option', { name: 'python-v1-abc' })).toBeTruthy()
+    await user.selectOptions(screen.getByRole('combobox', { name: 'fhv1 profile' }), 'python-v1-abc')
+    await user.type(screen.getByRole('textbox', { name: 'Prompt' }), 'fuera')
+    await user.click(screen.getByRole('button', { name: 'Send' }))
+    expect(await screen.findByText('FHV1_AABB_ENVELOPE')).toBeTruthy()
+    expect(screen.getByText('max violation 0.1')).toBeTruthy()
+    expect(screen.queryByText('0.1000')).toBeNull()
+
+    const chat = calls.find((call) => call.url.includes('/api/v1/chat'))
+    expect(chat?.body).toMatchObject({
+      filter_mode: 'fhv1',
+      fhv1_profile_id: 'python-v1-abc',
+      fhv1_granularity: 'clauses',
+      fhv1_use_rogue_mask: false,
+    })
+
+    await user.type(screen.getByRole('textbox', { name: 'Direct lab sentence' }), 'lab')
+    await user.click(screen.getByRole('button', { name: 'Evaluate sentence' }))
+    expect(await screen.findByText('FHV1 BREACH lab-1 delta 0.1')).toBeTruthy()
+
+    expect(calls.some((call) => call.url.includes('/api/v1/fhv1/traces'))).toBe(false)
+    await user.click(audit)
+    expect(await screen.findByText('REALTIME_CHAT BREACH 0.1')).toBeTruthy()
   })
 })
 

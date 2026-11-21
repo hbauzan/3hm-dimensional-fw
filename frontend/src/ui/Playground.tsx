@@ -1,5 +1,12 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import { resolveChatEndpoint } from '../domain/endpoint.ts'
+import {
+  formatLosslessF64,
+  isFhv1EvalGranularity,
+  isFhv1FilterMode,
+  type Fhv1Evaluation,
+  type Fhv1ProfileSummary,
+} from '../domain/fhv1.ts'
 import { splitFences } from '../domain/format.ts'
 import { clampFloat, clampInt } from '../domain/overrides.ts'
 import {
@@ -17,6 +24,8 @@ import {
   type SessionStore,
 } from '../domain/session.ts'
 import {
+  FHV1_EVAL_GRANULARITIES,
+  FHV1_FILTER_MODES,
   UPSTREAM_PROVIDERS,
   type ChatBreachDto,
   type ChatTelemetryDto,
@@ -25,7 +34,9 @@ import {
   type UpstreamProvider,
 } from '../domain/types.ts'
 import { fetchUpstreamEnvCatalog, postChat } from '../gateway/client.ts'
+import { listFhv1Profiles, postFhv1Evaluate } from '../gateway/fhv1Client.ts'
 import { BreachCard, PassCard } from './BreachCard.tsx'
+import { Fhv1LiveAuditPanel } from './Fhv1LiveAuditPanel.tsx'
 
 const browserStore = browserSessionStore()
 
@@ -41,9 +52,11 @@ type Turn =
 export function Playground({
   fetchImpl,
   store = browserStore,
+  fill = false,
 }: {
   fetchImpl?: typeof fetch
   store?: SessionStore
+  fill?: boolean
 }) {
   const [session, setSession] = useState(() => loadSession(store))
   const [draft, setDraft] = useState('')
@@ -51,6 +64,12 @@ export function Playground({
   const [busy, setBusy] = useState(false)
   const [envLoading, setEnvLoading] = useState(false)
   const [envMessage, setEnvMessage] = useState<string | null>(null)
+  const [profiles, setProfiles] = useState<Fhv1ProfileSummary[]>([])
+  const [profileMessage, setProfileMessage] = useState<string | null>(null)
+  const [labText, setLabText] = useState('')
+  const [labBusy, setLabBusy] = useState(false)
+  const [labResult, setLabResult] = useState<string | null>(null)
+  const [auditRefresh, setAuditRefresh] = useState(0)
   const ids = useRef(0)
   const providerRef = useRef(session.upstream.provider)
   providerRef.current = session.upstream.provider
@@ -71,6 +90,27 @@ export function Playground({
       messagesEndRef.current?.scrollIntoView?.({ behavior: 'smooth' })
     }
   }, [turns])
+
+  const filterMode = session.filterMode ?? '3hm_default'
+  const fhv1Active = filterMode !== '3hm_default'
+
+  useEffect(() => {
+    if (!fhv1Active) return
+    let cancelled = false
+    void listFhv1Profiles(session.gatewayBase, fetchImpl).then((parsed) => {
+      if (cancelled) return
+      if (!parsed.ok) {
+        setProfiles([])
+        setProfileMessage(parsed.message)
+        return
+      }
+      setProfiles(parsed.value)
+      setProfileMessage(null)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [fhv1Active, session.gatewayBase, fetchImpl])
 
   async function syncEnv(targetProvider: UpstreamProvider = session.upstream.provider) {
     setEnvLoading(true)
@@ -158,6 +198,10 @@ export function Playground({
         epsilonPinned: session.epsilonPinned,
         overrides: session.overrides,
         upstream: session.upstream,
+        filterMode: session.filterMode,
+        fhv1ProfileId: session.fhv1ProfileId,
+        fhv1Granularity: session.fhv1Granularity,
+        fhv1UseRogueMask: session.fhv1UseRogueMask,
       }),
       fetchImpl,
       onDelta(piece) {
@@ -196,6 +240,30 @@ export function Playground({
       }),
     )
     setBusy(false)
+    setAuditRefresh((value) => value + 1)
+  }
+
+  async function onEvaluate(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const text = labText.trim()
+    const profileId = session.fhv1ProfileId?.trim() ?? ''
+    if (!text || !profileId || labBusy) return
+    setLabBusy(true)
+    setLabResult(null)
+    const parsed = await postFhv1Evaluate(
+      session.gatewayBase,
+      {
+        profileId,
+        text,
+        granularity: session.fhv1Granularity ?? 'clauses',
+        useRogueMask: session.fhv1UseRogueMask === true,
+      },
+      fetchImpl,
+    )
+    if (!parsed.ok) setLabResult(parsed.message)
+    else setLabResult(formatLabResult(parsed.value))
+    setLabBusy(false)
+    setAuditRefresh((value) => value + 1)
   }
 
   function onPromptKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -206,7 +274,13 @@ export function Playground({
   }
 
   return (
-    <div className="flex h-[100dvh] flex-col overflow-hidden bg-studio-bg text-studio-text">
+    <div
+      className={
+        fill
+          ? 'flex min-h-0 flex-1 flex-col overflow-hidden bg-studio-bg text-studio-text'
+          : 'flex h-[100dvh] flex-col overflow-hidden bg-studio-bg text-studio-text'
+      }
+    >
       <header className="flex flex-shrink-0 items-center justify-between border-b border-studio-line px-4 py-2.5">
         <h1 className="text-xs font-semibold tracking-widest text-studio-accent uppercase">
           SF-PROXY PLAYGROUND
@@ -256,7 +330,7 @@ export function Playground({
             />
             <button
               type="submit"
-              disabled={busy || draft.trim() === ''}
+              disabled={busy || draft.trim() === '' || (fhv1Active && !(session.fhv1ProfileId ?? '').trim())}
               className="border border-sky-700 bg-sky-700 px-4 py-2 text-xs font-semibold text-white disabled:opacity-40 hover:bg-sky-600 transition-colors cursor-pointer disabled:cursor-not-allowed"
             >
               {busy ? 'Sending' : 'Send'}
@@ -300,6 +374,106 @@ export function Playground({
               ) : null}
             </select>
           </label>
+          <label className="flex flex-col gap-1 text-[10px] uppercase tracking-wide text-studio-muted">
+            Filter mode
+            <select
+              aria-label="Filter mode"
+              className={fieldClass}
+              value={filterMode}
+              onChange={(event) => {
+                const next = event.target.value
+                if (!isFhv1FilterMode(next)) return
+                commit((current) => ({ ...current, filterMode: next }))
+              }}
+            >
+              {FHV1_FILTER_MODES.map((mode) => (
+                <option key={mode} value={mode}>
+                  {mode}
+                </option>
+              ))}
+            </select>
+          </label>
+          {fhv1Active ? (
+            <>
+              <label className="flex flex-col gap-1 text-[10px] uppercase tracking-wide text-studio-muted">
+                fhv1 profile
+                <select
+                  aria-label="fhv1 profile"
+                  className={fieldClass}
+                  value={session.fhv1ProfileId ?? ''}
+                  onChange={(event) =>
+                    commit((current) => ({ ...current, fhv1ProfileId: event.target.value }))
+                  }
+                >
+                  <option value="">Select profile</option>
+                  {profiles.map((profile) => (
+                    <option key={profile.profile_id} value={profile.profile_id}>
+                      {profile.profile_id}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {profileMessage ? (
+                <p className="text-[10px] text-studio-warn">{profileMessage}</p>
+              ) : null}
+              <label className="flex flex-col gap-1 text-[10px] uppercase tracking-wide text-studio-muted">
+                Eval granularity
+                <select
+                  aria-label="Eval granularity"
+                  className={fieldClass}
+                  value={session.fhv1Granularity ?? 'clauses'}
+                  onChange={(event) => {
+                    const next = event.target.value
+                    if (!isFhv1EvalGranularity(next)) return
+                    commit((current) => ({ ...current, fhv1Granularity: next }))
+                  }}
+                >
+                  {FHV1_EVAL_GRANULARITIES.map((granularity) => (
+                    <option key={granularity} value={granularity}>
+                      {granularity}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="flex items-center gap-2 text-[10px] uppercase tracking-wide text-studio-muted">
+                <input
+                  type="checkbox"
+                  checked={session.fhv1UseRogueMask === true}
+                  onChange={(event) =>
+                    commit((current) => ({ ...current, fhv1UseRogueMask: event.target.checked }))
+                  }
+                />
+                Rogue mask
+              </label>
+              <form onSubmit={onEvaluate} className="flex flex-col gap-1">
+                <label className="flex flex-col gap-1 text-[10px] uppercase tracking-wide text-studio-muted">
+                  Direct lab sentence
+                  <textarea
+                    aria-label="Direct lab sentence"
+                    value={labText}
+                    rows={3}
+                    spellCheck={false}
+                    className={fieldClass}
+                    onChange={(event) => setLabText(event.target.value)}
+                  />
+                </label>
+                <button
+                  type="submit"
+                  disabled={labBusy || labText.trim() === '' || !(session.fhv1ProfileId ?? '').trim()}
+                  className="border border-studio-line px-2 py-1 text-[10px] uppercase tracking-wide text-studio-muted hover:border-studio-accent hover:text-studio-text disabled:opacity-40"
+                >
+                  {labBusy ? 'Evaluating' : 'Evaluate sentence'}
+                </button>
+                {labResult ? <p className="font-mono text-[10px] text-studio-text">{labResult}</p> : null}
+              </form>
+            </>
+          ) : null}
+          <Fhv1LiveAuditPanel
+            gatewayBase={session.gatewayBase}
+            profileId={session.fhv1ProfileId ?? ''}
+            refreshKey={auditRefresh}
+            fetchImpl={fetchImpl}
+          />
           <label className="flex items-center gap-2 cursor-pointer text-[10px] uppercase tracking-wide text-studio-muted hover:text-studio-text">
             <input
               type="checkbox"
@@ -510,6 +684,14 @@ function Slider({
       />
     </div>
   )
+}
+
+function formatLabResult(evaluation: Fhv1Evaluation): string {
+  const failing = evaluation.chunks.find((chunk) => !chunk.chunk_passed)
+  const delta = failing?.max_violation_delta ?? evaluation.chunks[0]?.max_violation_delta
+  const verdict = evaluation.overall_passed ? 'FHV1 PASS' : 'FHV1 BREACH'
+  const shown = delta === undefined ? '' : ` delta ${formatLosslessF64(delta)}`
+  return `${verdict} ${evaluation.trace_id}${shown}`
 }
 
 function TurnView({ turn }: { turn: Turn }) {

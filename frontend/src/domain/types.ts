@@ -3,7 +3,34 @@ export const FAILING_TIERS = [
   'L2_CLAUSE_GATE',
   'L3_SPECTRAL_QUORUM',
   'L3_PAIRWISE_QUORUM',
+  'FHV1_AABB_ENVELOPE',
 ] as const
+
+export const FHV1_FILTER_MODES = ['3hm_default', 'fhv1', '3hm_plus_fhv1'] as const
+
+export type Fhv1FilterMode = (typeof FHV1_FILTER_MODES)[number]
+
+export const FHV1_EVAL_GRANULARITIES = ['full_only', 'clauses', 'full_mirror'] as const
+
+export type Fhv1EvalGranularity = (typeof FHV1_EVAL_GRANULARITIES)[number]
+
+export interface Fhv1ChatTelemetry {
+  trace_id: string
+  profile_id: string
+  policy_id: string
+  failing_tier: 'FHV1_AABB_ENVELOPE'
+  eval_granularity: Fhv1EvalGranularity
+  use_rogue_mask: boolean
+  full_text_passed: boolean
+  all_chunks_passed: boolean
+  failing_chunk_index: number
+  failed_dims_count: number
+  underflow_count: number
+  overflow_count: number
+  max_violation_delta: number
+  embedding_ms: number
+  eval_latency_ns: number
+}
 
 export type FailingTier = (typeof FAILING_TIERS)[number]
 
@@ -74,6 +101,10 @@ export interface ChatRequest {
   domain_id?: string
   overrides?: ChatOverrideBody
   upstream: ChatUpstreamBody
+  filter_mode?: Fhv1FilterMode
+  fhv1_profile_id?: string
+  fhv1_granularity?: Fhv1EvalGranularity
+  fhv1_use_rogue_mask?: boolean
 }
 
 export interface ChatDraft {
@@ -84,6 +115,10 @@ export interface ChatDraft {
   epsilonPinned?: boolean
   overrides: ChatOverrides
   upstream: UpstreamSelection
+  filterMode?: Fhv1FilterMode
+  fhv1ProfileId?: string
+  fhv1Granularity?: Fhv1EvalGranularity
+  fhv1UseRogueMask?: boolean
 }
 
 export interface Tier1Breach {
@@ -123,6 +158,7 @@ export interface ChatTelemetryDto {
 export type ChatBreachDto = ChatTelemetryDto & {
   decision: 'BREACH'
   failing_tier: FailingTier
+  fhv1?: Fhv1ChatTelemetry
 }
 
 export type ParseResult<T> = { ok: true; value: T } | { ok: false; message: string }
@@ -135,6 +171,10 @@ export interface SpaSession {
   epsilonPinned?: boolean
   overrides: ChatOverrides
   upstream: UpstreamSelection
+  filterMode?: Fhv1FilterMode
+  fhv1ProfileId?: string
+  fhv1Granularity?: Fhv1EvalGranularity
+  fhv1UseRogueMask?: boolean
 }
 
 export type ChatOutcome =

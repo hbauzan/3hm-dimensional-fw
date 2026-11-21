@@ -1,6 +1,13 @@
+import { isFhv1EvalGranularity, isFhv1FilterMode } from './fhv1.ts'
 import { readStoredFloat, readStoredInt } from './overrides.ts'
 import { isUpstreamProvider, PROVIDER_DEFAULTS } from './presets.ts'
-import type { SpaSession, UpstreamProvider, UpstreamSelection } from './types.ts'
+import type {
+  Fhv1EvalGranularity,
+  Fhv1FilterMode,
+  SpaSession,
+  UpstreamProvider,
+  UpstreamSelection,
+} from './types.ts'
 
 const GATEWAY = 'sf.spa.gatewayBase'
 const DOMAIN = 'sf.spa.domainId'
@@ -15,6 +22,10 @@ const EPSILON_PINNED = 'sf.spa.epsilonPinned'
 const PROVIDER = 'sf.spa.provider'
 
 const USE_ENV = 'sf.spa.useEnv'
+const FILTER = 'sf.spa.filterMode'
+const FHV1_PROFILE = 'sf.spa.fhv1ProfileId'
+const FHV1_GRANULARITY = 'sf.spa.fhv1Granularity'
+const FHV1_MASK = 'sf.spa.fhv1UseRogueMask'
 
 export interface SessionStore {
   getItem(key: string): string | null
@@ -113,6 +124,10 @@ export function loadSession(store: SessionStore): SpaSession {
       epsilon: readStoredFloat(store.getItem(EPSILON), 0, 0, 0.5, 3),
     },
     upstream: loadProviderUpstream(provider, store),
+    filterMode: readFilterMode(store.getItem(FILTER)),
+    fhv1ProfileId: store.getItem(FHV1_PROFILE) ?? '',
+    fhv1Granularity: readGranularity(store.getItem(FHV1_GRANULARITY)),
+    fhv1UseRogueMask: store.getItem(FHV1_MASK) === '1',
   }
 }
 
@@ -132,6 +147,18 @@ export function saveSession(store: SessionStore, session: SpaSession): void {
   const secretKey = apiKeyStorageKey(session.upstream.provider)
   if (session.upstream.apiKey) store.setItem(secretKey, session.upstream.apiKey)
   else store.removeItem(secretKey)
+  store.setItem(FILTER, session.filterMode ?? '3hm_default')
+  store.setItem(FHV1_PROFILE, session.fhv1ProfileId ?? '')
+  store.setItem(FHV1_GRANULARITY, session.fhv1Granularity ?? 'clauses')
+  store.setItem(FHV1_MASK, session.fhv1UseRogueMask ? '1' : '0')
+}
+
+function readFilterMode(value: string | null): Fhv1FilterMode {
+  return value !== null && isFhv1FilterMode(value) ? value : '3hm_default'
+}
+
+function readGranularity(value: string | null): Fhv1EvalGranularity {
+  return value !== null && isFhv1EvalGranularity(value) ? value : 'clauses'
 }
 
 function baseUrlKey(provider: UpstreamProvider): string {

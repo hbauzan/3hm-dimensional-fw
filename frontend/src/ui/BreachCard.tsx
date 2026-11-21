@@ -1,7 +1,20 @@
+import { formatLosslessF64 } from '../domain/fhv1.ts'
 import { clampUnit, formatGate } from '../domain/format.ts'
-import type { ChatBreachDto, ChatTelemetryDto, Tier1Breach, Tier3Breach } from '../domain/types.ts'
+import type { ChatBreachDto, ChatTelemetryDto, Fhv1ChatTelemetry, Tier1Breach, Tier3Breach } from '../domain/types.ts'
 
 export function BreachCard({ breach }: { breach: ChatBreachDto }) {
+  if (breach.fhv1) {
+    return (
+      <article
+        aria-label="Semantic containment breach"
+        className="border border-studio-warn bg-studio-card px-3 py-3 text-xs"
+      >
+        <p className="text-[11px] tracking-wide text-studio-warn">[SEMANTIC CONTAINMENT BREACH]</p>
+        <p className="mt-1 font-semibold text-studio-breach">{breach.failing_tier}</p>
+        <Fhv1TelemetryDetails telemetry={breach.fhv1} />
+      </article>
+    )
+  }
   return (
     <article
       aria-label="Semantic containment breach"
@@ -141,6 +154,28 @@ function DisaggregatedLatency({ telemetry }: { telemetry: ChatTelemetryDto }) {
         </div>
       )}
     </div>
+  )
+}
+
+function Fhv1TelemetryDetails({ telemetry }: { telemetry: Fhv1ChatTelemetry }) {
+  return (
+    <section aria-label="fhv1 AABB envelope" className="mt-3 font-mono text-[11px]">
+      <p>
+        {telemetry.profile_id} · {telemetry.eval_granularity} · rogue mask{' '}
+        {telemetry.use_rogue_mask ? 'on' : 'off'}
+      </p>
+      <p>trace {telemetry.trace_id}</p>
+      <p>
+        failed dims {formatLosslessF64(telemetry.failed_dims_count)} · underflow{' '}
+        {formatLosslessF64(telemetry.underflow_count)} · overflow{' '}
+        {formatLosslessF64(telemetry.overflow_count)}
+      </p>
+      <p>max violation {formatLosslessF64(telemetry.max_violation_delta)}</p>
+      <p>
+        embedding {formatLosslessF64(telemetry.embedding_ms)} · latency{' '}
+        {formatLosslessF64(telemetry.eval_latency_ns)}
+      </p>
+    </section>
   )
 }
 

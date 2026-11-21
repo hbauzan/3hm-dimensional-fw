@@ -19,6 +19,16 @@ export function buildChatRequest(draft: ChatDraft): ChatRequest {
   const domainId = draft.domainId.trim()
   if (domainId) request.domain_id = domainId
   if (draft.overridesArmed) request.overrides = overrideBody(draft)
+  const mode = draft.filterMode ?? '3hm_default'
+  if (mode !== '3hm_default') {
+    request.filter_mode = mode
+    const profileId = draft.fhv1ProfileId?.trim() ?? ''
+    if (profileId) request.fhv1_profile_id = profileId
+    if (draft.fhv1Granularity) request.fhv1_granularity = draft.fhv1Granularity
+    if (typeof draft.fhv1UseRogueMask === 'boolean') {
+      request.fhv1_use_rogue_mask = draft.fhv1UseRogueMask
+    }
+  }
   return request
 }
 
