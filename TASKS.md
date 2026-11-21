@@ -1,36 +1,27 @@
 ---
-task_id: "TASK-009"
-status: "DONE"
+task_id: "TASK-010"
+status: "PENDING"
 assigned_architect: "maximum-architect-agent"
 protocol: "transparent-dev-protocol"
-title: "Implementación de Filtro Héctor v1 (fhv1) AABB IEEE-754 Lossless"
-created_at: "2026-11-21T13:40:00-03:00"
+title: "Hardening, refactor y cobertura completa de tests para Filtro Héctor v1 (fhv1)"
+created_at: "2026-11-21T18:53:00-03:00"
 ---
 
-# TASK-009: Implementación de Filtro Héctor v1 (fhv1) AABB IEEE-754 Lossless
+# TASK-010: Hardening, refactor y cobertura completa de tests para Filtro Héctor v1 (`fhv1`)
 
 ## 1. Objective
-Implementar el filtro determinista `fhv1` (**Exhaustive Coordinate-Wise Axis-Aligned Bounding Box** en precisión nativa IEEE 754 `f64`, zero-rounding end-to-end) según [`roadmap/fhv1-hector-filter-v1.roadmap.md`](roadmap/fhv1-hector-filter-v1.roadmap.md) sobre el branch dedicado `feat/fhv1-hector-filter-v1`, preservando `3HM` (`v0.2.1`) sin regresiones.
+Cerrar los detalles técnicos detectados en la auditoría post-`TASK-009` y completar la cobertura de tests unitarios, de integración REST/batch-reuse, componentes Vitest y Playwright E2E en vivo según [`roadmap/fhv1-hardening-and-test-coverage.roadmap.md`](roadmap/fhv1-hardening-and-test-coverage.roadmap.md) sobre el branch `feat/fhv1-hector-filter-v1`.
 
 ## 2. Invariants & Constraints
-- **Canonical Toolchain**: `cargo` (Rust `1.94.1`), `pnpm` (`frontend/`, `11.8.0`), `uv` (`tools/`). Cero mezcla de gestores.
-- **Single Branch & Atomic Commits**: todo el desarrollo vive en `feat/fhv1-hector-filter-v1` (desde `main`), con commits atómicos verificados por cada Slice (`1..8`). Prohibido `push` o `merge` a `main` antes del Approval Gate humano.
-- **Zero-Rounding RFC-003 Extended**: `Float64` en LanceDB (`Arrow =58.4.1`), JSON `f64` nativo, `rust_xlsxwriter` crudo y `String(val)` en vistas `fhv1`. Conservar `.toFixed(4)` en `format.ts` únicamente para tarjetas `3HM` (`BreachCard.test.tsx`).
-- **Kernel Purity & Deps**: `sf-kernels` permanece 0-dep (`observed_bits: u64`, sin `serde`). Nuevos crates: `rust_xlsxwriter`, `parquet = "=58.4.1"`, `zip`. Charting SPA: `echarts` (`echarts/core` + `CanvasRenderer`).
-- **eval_granularity (1B)**: `full_only` (`[normalized_full_text]`), `clauses` (`[normalized_full_text]` + `ClauseSegmenter` Option 2C), `full_mirror` (expansor multi-granularidad 10 estrategias). Sin early-exit; registra siempre `full_text_passed` y `all_chunks_passed`.
-- **Chat Compatibility & `3hm_plus_fhv1`**: `buildChatRequest` omite `filter_mode` en `"3hm_default"`. Rechazos `fhv1` emiten `fhv1_ingress_breach` (`FHV1_AABB_ENVELOPE`). En `3hm_plus_fhv1` se evalúa y persiste siempre la traza `fhv1` en `fhv1_audit_traces` incluso si `3HM` bloquea primero.
-- **Non-Interactive Runtime & LanceDB Guard**: prohibido ejecutar `./setup.sh`. Usar comandos no-interactivos con polling de `/health` y limpieza de PIDs. **PROHIBIDO borrar o sobreescribir `domain_hypercubes` en `data/sf-lancedb`** (`seed_canonical_locks` o borrado de `data/sf-lancedb` rompe los 9 E2E de `3HM`).
-- **Live `:8080` Scope & `--augment-llm`**: calibración y benchmark en vivo contra `:8080` corren **solo en modo determinista** (sin `--augment-llm`). Validar `--augment-llm` mediante tests offline de contrato/mock HTTP (`--provider` obligatorio, `.env`, caché SHA-256 JSONL).
-- **Axum 0.8 & Protected Selectors**: rutas dinámicas con `{id}` (nunca `:id`); preservar los 11 selectores protegidos de `Playground.test.tsx` / `playground.spec.ts` y `w-60` / `h-[100dvh]`.
-- **3HM & Version Fence**: prohibido modificar `domain_hypercubes`, scoring `3HM`, `Suite 1` / `Suite 2` o bumpear `0.2.1` (cambios bajo `## [Unreleased]` en `CHANGELOG.md`).
+- **Canonical Toolchain**: `cargo` (`1.94.1`), `pnpm` (`frontend/`, `11.8.0`), `uv run --script` (`tools/`). Cero mezcla de gestores.
+- **Single Branch & Atomic Commits**: todo el trabajo continúa sobre `feat/fhv1-hector-filter-v1` (desde `e448906`), con commits atómicos verificados por cada Slice (`1..4`). Prohibido `push` o `merge` a `main` antes del Approval Gate humano.
+- **Code Quality & Precision**: deduplicar `stats_from_profile` / lógica repetida en `chat_api.rs`, medir `eval_latency_ns` real en el path `reuse`, estampar `x-sf-trace-id` + `x-sf-fhv1-decision: PASS` en `/api/v1/chat` (`fhv1` / `3hm_plus_fhv1`), usar `trace_id` único atómico (`AtomicU64`) y agrupar `trace_id = {run_id}-{input_id}` en benchmarks. Cero `.toFixed()` en `fhv1`; `sf-kernels` sigue 0-dep.
+- **3HM & LanceDB Fence**: **PROHIBIDO borrar o pisar `data/sf-lancedb/domain_hypercubes.lance`**, cambiar `0.2.1`, alterar `formatGate` `.toFixed(4)` o romper los 11 selectores protegidos y `3hm_default` payload.
+- **Non-Interactive Services**: prohibido `./setup.sh`. Usar el runbook en background de §1.3 con polling y limpieza de PIDs.
 - **Exclusive Authorship & Hygiene**: `hbauzan <hbauzan@gmail.com>`. Cero `Co-authored-by:` y cero menciones a asistentes, bots o modelos. Prohibido `git add -A` o stagear `repomix-output.xml`.
 
 ## 3. Tracer Bullet Slices
-- [x] **Slice 1** (`feat/fhv1-hector-filter-v1`): `sf-kernels/src/fhv1.rs` (Welford `f64`, tiers por cuantiles, AABB estricto 1024/1015, 1-ULP/16-ULP tests) + `validate_raw_f64_slice` + `embed_batch_raw_f64` (`TeiHttpEmbedder`, `TeiGrpcEmbedder`, `MockBatchEmbedder` fail-closed) + test `normalize=False` en `tools/test_bge_m3_mps_server.py`.
-- [x] **Slice 2** (`feat/fhv1-hector-filter-v1`): 4 tablas `fhv1_*` en `sf-storage` (`Arrow =58.4.1`, `Float64`), `Fhv1Store` perezoso, exportador `.xlsx` (2 hojas + auto-split `.zip` `>10,000`), `.csv` y `.parquet`, más `fhv1_roundtrip_test.rs` con paridad `0-ULP` (`to_bits()`).
-- [x] **Slice 3** (`feat/fhv1-hector-filter-v1`): `fhv1_pipeline.rs` (expansor determinista 10 estrategias + `expand_for_granularity`), `fhv1_corpus.rs`, `fhv1_calibrate` CLI, `tools/augment_fhv1_corpus.py` (`uv` PEP 723, `--provider` obligatorio) con tests mock + calibración determinista en vivo contra `:8080` (`python` y `receta`).
-- [x] **Slice 4** (`feat/fhv1-hector-filter-v1`): `tools/generate_fhv1_benchmark.py` (100% offline default, `>=400` prompts reales/dominio, `0%` overlap con calibración) + `fhv1_eval.rs` + `fhv1_benchmark` CLI + `fhv1_e2e_test.rs` + corrida determinista en vivo contra `:8080`.
-- [x] **Slice 5** (`feat/fhv1-hector-filter-v1`): `fhv1_api.rs` (Axum `{id}`, CORS `content-disposition`), extensión backward-compatible de `/api/v1/chat` (`fhv1_ingress_breach`, `3hm_plus_fhv1`), arranque perezoso de `Fhv1Store`, actualización de 7 literales `ProxyAppState` y `fhv1_api_e2e_test.rs`.
-- [x] **Slice 6** (`feat/fhv1-hector-filter-v1`): `fhv1.ts`, `fhv1Client.ts`, `StudioShell` en `main.tsx`, extensión de `Playground.tsx` (switch motor, Direct Lab `/evaluate`, `Fhv1LiveAuditPanel`), `parseChatBreach`/`BreachCard.tsx`, manteniendo 44+ Vitest y 9 Playwright `playground.spec.ts` en verde.
-- [x] **Slice 7** (`feat/fhv1-hector-filter-v1`): `echarts` (`echarts/core` + `CanvasRenderer`), `Fhv1VarianceStudio.tsx` (calibración UI, métricas/cuantiles, gráficos 1024D, descarga `.xlsx`/`.csv`/`.parquet`, tabla lossless 1024D) y `Fhv1VarianceStudio.test.tsx`.
-- [x] **Slice 8** (`feat/fhv1-hector-filter-v1`): `Fhv1BenchmarkExplorer.tsx` (dashboard 4 cuadrantes, tabla paginada, overlay 1024D + drill-down), `frontend/e2e/fhv1.spec.ts`, doc-sync (`CONTEXT.md`, `CONTEXT-MAP.md`, `architecture_spec.md`, `CHANGELOG.md`) y validación completa del workspace + `agent.sh validate`.
+- [ ] **Slice 1** (`feat/fhv1-hector-filter-v1`): deduplicar `sf_storage::stats_from_profile` y bloque `3hm_plus_fhv1` en `chat_api.rs`, medir `eval_latency_ns` en path `reuse`, emitir `x-sf-trace-id` + `x-sf-fhv1-decision: PASS` en chat `fhv1`/`3hm_plus_fhv1`, usar `AtomicU64` en `new_trace_id`, unificar `trace_id` por prompt en benchmarks, y sumar tests faltantes en `fhv1_precision_test.rs` y `fhv1_roundtrip_test.rs`.
+- [ ] **Slice 2** (`feat/fhv1-hector-filter-v1`): completar unit tests en `fhv1_corpus.rs` y `fhv1_eval.rs`, y expandir `fhv1_api_e2e_test.rs` cubriendo `fhv1_store: None` (`503`/empty `200`), métricas/cuantiles y `400`/`404`, `/evaluate` 3 granularidades + headers, `/benchmarks/run` + `409` overlap, `.xlsx` simple, `/api/v1/chat` PASS/breach/contador de reuso único de `/embed` en `3hm_plus_fhv1`, filtros de trazas y unicidad en ráfaga.
+- [ ] **Slice 3** (`feat/fhv1-hector-filter-v1`): agregar tabla `Granularity comparison` y atribución `oob_catch_counts` en `Fhv1BenchmarkExplorer.tsx` / `fhv1Charts.ts`, alinear validación `0 <= P25 < P75 < P90 <= 1` en `Fhv1VarianceStudio.tsx`, crear `StudioShell.test.tsx` y completar tests en `fhv1.test.ts`, `BreachCard.test.tsx`, `Playground.test.tsx`, `Fhv1VarianceStudio.test.tsx` y `Fhv1BenchmarkExplorer.test.tsx`.
+- [ ] **Slice 4** (`feat/fhv1-hector-filter-v1`): ampliar `frontend/e2e/fhv1.spec.ts` (+3 tests E2E en vivo: chat `fhv1` + `3hm_plus_fhv1` dual-trace, Variance Studio métrica/cuantil + descarga `.csv`/`.xlsx`, Explorer tabla comparativa + paginación + drill-down), actualizar `[Unreleased]` en `CHANGELOG.md`, correr el Full Milestone Verification Gate (11 checks incluyendo `14` Playwright E2E, `agent.sh validate` y `agent.sh notify`) y frenar en el Approval Gate.
