@@ -1,11 +1,13 @@
 //! SCPB-220 (Sub-Clause Piggybacking Benchmark) fixtures, OOS injection benchmark, and the in-process load harness.
 
 mod canonical_corpus;
+mod fhv1_corpus;
 mod oos_benchmark;
 mod suite2_catalog;
 mod synthetic_fixtures;
 
 pub use canonical_corpus::{canonical_seed_corpus, CanonicalDomainCorpus};
+pub use fhv1_corpus::{canonical_fhv1_documents, read_corpus_path, text_sha256};
 pub use oos_benchmark::{
     format_suite2_metrics, run_oos_benchmark, suite2_embed_jsonl, suite2_locks, OosBenchmarkResult,
     Suite2FpTier, Suite2Matrix, Suite2Sample, OOS_BENCHMARK_SEED,

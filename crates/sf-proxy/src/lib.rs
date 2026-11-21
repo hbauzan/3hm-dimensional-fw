@@ -5,6 +5,7 @@ mod chat_api;
 mod cors;
 mod embedder;
 mod env_config;
+mod fhv1_pipeline;
 mod handler;
 mod normalize;
 mod normalizer;
@@ -31,6 +32,11 @@ pub use embedder::{
 pub use env_config::{
     find_env_file, get_all_providers_env, get_provider_env, load_dotenv, parse_env_content,
     read_env_file_map, ProviderEnvInfo, UpstreamEnvCatalog,
+};
+pub use fhv1_pipeline::{
+    calibrate_fhv1_corpus, corpus_sha256, evaluate_fhv1_input, expand_for_granularity,
+    expand_text_multi_granularity, strategy_tags, ExpandedChunk, Fhv1CalibrateSpec,
+    Fhv1EvaluateSpec, Fhv1EvaluatedInput,
 };
 pub use handler::{
     handle_api_v1_upstream_env, handle_v1_chat_completions, router, router_with_cors, ProxyAppState,

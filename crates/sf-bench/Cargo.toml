@@ -23,6 +23,7 @@ serde_json = { workspace = true }
 bytes = { workspace = true }
 http-body-util = "0.1"
 clap = { workspace = true }
+sha2 = { workspace = true }
 
 [[bin]]
 name = "sf_bench"
@@ -55,3 +56,7 @@ path = "src/bin/calibrate_canonical_pairs.rs"
 [[bin]]
 name = "suite2_string_dump"
 path = "src/bin/suite2_string_dump.rs"
+
+[[bin]]
+name = "fhv1_calibrate"
+path = "src/bin/fhv1_calibrate.rs"
