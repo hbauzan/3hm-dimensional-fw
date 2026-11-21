@@ -5523,6 +5523,7 @@ dependencies = [
 name = "sf-bench"
 version = "0.2.1"
 dependencies = [
+ "async-trait",
  "axum",
  "bytes",
  "clap",
@@ -5538,6 +5539,7 @@ dependencies = [
  "sha2 0.10.9",
  "tokio",
  "tower",
+ "unicode-normalization",
 ]
 
 [[package]]

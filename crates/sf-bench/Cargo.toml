@@ -24,6 +24,8 @@ bytes = { workspace = true }
 http-body-util = "0.1"
 clap = { workspace = true }
 sha2 = { workspace = true }
+unicode-normalization = { workspace = true }
+async-trait = { workspace = true }
 
 [[bin]]
 name = "sf_bench"
@@ -60,3 +62,7 @@ path = "src/bin/suite2_string_dump.rs"
 [[bin]]
 name = "fhv1_calibrate"
 path = "src/bin/fhv1_calibrate.rs"
+
+[[bin]]
+name = "fhv1_benchmark"
+path = "src/bin/fhv1_benchmark.rs"

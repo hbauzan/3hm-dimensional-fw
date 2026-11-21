@@ -1,0 +1,30 @@
+{
+  "python": [
+    "Open a CSV with pathlib and csv.DictReader, then skip blank rows before building a list of records.",
+    "Use logging.basicConfig with a stream handler so library warnings stay visible during a local run.",
+    "A Flask route can read a JSON body with request.get_json and return jsonify for the response.",
+    "pandas.DataFrame.merge joins two frames on a shared key and keeps the left index when how is left.",
+    "Catch FileNotFoundError around a read_text call and report the missing path to the caller.",
+    "dataclasses.asdict turns a frozen settings object into a plain dictionary for a JSON dump.",
+    "itertools.groupby needs a sorted sequence if you want one bucket per consecutive key.",
+    "subprocess.run with check=True raises CalledProcessError when the child status is non-zero.",
+    "A pytest monkeypatch can set an environment variable for one test and restore it afterwards.",
+    "heapq.nlargest returns the top scores without sorting the entire candidate list.",
+    "sqlite3.Row lets a query address columns by name after row_factory is assigned.",
+    "functools.partial binds the timeout argument of a socket helper before it is passed around."
+  ],
+  "receta": [
+    "Dorar el pimiento en cubos con comino y dejar que suelte el agua antes de sumar el tomate.",
+    "Cocinar el arroz integral en caldo de verdura, con la tapa entreabierta, hasta que el grano abra.",
+    "Montar claras a nieve e incorporarlas al puré de batata con movimientos envolventes.",
+    "Tostar las semillas de sésamo en seco y espolvorearlas sobre el pescado al salir de la plancha.",
+    "Reducir el jugo de naranja con miel hasta obtener un glaseado para las zanahorias asadas.",
+    "Hidratar los porotos negros y cocinarlos con laurel hasta que la piel quede tierna.",
+    "Rallar jengibre fresco sobre la vinagreta de limón y aceite para el repollo crudo.",
+    "Hornear la tarta de cebolla a fuego medio hasta que la masa de abajo suene hueca.",
+    "Licuar el choclo con un poco del agua de cocción para una crema sin lácteos.",
+    "Marinar los cubos de calabaza con pimentón y asarlos en una placa bien caliente.",
+    "Espesar el estofado de lentejas con una cucharada de la propia legumbre pisada.",
+    "Servir el flan recién salido del baño María y dejarlo enfriar antes de desmoldar."
+  ]
+}
