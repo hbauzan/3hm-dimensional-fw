@@ -74,10 +74,64 @@ export interface Fhv1TraceSummary {
   trace_id: string
   source_kind: string
   profile_id: string
+  category?: string
   chunk_index: number
   overall_passed: boolean
   failed_dims_count: number
   max_violation_delta: number
+}
+
+export interface Fhv1Confusion {
+  tp: number
+  tn: number
+  fp: number
+  fn: number
+  accuracy: number | null
+  precision: number | null
+  recall: number | null
+  f1: number | null
+  far_fpr: number | null
+  frr_fnr: number | null
+}
+
+export interface Fhv1BenchmarkSummary {
+  run_id: string
+  profile_id: string
+  policy_id: string
+  dataset_name: string
+  eval_granularity: string
+  use_rogue_mask: boolean
+  total_inputs: number
+  total_chunks: number
+}
+
+export interface Fhv1BenchmarkDetail extends Fhv1BenchmarkSummary {
+  confusion: Fhv1Confusion | null
+  per_category: Record<string, Fhv1Confusion>
+  in_domain_fail_counts: number[] | null
+}
+
+export interface Fhv1DimView {
+  observed: number
+  observed_bits_hex: string
+  min: number
+  max: number
+  status: string
+  violation_delta: number
+}
+
+export interface Fhv1DrillChunk {
+  chunk_index: number
+  chunk_strategy: string
+  chunk_text: string
+  chunk_passed: boolean
+  dimensions: Fhv1DimView[]
+}
+
+export interface Fhv1Drilldown {
+  trace_id: string
+  profile_id: string
+  chunks: Fhv1DrillChunk[]
 }
 
 export interface Fhv1TracePage {
@@ -315,6 +369,7 @@ export function parseFhv1TracePage(value: unknown): ParseResult<Fhv1TracePage> {
     const traceId = readString(entry, 'trace_id')
     const sourceKind = readString(entry, 'source_kind')
     const profileId = readString(entry, 'profile_id')
+    const category = readString(entry, 'category')
     const chunkIndex = readCount(entry, 'chunk_index')
     const overall = readBoolean(entry, 'overall_passed')
     const failed = readCount(entry, 'failed_dims_count')
@@ -334,6 +389,7 @@ export function parseFhv1TracePage(value: unknown): ParseResult<Fhv1TracePage> {
       trace_id: traceId,
       source_kind: sourceKind,
       profile_id: profileId,
+      category,
       chunk_index: chunkIndex,
       overall_passed: overall,
       failed_dims_count: failed,
@@ -341,6 +397,159 @@ export function parseFhv1TracePage(value: unknown): ParseResult<Fhv1TracePage> {
     })
   }
   return ok({ page, page_size: pageSize, total, rows })
+}
+
+export function parseFhv1BenchmarkList(value: unknown): ParseResult<Fhv1BenchmarkSummary[]> {
+  if (!Array.isArray(value)) return fail('fhv1 benchmark list is not an array')
+  const runs: Fhv1BenchmarkSummary[] = []
+  for (const entry of value) {
+    const parsed = parseBenchmarkSummary(entry)
+    if (!parsed.ok) return parsed
+    runs.push(parsed.value)
+  }
+  return ok(runs)
+}
+
+export function parseFhv1BenchmarkDetail(value: unknown): ParseResult<Fhv1BenchmarkDetail> {
+  const summary = parseBenchmarkSummary(value)
+  if (!summary.ok) return summary
+  if (!isRecord(value)) return fail('fhv1 benchmark detail is not an object')
+  const metrics = isRecord(value.summary_metrics) ? value.summary_metrics : null
+  const confusion = metrics ? parseConfusion(metrics.confusion) : null
+  const perCategory: Record<string, Fhv1Confusion> = {}
+  if (metrics && isRecord(metrics.per_category)) {
+    for (const [key, entry] of Object.entries(metrics.per_category)) {
+      const parsed = parseConfusion(entry)
+      if (parsed) perCategory[key] = parsed
+    }
+  }
+  const attribution = metrics && isRecord(metrics.attribution) ? metrics.attribution : null
+  const counts = attribution ? readNumberArray(attribution, 'in_domain_fail_counts') : undefined
+  return ok({
+    ...summary.value,
+    confusion,
+    per_category: perCategory,
+    in_domain_fail_counts: counts ?? null,
+  })
+}
+
+export function parseFhv1Drilldown(value: unknown): ParseResult<Fhv1Drilldown> {
+  if (!isRecord(value)) return fail('fhv1 drill-down is not an object')
+  const traceId = readString(value, 'trace_id')
+  const profileId = readString(value, 'profile_id')
+  if (traceId === undefined || profileId === undefined || !Array.isArray(value.chunks)) {
+    return fail('fhv1 drill-down is incomplete')
+  }
+  const chunks: Fhv1DrillChunk[] = []
+  for (const entry of value.chunks) {
+    if (!isRecord(entry)) return fail('fhv1 drill chunk is not an object')
+    const index = readCount(entry, 'chunk_index')
+    const strategy = readString(entry, 'chunk_strategy')
+    const text = readString(entry, 'chunk_text')
+    const passed = readBoolean(entry, 'chunk_passed')
+    if (index === undefined || strategy === undefined || text === undefined || passed === undefined) {
+      return fail('fhv1 drill chunk is incomplete')
+    }
+    if (!Array.isArray(entry.dimensions)) return fail('fhv1 drill dimensions are missing')
+    const dimensions: Fhv1DimView[] = []
+    for (const dim of entry.dimensions) {
+      if (!isRecord(dim)) return fail('fhv1 dimension is not an object')
+      const observed = readNumber(dim, 'observed')
+      const bits = readString(dim, 'observed_bits_hex')
+      const min = readNumber(dim, 'min')
+      const max = readNumber(dim, 'max')
+      const status = readString(dim, 'status')
+      const delta = readNumber(dim, 'violation_delta')
+      if (
+        observed === undefined ||
+        bits === undefined ||
+        !/^0x[0-9a-f]{16}$/.test(bits) ||
+        min === undefined ||
+        max === undefined ||
+        status === undefined ||
+        delta === undefined
+      ) {
+        return fail('fhv1 dimension is incomplete')
+      }
+      dimensions.push({
+        observed,
+        observed_bits_hex: bits,
+        min,
+        max,
+        status,
+        violation_delta: delta,
+      })
+    }
+    chunks.push({
+      chunk_index: index,
+      chunk_strategy: strategy,
+      chunk_text: text,
+      chunk_passed: passed,
+      dimensions,
+    })
+  }
+  return ok({ trace_id: traceId, profile_id: profileId, chunks })
+}
+
+function parseBenchmarkSummary(value: unknown): ParseResult<Fhv1BenchmarkSummary> {
+  if (!isRecord(value)) return fail('fhv1 benchmark run is not an object')
+  const runId = readString(value, 'run_id')
+  const profileId = readString(value, 'profile_id')
+  const policyId = readString(value, 'policy_id')
+  const dataset = readString(value, 'dataset_name')
+  const granularity = readString(value, 'eval_granularity')
+  const mask = readBoolean(value, 'use_rogue_mask')
+  const inputs = readCount(value, 'total_inputs')
+  const chunks = readCount(value, 'total_chunks')
+  if (
+    runId === undefined ||
+    profileId === undefined ||
+    policyId === undefined ||
+    dataset === undefined ||
+    granularity === undefined ||
+    mask === undefined ||
+    inputs === undefined ||
+    chunks === undefined
+  ) {
+    return fail('fhv1 benchmark run is incomplete')
+  }
+  return ok({
+    run_id: runId,
+    profile_id: profileId,
+    policy_id: policyId,
+    dataset_name: dataset,
+    eval_granularity: granularity,
+    use_rogue_mask: mask,
+    total_inputs: inputs,
+    total_chunks: chunks,
+  })
+}
+
+function parseConfusion(value: unknown): Fhv1Confusion | null {
+  if (!isRecord(value)) return null
+  const tp = readCount(value, 'tp')
+  const tn = readCount(value, 'tn')
+  const fp = readCount(value, 'fp')
+  const fn = readCount(value, 'fn')
+  if (tp === undefined || tn === undefined || fp === undefined || fn === undefined) return null
+  return {
+    tp,
+    tn,
+    fp,
+    fn,
+    accuracy: readNullableNumber(value, 'accuracy'),
+    precision: readNullableNumber(value, 'precision'),
+    recall: readNullableNumber(value, 'recall'),
+    f1: readNullableNumber(value, 'f1'),
+    far_fpr: readNullableNumber(value, 'far_fpr'),
+    frr_fnr: readNullableNumber(value, 'frr_fnr'),
+  }
+}
+
+function readNullableNumber(record: Record<string, unknown>, key: string): number | null {
+  if (!Object.hasOwn(record, key) || record[key] === null) return null
+  const value = readNumber(record, key)
+  return value === undefined ? null : value
 }
 
 function parseChunks(value: unknown): ParseResult<Fhv1LabChunk[]> {

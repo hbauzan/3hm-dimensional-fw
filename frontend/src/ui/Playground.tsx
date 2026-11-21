@@ -53,10 +53,12 @@ export function Playground({
   fetchImpl,
   store = browserStore,
   fill = false,
+  onOpenTrace,
 }: {
   fetchImpl?: typeof fetch
   store?: SessionStore
   fill?: boolean
+  onOpenTrace?: (traceId: string) => void
 }) {
   const [session, setSession] = useState(() => loadSession(store))
   const [draft, setDraft] = useState('')
@@ -473,6 +475,7 @@ export function Playground({
             profileId={session.fhv1ProfileId ?? ''}
             refreshKey={auditRefresh}
             fetchImpl={fetchImpl}
+            onOpenTrace={onOpenTrace}
           />
           <label className="flex items-center gap-2 cursor-pointer text-[10px] uppercase tracking-wide text-studio-muted hover:text-studio-text">
             <input

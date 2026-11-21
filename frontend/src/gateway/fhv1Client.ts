@@ -1,10 +1,16 @@
 import { resolveChatEndpoint } from '../domain/endpoint.ts'
 import {
+  parseFhv1BenchmarkDetail,
+  parseFhv1BenchmarkList,
+  parseFhv1Drilldown,
   parseFhv1Evaluation,
   parseFhv1ProfileDetail,
   parseFhv1ProfileSummary,
   parseFhv1Profiles,
   parseFhv1TracePage,
+  type Fhv1BenchmarkDetail,
+  type Fhv1BenchmarkSummary,
+  type Fhv1Drilldown,
   type Fhv1Evaluation,
   type Fhv1Metric,
   type Fhv1ProfileDetail,
@@ -23,6 +29,7 @@ export interface Fhv1EvaluateRequest {
 }
 
 export interface Fhv1TraceListQuery {
+  runId?: string
   profileId?: string
   sourceKind?: string
   page?: number
@@ -141,6 +148,43 @@ export async function postFhv1Evaluate(
   return parseFhv1Evaluation(loaded.value)
 }
 
+export async function listFhv1Benchmarks(
+  gatewayBase: string,
+  fetchImpl?: typeof fetch,
+): Promise<ParseResult<Fhv1BenchmarkSummary[]>> {
+  const loaded = await getJson(gatewayBase, '/api/v1/fhv1/benchmarks', fetchImpl)
+  if (!loaded.ok) return loaded
+  return parseFhv1BenchmarkList(loaded.value)
+}
+
+export async function getFhv1Benchmark(
+  gatewayBase: string,
+  runId: string,
+  fetchImpl?: typeof fetch,
+): Promise<ParseResult<Fhv1BenchmarkDetail>> {
+  const loaded = await getJson(
+    gatewayBase,
+    `/api/v1/fhv1/benchmarks/${encodeURIComponent(runId)}`,
+    fetchImpl,
+  )
+  if (!loaded.ok) return loaded
+  return parseFhv1BenchmarkDetail(loaded.value)
+}
+
+export async function getFhv1Trace(
+  gatewayBase: string,
+  traceId: string,
+  fetchImpl?: typeof fetch,
+): Promise<ParseResult<Fhv1Drilldown>> {
+  const loaded = await getJson(
+    gatewayBase,
+    `/api/v1/fhv1/traces/${encodeURIComponent(traceId)}`,
+    fetchImpl,
+  )
+  if (!loaded.ok) return loaded
+  return parseFhv1Drilldown(loaded.value)
+}
+
 export async function listFhv1Traces(
   gatewayBase: string,
   query: Fhv1TraceListQuery,
@@ -149,6 +193,7 @@ export async function listFhv1Traces(
   const params = new URLSearchParams()
   params.set('page', String(query.page ?? 1))
   params.set('page_size', String(query.pageSize ?? 20))
+  if (query.runId) params.set('run_id', query.runId)
   if (query.profileId) params.set('profile_id', query.profileId)
   if (query.sourceKind) params.set('source_kind', query.sourceKind)
   const loaded = await getJson(gatewayBase, `/api/v1/fhv1/traces?${params.toString()}`, fetchImpl)

@@ -7,11 +7,13 @@ export function Fhv1LiveAuditPanel({
   profileId,
   refreshKey,
   fetchImpl,
+  onOpenTrace,
 }: {
   gatewayBase: string
   profileId: string
   refreshKey: number
   fetchImpl?: typeof fetch
+  onOpenTrace?: (traceId: string) => void
 }) {
   const [open, setOpen] = useState(false)
   const [rows, setRows] = useState<Fhv1TraceSummary[]>([])
@@ -61,6 +63,11 @@ export function Fhv1LiveAuditPanel({
               >
                 {row.source_kind} {row.overall_passed ? 'PASS' : 'BREACH'}{' '}
                 {formatLosslessF64(row.max_violation_delta)}
+                {onOpenTrace ? (
+                  <button type="button" className="ml-2 text-studio-accent" onClick={() => onOpenTrace(row.trace_id)}>
+                    Open trace {row.trace_id}
+                  </button>
+                ) : null}
               </li>
             ))}
           </ul>

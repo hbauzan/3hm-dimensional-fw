@@ -54,6 +54,31 @@ Evaluation polarity follows the side under test. Target `left` must sit inside t
 
 Request `quorum_k` is clamped to `[1, noise_mask.active_count()]` on the cloned lock. The playground omits `overrides` until the operator arms live tuning, so an unarmed session uses the stored quorum.
 
+## ADR-006 — Filtro Héctor v1 strict AABB
+
+**FiltroHectorV1** is a second ingress gate beside the 3HM cascade. It does not rewrite `domain_hypercubes` or the binary32 hot path.
+
+The kernel compares raw binary64 coordinates with `min_d <= x_d <= max_d` on every evaluated dimension. `eval_granularity` is `full_only` (the normalized document), `clauses` (that document plus Option 2C clauses; this is the realtime default), or `full_mirror` (the ten deterministic expansion strategies). Every chunk is scored. The batch records `full_text_passed` and `all_chunks_passed`. `use_rogue_mask` false scores 1024 coordinates. `use_rogue_mask` true drops the nine **UniversalNoiseIndices** and scores 1015. A coordinate outside the box is underflow or overflow. A masked coordinate is `pruned_rogue`.
+
+**Fhv1EnvelopeProfile** rows and their samples, benchmark runs, and **Fhv1AuditTrace** rows are four LanceDB tables in the same database as `domain_hypercubes`. Vector columns are Arrow `Float64` at `=58.4.1`. Exports write those bits through xlsx, a zip of xlsx parts past 10,000 rows, csv, and parquet.
+
+`/api/v1/fhv1/*` uses Axum 0.8 path parameters `{profile_id}`, `{run_id}`, and `{trace_id}`. `POST /api/v1/chat` gains optional `filter_mode`, `fhv1_profile_id`, `fhv1_granularity`, and `fhv1_use_rogue_mask`. Omitted or `3hm_default` keeps the previous chat body. An fhv1 rejection is HTTP 403:
+
+```json
+{
+  "error": {
+    "kind": "fhv1_ingress_breach",
+    "code": "SEMANTIC_CONTAINMENT_BREACH",
+    "message": "fhv1 AABB envelope rejected the prompt",
+    "telemetry": {
+      "failing_tier": "FHV1_AABB_ENVELOPE"
+    }
+  }
+}
+```
+
+`3hm_plus_fhv1` runs 3HM first. A 3HM breach is returned as a 3HM body. The fhv1 trace is still evaluated and stored. When the profile normalizes and granularity is not `full_mirror`, the chat embed batch is reused for fhv1 instead of a second `/embed`. The studio prints fhv1 magnitudes with `String(value)`. `formatGate` stays `.toFixed(4)` for 3HM cards. Package version stays `0.2.1`.
+
 ## Resolved execution decisions
 
 | Id | Decision |

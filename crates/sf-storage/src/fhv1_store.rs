@@ -188,9 +188,11 @@ impl Fhv1Store {
             Ok(())
         })?;
         rows.sort_by(|left, right| {
-            left.trace_id
-                .cmp(&right.trace_id)
+            right
+                .created_at_ms
+                .cmp(&left.created_at_ms)
                 .then(left.chunk_index.cmp(&right.chunk_index))
+                .then(left.trace_id.cmp(&right.trace_id))
         });
         let total = rows.len() as u64;
         let start = ((page - 1) as usize).saturating_mul(page_size as usize);

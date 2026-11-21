@@ -84,6 +84,29 @@ export function rankingOption(detail: Fhv1ProfileDetail, metric: Fhv1Metric): EC
   }
 }
 
+export function attributionOption(counts: readonly number[]): EChartsCoreOption {
+  const rogue = counts.map((value, index) => (isFhv1RogueDim(index) ? value : null))
+  return {
+    textStyle: { color: AXIS },
+    tooltip: {
+      trigger: 'axis',
+      formatter: (params: unknown) => {
+        const dim = pointIndex(params)
+        if (dim === undefined) return ''
+        const value = counts[dim]
+        return value === undefined ? '' : `dim ${dim} ${formatLosslessF64(value)}`
+      },
+    },
+    dataZoom: [{ type: 'inside' }, { type: 'slider' }],
+    xAxis: { type: 'category', data: counts.map((_, index) => index), axisLabel: { color: AXIS } },
+    yAxis: { type: 'value', axisLabel: { color: AXIS } },
+    series: [
+      { name: 'in_domain_fail', type: 'bar', data: [...counts], itemStyle: { color: ACCENT } },
+      { name: 'rogue', type: 'scatter', data: rogue, itemStyle: { color: WARN }, symbol: 'diamond' },
+    ],
+  }
+}
+
 export function tierOption(detail: Fhv1ProfileDetail): EChartsCoreOption {
   const counts = [0, 0, 0, 0, 0]
   for (const code of detail.movement_tier_codes) {

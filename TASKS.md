@@ -1,6 +1,6 @@
 ---
 task_id: "TASK-009"
-status: "PENDING"
+status: "DONE"
 assigned_architect: "maximum-architect-agent"
 protocol: "transparent-dev-protocol"
 title: "Implementación de Filtro Héctor v1 (fhv1) AABB IEEE-754 Lossless"
@@ -26,11 +26,11 @@ Implementar el filtro determinista `fhv1` (**Exhaustive Coordinate-Wise Axis-Ali
 - **Exclusive Authorship & Hygiene**: `hbauzan <hbauzan@gmail.com>`. Cero `Co-authored-by:` y cero menciones a asistentes, bots o modelos. Prohibido `git add -A` o stagear `repomix-output.xml`.
 
 ## 3. Tracer Bullet Slices
-- [ ] **Slice 1** (`feat/fhv1-hector-filter-v1`): `sf-kernels/src/fhv1.rs` (Welford `f64`, tiers por cuantiles, AABB estricto 1024/1015, 1-ULP/16-ULP tests) + `validate_raw_f64_slice` + `embed_batch_raw_f64` (`TeiHttpEmbedder`, `TeiGrpcEmbedder`, `MockBatchEmbedder` fail-closed) + test `normalize=False` en `tools/test_bge_m3_mps_server.py`.
-- [ ] **Slice 2** (`feat/fhv1-hector-filter-v1`): 4 tablas `fhv1_*` en `sf-storage` (`Arrow =58.4.1`, `Float64`), `Fhv1Store` perezoso, exportador `.xlsx` (2 hojas + auto-split `.zip` `>10,000`), `.csv` y `.parquet`, más `fhv1_roundtrip_test.rs` con paridad `0-ULP` (`to_bits()`).
-- [ ] **Slice 3** (`feat/fhv1-hector-filter-v1`): `fhv1_pipeline.rs` (expansor determinista 10 estrategias + `expand_for_granularity`), `fhv1_corpus.rs`, `fhv1_calibrate` CLI, `tools/augment_fhv1_corpus.py` (`uv` PEP 723, `--provider` obligatorio) con tests mock + calibración determinista en vivo contra `:8080` (`python` y `receta`).
-- [ ] **Slice 4** (`feat/fhv1-hector-filter-v1`): `tools/generate_fhv1_benchmark.py` (100% offline default, `>=400` prompts reales/dominio, `0%` overlap con calibración) + `fhv1_eval.rs` + `fhv1_benchmark` CLI + `fhv1_e2e_test.rs` + corrida determinista en vivo contra `:8080`.
-- [ ] **Slice 5** (`feat/fhv1-hector-filter-v1`): `fhv1_api.rs` (Axum `{id}`, CORS `content-disposition`), extensión backward-compatible de `/api/v1/chat` (`fhv1_ingress_breach`, `3hm_plus_fhv1`), arranque perezoso de `Fhv1Store`, actualización de 7 literales `ProxyAppState` y `fhv1_api_e2e_test.rs`.
-- [ ] **Slice 6** (`feat/fhv1-hector-filter-v1`): `fhv1.ts`, `fhv1Client.ts`, `StudioShell` en `main.tsx`, extensión de `Playground.tsx` (switch motor, Direct Lab `/evaluate`, `Fhv1LiveAuditPanel`), `parseChatBreach`/`BreachCard.tsx`, manteniendo 44+ Vitest y 9 Playwright `playground.spec.ts` en verde.
-- [ ] **Slice 7** (`feat/fhv1-hector-filter-v1`): `echarts` (`echarts/core` + `CanvasRenderer`), `Fhv1VarianceStudio.tsx` (calibración UI, métricas/cuantiles, gráficos 1024D, descarga `.xlsx`/`.csv`/`.parquet`, tabla lossless 1024D) y `Fhv1VarianceStudio.test.tsx`.
-- [ ] **Slice 8** (`feat/fhv1-hector-filter-v1`): `Fhv1BenchmarkExplorer.tsx` (dashboard 4 cuadrantes, tabla paginada, overlay 1024D + drill-down), `frontend/e2e/fhv1.spec.ts`, doc-sync (`CONTEXT.md`, `CONTEXT-MAP.md`, `architecture_spec.md`, `CHANGELOG.md`) y validación completa del workspace + `agent.sh validate`.
+- [x] **Slice 1** (`feat/fhv1-hector-filter-v1`): `sf-kernels/src/fhv1.rs` (Welford `f64`, tiers por cuantiles, AABB estricto 1024/1015, 1-ULP/16-ULP tests) + `validate_raw_f64_slice` + `embed_batch_raw_f64` (`TeiHttpEmbedder`, `TeiGrpcEmbedder`, `MockBatchEmbedder` fail-closed) + test `normalize=False` en `tools/test_bge_m3_mps_server.py`.
+- [x] **Slice 2** (`feat/fhv1-hector-filter-v1`): 4 tablas `fhv1_*` en `sf-storage` (`Arrow =58.4.1`, `Float64`), `Fhv1Store` perezoso, exportador `.xlsx` (2 hojas + auto-split `.zip` `>10,000`), `.csv` y `.parquet`, más `fhv1_roundtrip_test.rs` con paridad `0-ULP` (`to_bits()`).
+- [x] **Slice 3** (`feat/fhv1-hector-filter-v1`): `fhv1_pipeline.rs` (expansor determinista 10 estrategias + `expand_for_granularity`), `fhv1_corpus.rs`, `fhv1_calibrate` CLI, `tools/augment_fhv1_corpus.py` (`uv` PEP 723, `--provider` obligatorio) con tests mock + calibración determinista en vivo contra `:8080` (`python` y `receta`).
+- [x] **Slice 4** (`feat/fhv1-hector-filter-v1`): `tools/generate_fhv1_benchmark.py` (100% offline default, `>=400` prompts reales/dominio, `0%` overlap con calibración) + `fhv1_eval.rs` + `fhv1_benchmark` CLI + `fhv1_e2e_test.rs` + corrida determinista en vivo contra `:8080`.
+- [x] **Slice 5** (`feat/fhv1-hector-filter-v1`): `fhv1_api.rs` (Axum `{id}`, CORS `content-disposition`), extensión backward-compatible de `/api/v1/chat` (`fhv1_ingress_breach`, `3hm_plus_fhv1`), arranque perezoso de `Fhv1Store`, actualización de 7 literales `ProxyAppState` y `fhv1_api_e2e_test.rs`.
+- [x] **Slice 6** (`feat/fhv1-hector-filter-v1`): `fhv1.ts`, `fhv1Client.ts`, `StudioShell` en `main.tsx`, extensión de `Playground.tsx` (switch motor, Direct Lab `/evaluate`, `Fhv1LiveAuditPanel`), `parseChatBreach`/`BreachCard.tsx`, manteniendo 44+ Vitest y 9 Playwright `playground.spec.ts` en verde.
+- [x] **Slice 7** (`feat/fhv1-hector-filter-v1`): `echarts` (`echarts/core` + `CanvasRenderer`), `Fhv1VarianceStudio.tsx` (calibración UI, métricas/cuantiles, gráficos 1024D, descarga `.xlsx`/`.csv`/`.parquet`, tabla lossless 1024D) y `Fhv1VarianceStudio.test.tsx`.
+- [x] **Slice 8** (`feat/fhv1-hector-filter-v1`): `Fhv1BenchmarkExplorer.tsx` (dashboard 4 cuadrantes, tabla paginada, overlay 1024D + drill-down), `frontend/e2e/fhv1.spec.ts`, doc-sync (`CONTEXT.md`, `CONTEXT-MAP.md`, `architecture_spec.md`, `CHANGELOG.md`) y validación completa del workspace + `agent.sh validate`.
