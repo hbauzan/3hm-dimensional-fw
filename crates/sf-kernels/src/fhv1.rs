@@ -375,6 +375,25 @@ where
     Ok(WelfordMoments { min, max, mean, m2 })
 }
 
+fn blank_dimensions() -> Box<[Fhv1DimComparison; DIM]> {
+    let blank = Fhv1DimComparison {
+        observed_bits: 0,
+        observed: 0.0,
+        min: 0.0,
+        max: 0.0,
+        mean: 0.0,
+        status: DimBoundStatus::InBounds,
+        violation_delta: 0.0,
+        delta_vs_mean: 0.0,
+        norm_pos: None,
+    };
+    let boxed: Box<[Fhv1DimComparison]> = vec![blank; DIM].into_boxed_slice();
+    match boxed.try_into() {
+        Ok(dimensions) => dimensions,
+        Err(_) => unreachable!("fhv1 dimension width is {DIM}"),
+    }
+}
+
 fn evaluate_row(
     stats: &Fhv1ProfileStats,
     observed: &[f64],
@@ -386,19 +405,7 @@ fn evaluate_row(
             len: observed.len(),
         });
     }
-    let mut dimensions = Box::new(
-        [Fhv1DimComparison {
-            observed_bits: 0,
-            observed: 0.0,
-            min: 0.0,
-            max: 0.0,
-            mean: 0.0,
-            status: DimBoundStatus::InBounds,
-            violation_delta: 0.0,
-            delta_vs_mean: 0.0,
-            norm_pos: None,
-        }; DIM],
-    );
+    let mut dimensions = blank_dimensions();
     let mut failed_dims_count = 0u16;
     let mut underflow_count = 0u16;
     let mut overflow_count = 0u16;

@@ -18,6 +18,11 @@ tokio = { workspace = true }
 sha2 = { workspace = true }
 clap = { workspace = true }
 futures-util = { workspace = true }
+rust_xlsxwriter = { workspace = true }
+parquet = { workspace = true }
+zip = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 rand = { workspace = true }
