@@ -187,4 +187,47 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&root);
     }
+
+    #[test]
+    fn jsonl_prompts_skip_blank_lines_fail_closed_and_dedupe_across_files() {
+        let root = std::env::temp_dir().join(format!(
+            "fhv1-corpus-jsonl-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).expect("dir");
+        std::fs::write(
+            root.join("prompts.jsonl"),
+            "{\"prompt\": \"alpha prompt\"}\n\n{\"prompt\": \"beta prompt\"}\n",
+        )
+        .expect("jsonl");
+        let documents = read_corpus_path(&root.join("prompts.jsonl")).expect("prompts");
+        assert_eq!(
+            documents,
+            vec!["alpha prompt".to_string(), "beta prompt".to_string()]
+        );
+
+        std::fs::write(
+            root.join("broken.jsonl"),
+            "{\"prompt\": \"kept\"}\n\n{not-json}\n",
+        )
+        .expect("broken");
+        let err = read_corpus_path(&root.join("broken.jsonl")).expect_err("malformed");
+        assert!(err.contains("jsonl line 3"), "{err}");
+
+        std::fs::write(root.join("a.jsonl"), "{\"prompt\": \"shared surface\"}\n").expect("a");
+        std::fs::write(root.join("b.txt"), "shared surface\n").expect("b");
+        std::fs::write(root.join("c.txt"), "unique surface\n").expect("c");
+        let _ = std::fs::remove_file(root.join("prompts.jsonl"));
+        let _ = std::fs::remove_file(root.join("broken.jsonl"));
+        let deduped = read_corpus_path(&root).expect("dir");
+        assert_eq!(
+            deduped,
+            vec!["shared surface".to_string(), "unique surface".to_string()]
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

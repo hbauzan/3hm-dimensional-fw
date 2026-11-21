@@ -5579,6 +5579,7 @@ dependencies = [
  "tower",
  "tower-http",
  "unicode-normalization",
+ "zip 2.6.1",
 ]
 
 [[package]]

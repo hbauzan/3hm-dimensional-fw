@@ -536,3 +536,166 @@ pub fn select_view(
         .find(|view| view.granularity == granularity)
         .ok_or_else(|| format!("missing {} view", granularity_name(granularity)))
 }
+
+#[cfg(test)]
+mod tests {
+    use sf_kernels::{Fhv1EvalGranularity, DIM};
+    use sf_proxy::ExpandedChunk;
+
+    use super::{
+        attach_comparison, metrics_for, parse_granularity, select_view, Fhv1Prompt, PreparedPrompt,
+        PreparedView, ScoredView,
+    };
+
+    fn prompt(id: &str, category: &str, expected_pass: bool) -> Fhv1Prompt {
+        Fhv1Prompt {
+            input_id: id.to_string(),
+            category: category.to_string(),
+            expected_pass,
+            text: id.to_string(),
+        }
+    }
+
+    fn scored(passed: bool, failed_dims: u16, violated: &[u16]) -> ScoredView {
+        ScoredView {
+            overall_passed: passed,
+            full_text_passed: passed,
+            all_chunks_passed: passed,
+            evaluated_dims: 1024,
+            chunk_failed_dims: vec![failed_dims],
+            chunk_passed: vec![passed],
+            underflow: vec![0],
+            overflow: vec![if passed { 0 } else { failed_dims }],
+            max_violation_delta: vec![0.0],
+            mean_abs_delta_vs_mean: vec![0.0],
+            violated_dims: vec![violated.to_vec()],
+            eval_latency_ns: 7,
+        }
+    }
+
+    fn f64_bits(value: &serde_json::Value) -> u64 {
+        value.as_f64().expect("rate").to_bits()
+    }
+
+    #[test]
+    fn metrics_cover_histogram_attribution_rates_and_comparison() {
+        let prompts = vec![
+            prompt("p0", "IN_DOMAIN_VALID", true),
+            prompt("p1", "IN_DOMAIN_VALID", true),
+            prompt("p2", "OUT_OF_DOMAIN_BENIGN", false),
+            prompt("p3", "OUT_OF_DOMAIN_BENIGN", false),
+            prompt("p4", "HYBRID_BOUNDARY", true),
+            prompt("p5", "ADVERSARIAL_FUZZING", false),
+        ];
+        let scored = vec![
+            scored(true, 0, &[]),
+            scored(false, 2, &[4]),
+            scored(false, 3, &[4, 7]),
+            scored(true, 0, &[]),
+            scored(false, 1, &[9]),
+            scored(false, 3, &[7]),
+        ];
+        let tier_codes = [0u8; DIM];
+        let mut metrics = metrics_for(
+            &prompts,
+            &scored,
+            Fhv1EvalGranularity::Clauses,
+            true,
+            &tier_codes,
+        );
+        let confusion = &metrics.summary["confusion"];
+        assert_eq!(confusion["tp"], 1);
+        assert_eq!(confusion["tn"], 2);
+        assert_eq!(confusion["fp"], 1);
+        assert_eq!(confusion["fn"], 2);
+        let precision = 0.5f64;
+        let recall = 1.0f64 / 3.0;
+        let f1 = 2.0 * precision * recall / (precision + recall);
+        assert_eq!(f64_bits(&confusion["precision"]), precision.to_bits());
+        assert_eq!(f64_bits(&confusion["recall"]), recall.to_bits());
+        assert_eq!(f64_bits(&confusion["f1"]), f1.to_bits());
+        assert_eq!(f64_bits(&confusion["far_fpr"]), (1.0f64 / 3.0).to_bits());
+        assert_eq!(f64_bits(&confusion["frr_fnr"]), (2.0f64 / 3.0).to_bits());
+
+        let in_domain = &metrics.summary["per_category"]["IN_DOMAIN_VALID"];
+        let in_precision = 1.0f64;
+        let in_recall = 0.5f64;
+        let in_f1 = 2.0 * in_precision * in_recall / (in_precision + in_recall);
+        assert_eq!(f64_bits(&in_domain["precision"]), in_precision.to_bits());
+        assert_eq!(f64_bits(&in_domain["recall"]), in_recall.to_bits());
+        assert_eq!(f64_bits(&in_domain["f1"]), in_f1.to_bits());
+        assert!(in_domain["far_fpr"].is_null());
+        assert_eq!(f64_bits(&in_domain["frr_fnr"]), 0.5f64.to_bits());
+
+        let out_of_domain = &metrics.summary["per_category"]["OUT_OF_DOMAIN_BENIGN"];
+        assert_eq!(f64_bits(&out_of_domain["precision"]), 0.0f64.to_bits());
+        assert!(out_of_domain["recall"].is_null());
+        assert!(out_of_domain["f1"].is_null());
+        assert_eq!(f64_bits(&out_of_domain["far_fpr"]), 0.5f64.to_bits());
+        assert!(out_of_domain["frr_fnr"].is_null());
+
+        let adversarial = &metrics.summary["per_category"]["ADVERSARIAL_FUZZING"];
+        assert_eq!(f64_bits(&adversarial["far_fpr"]), 0.0f64.to_bits());
+        assert!(adversarial["precision"].is_null());
+
+        let histogram = &metrics.summary["failed_dims_count_histogram"];
+        assert_eq!(histogram["0"], 2);
+        assert_eq!(histogram["1"], 1);
+        assert_eq!(histogram["2"], 1);
+        assert_eq!(histogram["3"], 2);
+
+        let oob = metrics.summary["attribution"]["oob_catch_counts"]
+            .as_array()
+            .expect("oob");
+        assert_eq!(oob.len(), DIM);
+        assert_eq!(oob[4], 1);
+        assert_eq!(oob[7], 2);
+        assert_eq!(
+            metrics.summary["attribution"]["in_domain_fail_counts"][4],
+            1
+        );
+        assert_eq!(
+            metrics.summary["attribution"]["in_domain_fail_counts"][9],
+            0
+        );
+
+        let comparison = metrics.comparison_row.clone();
+        attach_comparison(&mut metrics.summary, &[comparison]);
+        let rows = metrics.summary["granularity_comparison"]
+            .as_array()
+            .expect("comparison");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["granularity"], "clauses");
+        assert_eq!(rows[0]["use_rogue_mask"], true);
+        assert_eq!(rows[0]["evaluated_dims"], 1024);
+        assert_eq!(
+            rows[0]["confusion"]["f1"],
+            metrics.summary["confusion"]["f1"]
+        );
+    }
+
+    #[test]
+    fn select_view_and_parse_granularity_fail_closed() {
+        let prepared = PreparedPrompt {
+            prompt: prompt("only", "IN_DOMAIN_VALID", true),
+            views: vec![PreparedView {
+                granularity: Fhv1EvalGranularity::FullOnly,
+                chunks: vec![ExpandedChunk {
+                    strategy_tag: "full_doc",
+                    text: "only".to_string(),
+                    text_sha256: [0; 32],
+                }],
+                vectors: Vec::new(),
+                embedding_ms: 0.0,
+            }],
+        };
+        let err = select_view(&prepared, Fhv1EvalGranularity::Clauses).expect_err("missing");
+        assert!(err.contains("missing clauses view"), "{err}");
+        let err = parse_granularity("not-a-mode").expect_err("unknown");
+        assert!(err.contains("unknown fhv1 granularity not-a-mode"), "{err}");
+        assert_eq!(
+            parse_granularity("full_mirror").expect("mirror"),
+            Fhv1EvalGranularity::FullMirror
+        );
+    }
+}

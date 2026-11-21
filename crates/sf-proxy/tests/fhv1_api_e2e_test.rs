@@ -1,5 +1,8 @@
 //! REST coverage for `/api/v1/fhv1` and the chat filter modes.
 
+use std::io::{Cursor, Read};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -11,6 +14,7 @@ use sf_kernels::{AlignedVec1024, DomainHypercubeLock, LockSpec, NoiseBitmask1024
 use sf_proxy::{router, BatchEmbedderClient, MockUpstreamForwarder, ProxyAppState};
 use sf_storage::{Fhv1Store, HotRegistry};
 use tower::ServiceExt;
+use zip::ZipArchive;
 
 const INSIDE: &str = "inside the lab envelope";
 const MARKER: f64 = 0.125;
@@ -54,6 +58,156 @@ impl BatchEmbedderClient for LabEmbedder {
             })
             .collect())
     }
+}
+
+struct GateEmbedder {
+    centroid: AlignedVec1024,
+    f32_calls: AtomicU64,
+    f64_calls: AtomicU64,
+}
+
+impl GateEmbedder {
+    fn new(centroid: AlignedVec1024) -> Self {
+        Self {
+            centroid,
+            f32_calls: AtomicU64::new(0),
+            f64_calls: AtomicU64::new(0),
+        }
+    }
+
+    fn reset(&self) {
+        self.f32_calls.store(0, Ordering::Relaxed);
+        self.f64_calls.store(0, Ordering::Relaxed);
+    }
+
+    fn counts(&self) -> (u64, u64) {
+        (
+            self.f32_calls.load(Ordering::Relaxed),
+            self.f64_calls.load(Ordering::Relaxed),
+        )
+    }
+}
+
+#[async_trait]
+impl BatchEmbedderClient for GateEmbedder {
+    async fn embed_batch_f32(&self, texts: &[&str]) -> Result<Vec<AlignedVec1024>, String> {
+        self.f32_calls.fetch_add(1, Ordering::Relaxed);
+        Ok(texts
+            .iter()
+            .map(|text| {
+                if *text == "BREACH" {
+                    AlignedVec1024::zeros()
+                } else {
+                    self.centroid
+                }
+            })
+            .collect())
+    }
+
+    fn is_mock(&self) -> bool {
+        true
+    }
+
+    async fn embed_batch_raw_f64(
+        &self,
+        texts: &[&str],
+        _normalize: bool,
+    ) -> Result<Vec<[f64; DIM]>, String> {
+        self.f64_calls.fetch_add(1, Ordering::Relaxed);
+        Ok(texts
+            .iter()
+            .map(|text| {
+                let mut row = [0.0; DIM];
+                row[0] = if *text == "hello from the lab" {
+                    1.0
+                } else {
+                    9.0
+                };
+                row
+            })
+            .collect())
+    }
+}
+
+struct TempDir(PathBuf);
+
+impl TempDir {
+    fn new(label: &str) -> Self {
+        let path = std::env::temp_dir().join(format!(
+            "{label}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&path).expect("temp");
+        Self(path)
+    }
+
+    fn uri(&self) -> &str {
+        self.0.to_str().expect("utf8 temp path")
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn router_for(
+    store: Option<Arc<Fhv1Store>>,
+    embedder: Arc<dyn BatchEmbedderClient>,
+) -> axum::Router {
+    let registry = HotRegistry::from_locks([lock()]);
+    router(Arc::new(ProxyAppState {
+        registry: Arc::new(registry),
+        embedder,
+        upstream: Arc::new(MockUpstreamForwarder),
+        mock_upstream: Arc::new(MockUpstreamForwarder),
+        default_domain: "python".to_string(),
+        max_telemetry_coords: 4,
+        fhv1_store: store,
+    }))
+}
+
+fn header<'a>(headers: &'a HeaderMap, name: &str) -> &'a str {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+}
+
+async fn body_json(
+    app: axum::Router,
+    method: &str,
+    uri: &str,
+    body: &str,
+) -> (StatusCode, HeaderMap, Value) {
+    let (status, headers, bytes) = oneshot(app, json_request(method, uri, body)).await;
+    let value = if bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes)
+            .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).into_owned()))
+    };
+    (status, headers, value)
+}
+
+async fn calibrate_text(app: &axum::Router, text: &str, normalize: bool) -> String {
+    let (status, _, value) = body_json(
+        app.clone(),
+        "POST",
+        "/api/v1/fhv1/calibrate",
+        &format!(r#"{{"policy_id":"python","texts":["{text}"],"normalize":{normalize}}}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{value}");
+    value["profile_id"]
+        .as_str()
+        .expect("profile id")
+        .to_string()
 }
 
 fn lock() -> DomainHypercubeLock {
@@ -320,4 +474,512 @@ async fn fhv1_routes_and_chat_modes_keep_3hm_breach_semantics() {
         .any(|row| row["source_kind"] == "REALTIME_CHAT"));
     assert!(!path.join("domain_hypercubes.lance").exists());
     let _ = std::fs::remove_dir_all(&path);
+}
+
+#[tokio::test]
+async fn empty_store_lists_and_missing_store_fail_closed() {
+    let centroid = lock().centroid;
+    let none = router_for(None, Arc::new(LabEmbedder { centroid }));
+    let (status, _, profiles) = body_json(none.clone(), "GET", "/api/v1/fhv1/profiles", "").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(profiles, serde_json::json!([]));
+    let (status, _, runs) = body_json(none.clone(), "GET", "/api/v1/fhv1/benchmarks", "").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(runs, serde_json::json!([]));
+    let (status, _, traces) = body_json(none.clone(), "GET", "/api/v1/fhv1/traces", "").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(traces["rows"], serde_json::json!([]));
+    assert_eq!(traces["total"], 0);
+    for (method, uri, body) in [
+        (
+            "POST",
+            "/api/v1/fhv1/calibrate",
+            r#"{"policy_id":"python","texts":["x"]}"#,
+        ),
+        (
+            "POST",
+            "/api/v1/fhv1/evaluate",
+            r#"{"profile_id":"missing","text":"x"}"#,
+        ),
+        (
+            "POST",
+            "/api/v1/fhv1/benchmarks/run",
+            r#"{"profile_id":"missing","samples":[{"input_id":"a","category":"IN_DOMAIN_VALID","expected_pass":true,"text":"x"}]}"#,
+        ),
+    ] {
+        let (status, _, value) = body_json(none.clone(), method, uri, body).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{uri} {value}");
+    }
+
+    let dir = TempDir::new("fhv1-uninit");
+    let store = Arc::new(Fhv1Store::new(dir.uri()));
+    let empty = router_for(Some(store), Arc::new(LabEmbedder { centroid }));
+    let (status, _, profiles) = body_json(empty.clone(), "GET", "/api/v1/fhv1/profiles", "").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(profiles, serde_json::json!([]));
+    let (status, _, runs) = body_json(empty.clone(), "GET", "/api/v1/fhv1/benchmarks", "").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(runs, serde_json::json!([]));
+    let (status, _, traces) = body_json(empty, "GET", "/api/v1/fhv1/traces", "").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(traces["rows"], serde_json::json!([]));
+    assert_eq!(traces["total"], 0);
+}
+
+#[tokio::test]
+async fn profile_detail_reclassifies_quantiles_and_rejects_bad_ids() {
+    let dir = TempDir::new("fhv1-profile");
+    let store = Arc::new(Fhv1Store::new(dir.uri()));
+    let app = router_for(Some(store), Arc::new(GateEmbedder::new(lock().centroid)));
+    let profile_id = calibrate_text(&app, "hello from the lab", true).await;
+    let (status, _, detail) = body_json(
+        app.clone(),
+        "GET",
+        &format!("/api/v1/fhv1/profiles/{profile_id}?metric=variance&p25=0.1&p75=0.6&p90=0.8"),
+        "",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    let codes = detail["movement_tier_codes"].as_array().expect("codes");
+    assert_eq!(codes.len(), DIM);
+    assert_eq!(codes[0], 1);
+    assert_eq!(codes[1], 0);
+    assert!(detail["quantile_cutoffs"]["p25"].as_f64().expect("p25") > 0.0);
+    let (status, _, std_dev) = body_json(
+        app.clone(),
+        "GET",
+        &format!("/api/v1/fhv1/profiles/{profile_id}?metric=std_dev"),
+        "",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{std_dev}");
+    assert_eq!(std_dev["movement_tier_codes"][0], 1);
+    let (status, _, bad) = body_json(
+        app.clone(),
+        "GET",
+        &format!("/api/v1/fhv1/profiles/{profile_id}?metric=variance&p25=0.8&p75=0.2&p90=0.9"),
+        "",
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+    let (status, _, missing) = body_json(
+        app,
+        "GET",
+        "/api/v1/fhv1/profiles/missing-profile?metric=variance",
+        "",
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{missing}");
+}
+
+#[tokio::test]
+async fn evaluate_granularities_stamp_headers_and_reject_bad_input() {
+    let dir = TempDir::new("fhv1-eval");
+    let store = Arc::new(Fhv1Store::new(dir.uri()));
+    let app = router_for(Some(store), Arc::new(GateEmbedder::new(lock().centroid)));
+    let profile_id = calibrate_text(&app, "hello from the lab", true).await;
+    for granularity in ["full_only", "clauses", "full_mirror"] {
+        let (status, headers, value) = body_json(
+            app.clone(),
+            "POST",
+            "/api/v1/fhv1/evaluate",
+            &format!(
+                r#"{{"profile_id":"{profile_id}","text":"hello from the lab","eval_granularity":"{granularity}"}}"#
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{granularity} {value}");
+        assert_eq!(value["overall_passed"], true);
+        assert_eq!(value["eval_granularity"], granularity);
+        let trace_id = value["trace_id"].as_str().expect("trace");
+        assert_eq!(header(&headers, "x-sf-trace-id"), trace_id);
+        assert_eq!(header(&headers, "x-sf-fhv1-decision"), "PASS");
+    }
+    let (status, _, bad) = body_json(
+        app.clone(),
+        "POST",
+        "/api/v1/fhv1/evaluate",
+        &format!(
+            r#"{{"profile_id":"{profile_id}","text":"hello from the lab","eval_granularity":"nope"}}"#
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+    let (status, _, missing) = body_json(
+        app,
+        "POST",
+        "/api/v1/fhv1/evaluate",
+        r#"{"profile_id":"missing-profile","text":"hello from the lab"}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{missing}");
+}
+
+#[tokio::test]
+async fn benchmark_run_groups_chunks_and_fail_closes_overlap() {
+    let dir = TempDir::new("fhv1-bench");
+    let store = Arc::new(Fhv1Store::new(dir.uri()));
+    let app = router_for(Some(store), Arc::new(GateEmbedder::new(lock().centroid)));
+    let profile_id = calibrate_text(&app, "hello from the lab", true).await;
+    let (status, _, created) = body_json(
+        app.clone(),
+        "POST",
+        "/api/v1/fhv1/benchmarks/run",
+        &format!(
+            r#"{{"profile_id":"{profile_id}","dataset_path":"inline-and-path.jsonl","eval_granularity":"clauses","samples":[{{"input_id":"in-1","category":"HYBRID_BOUNDARY","expected_pass":true,"text":"fresh benchmark prompt"}}]}}"#
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let run_id = created["run_id"].as_str().expect("run").to_string();
+    let (status, _, listed) = body_json(app.clone(), "GET", "/api/v1/fhv1/benchmarks", "").await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    assert!(listed
+        .as_array()
+        .expect("runs")
+        .iter()
+        .any(|row| row["run_id"] == run_id));
+    let (status, _, detail) = body_json(
+        app.clone(),
+        "GET",
+        &format!("/api/v1/fhv1/benchmarks/{run_id}"),
+        "",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    assert_eq!(detail["run_id"], run_id);
+    assert!(detail["summary_metrics"]["confusion"]["tp"]
+        .as_u64()
+        .is_some());
+    let trace_id = format!("{run_id}-in-1");
+    let (status, _, drill) = body_json(
+        app.clone(),
+        "GET",
+        &format!("/api/v1/fhv1/traces/{trace_id}"),
+        "",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{drill}");
+    let chunks = drill["chunks"].as_array().expect("chunks");
+    assert!(chunks.len() >= 2, "{}", chunks.len());
+    let indexes: Vec<u64> = chunks
+        .iter()
+        .map(|chunk| chunk["chunk_index"].as_u64().expect("index"))
+        .collect();
+    assert_eq!(indexes.first().copied(), Some(0));
+    assert_eq!(indexes.last().copied(), Some((chunks.len() - 1) as u64));
+    let (status, _, overlap) = body_json(
+        app.clone(),
+        "POST",
+        "/api/v1/fhv1/benchmarks/run",
+        &format!(
+            r#"{{"profile_id":"{profile_id}","dataset_path":"overlap.jsonl","samples":[{{"input_id":"dup","category":"IN_DOMAIN_VALID","expected_pass":true,"text":"hello from the lab"}}]}}"#
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{overlap}");
+    let (status, _, missing) =
+        body_json(app, "GET", "/api/v1/fhv1/benchmarks/missing-run", "").await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{missing}");
+}
+
+#[tokio::test]
+async fn xlsx_export_is_a_workbook_and_rejects_bad_requests() {
+    let dir = TempDir::new("fhv1-xlsx");
+    let store = Arc::new(Fhv1Store::new(dir.uri()));
+    let app = router_for(Some(store), Arc::new(GateEmbedder::new(lock().centroid)));
+    let profile_id = calibrate_text(&app, "hello from the lab", true).await;
+    let (status, headers, bytes) = oneshot(
+        app.clone(),
+        json_request(
+            "GET",
+            &format!("/api/v1/fhv1/profiles/{profile_id}/export?format=xlsx&max_rows=100"),
+            "",
+        ),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&bytes)
+    );
+    assert!(header(&headers, "content-disposition").contains(".xlsx"));
+    let mut archive = ZipArchive::new(Cursor::new(bytes)).expect("xlsx zip");
+    let mut workbook = String::new();
+    archive
+        .by_name("xl/workbook.xml")
+        .expect("workbook")
+        .read_to_string(&mut workbook)
+        .expect("workbook xml");
+    assert!(workbook.contains("Summary_Envelope"), "{workbook}");
+    assert!(workbook.contains("Raw_Samples_Matrix"), "{workbook}");
+    let (status, _, bad) = body_json(
+        app.clone(),
+        "GET",
+        &format!("/api/v1/fhv1/profiles/{profile_id}/export?format=nope"),
+        "",
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+    let (status, _, missing) = body_json(
+        app,
+        "GET",
+        "/api/v1/fhv1/profiles/missing-profile/export?format=xlsx",
+        "",
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{missing}");
+}
+
+#[tokio::test]
+async fn chat_matrix_reuses_one_embed_and_records_pass_traces() {
+    let dir = TempDir::new("fhv1-chat");
+    let store = Arc::new(Fhv1Store::new(dir.uri()));
+    let embedder = Arc::new(GateEmbedder::new(lock().centroid));
+    let app = router_for(
+        Some(Arc::clone(&store)),
+        Arc::clone(&embedder) as Arc<dyn BatchEmbedderClient>,
+    );
+    let pass_profile = calibrate_text(&app, "hello from the lab", true).await;
+    let fail_profile = calibrate_text(&app, "other words here", true).await;
+    let raw_profile = calibrate_text(&app, "hello from the lab", false).await;
+
+    let (status, headers, _) = body_json(
+        app.clone(),
+        "POST",
+        "/api/v1/chat",
+        r#"{"messages":[{"role":"user","content":"hello from the lab"}]}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(header(&headers, "x-sf-decision"), "PASS");
+    assert!(headers.get("x-sf-fhv1-decision").is_none());
+    assert!(headers.get("x-sf-trace-id").is_none());
+
+    embedder.reset();
+    let (status, headers, _) = body_json(
+        app.clone(),
+        "POST",
+        "/api/v1/chat",
+        &format!(
+            r#"{{"messages":[{{"role":"user","content":"hello from the lab"}}],"filter_mode":"fhv1","fhv1_profile_id":"{pass_profile}","fhv1_granularity":"full_only"}}"#
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(header(&headers, "content-type").starts_with("text/event-stream"));
+    assert_eq!(header(&headers, "x-sf-fhv1-decision"), "PASS");
+    let fhv1_trace = header(&headers, "x-sf-trace-id").to_string();
+    assert!(!fhv1_trace.is_empty());
+    let (status, _, traces) = body_json(
+        app.clone(),
+        "GET",
+        "/api/v1/fhv1/traces?source_kind=REALTIME_CHAT&page_size=50",
+        "",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{traces}");
+    assert!(traces["rows"]
+        .as_array()
+        .expect("rows")
+        .iter()
+        .any(|row| row["trace_id"] == fhv1_trace && row["source_kind"] == "REALTIME_CHAT"));
+
+    embedder.reset();
+    let (status, headers, _) = body_json(
+        app.clone(),
+        "POST",
+        "/api/v1/chat",
+        &format!(
+            r#"{{"messages":[{{"role":"user","content":"hello from the lab"}}],"filter_mode":"3hm_plus_fhv1","fhv1_profile_id":"{pass_profile}","fhv1_granularity":"clauses"}}"#
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(header(&headers, "content-type").starts_with("text/event-stream"));
+    assert_eq!(header(&headers, "x-sf-fhv1-decision"), "PASS");
+    let plus_trace = header(&headers, "x-sf-trace-id").to_string();
+    assert_ne!(plus_trace, fhv1_trace);
+    assert_eq!(embedder.counts(), (1, 0));
+    let (status, _, traces) = body_json(
+        app.clone(),
+        "GET",
+        "/api/v1/fhv1/traces?source_kind=REALTIME_CHAT&page_size=50",
+        "",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(traces["rows"]
+        .as_array()
+        .expect("rows")
+        .iter()
+        .any(|row| row["trace_id"] == plus_trace));
+
+    embedder.reset();
+    let (status, _, breach) = body_json(
+        app.clone(),
+        "POST",
+        "/api/v1/chat",
+        &format!(
+            r#"{{"messages":[{{"role":"user","content":"hello from the lab"}}],"filter_mode":"3hm_plus_fhv1","fhv1_profile_id":"{fail_profile}","fhv1_granularity":"clauses"}}"#
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{breach}");
+    assert_eq!(breach["error"]["kind"], "fhv1_ingress_breach");
+    assert_eq!(
+        breach["error"]["telemetry"]["failing_tier"],
+        "FHV1_AABB_ENVELOPE"
+    );
+    assert!(
+        breach["error"]["telemetry"]["eval_latency_ns"]
+            .as_u64()
+            .expect("latency")
+            > 0
+    );
+    assert_eq!(embedder.counts(), (1, 0));
+
+    embedder.reset();
+    let (status, _, _) = body_json(
+        app.clone(),
+        "POST",
+        "/api/v1/chat",
+        &format!(
+            r#"{{"messages":[{{"role":"user","content":"hello from the lab"}}],"filter_mode":"3hm_plus_fhv1","fhv1_profile_id":"{pass_profile}","fhv1_granularity":"full_mirror"}}"#
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(embedder.counts(), (1, 1));
+
+    embedder.reset();
+    let (status, _, value) = body_json(
+        app,
+        "POST",
+        "/api/v1/chat",
+        &format!(
+            r#"{{"messages":[{{"role":"user","content":"hello from the lab"}}],"filter_mode":"3hm_plus_fhv1","fhv1_profile_id":"{raw_profile}","fhv1_granularity":"clauses"}}"#
+        ),
+    )
+    .await;
+    assert!(
+        status == StatusCode::OK || status == StatusCode::FORBIDDEN,
+        "{status} {value}"
+    );
+    assert_eq!(embedder.counts(), (1, 1));
+}
+
+#[tokio::test]
+async fn trace_filters_page_and_burst_ids_stay_distinct() {
+    let dir = TempDir::new("fhv1-traces");
+    let store = Arc::new(Fhv1Store::new(dir.uri()));
+    let app = router_for(Some(store), Arc::new(GateEmbedder::new(lock().centroid)));
+    let profile_id = calibrate_text(&app, "other words here", true).await;
+    let mut failure_ids = Vec::new();
+    for _ in 0..3 {
+        let (status, headers, value) = body_json(
+            app.clone(),
+            "POST",
+            "/api/v1/fhv1/evaluate",
+            &format!(
+                r#"{{"profile_id":"{profile_id}","text":"hello from the lab","eval_granularity":"full_only"}}"#
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{value}");
+        assert_eq!(value["overall_passed"], false);
+        assert_eq!(header(&headers, "x-sf-fhv1-decision"), "BREACH");
+        failure_ids.push(header(&headers, "x-sf-trace-id").to_string());
+    }
+    let (status, _, pass) = body_json(
+        app.clone(),
+        "POST",
+        "/api/v1/fhv1/evaluate",
+        &format!(
+            r#"{{"profile_id":"{profile_id}","text":"other words here","eval_granularity":"full_only"}}"#
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{pass}");
+    assert_eq!(pass["overall_passed"], true);
+    let (status, _, page) = body_json(
+        app.clone(),
+        "GET",
+        "/api/v1/fhv1/traces?category=REALTIME&passed=false&page=2&page_size=1",
+        "",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(page["page"], 2);
+    assert_eq!(page["total"], 3);
+    assert_eq!(page["rows"].as_array().expect("rows").len(), 1);
+    assert_eq!(page["rows"][0]["overall_passed"], false);
+    assert_eq!(page["rows"][0]["category"], "REALTIME");
+    let (status, _, first) = body_json(
+        app.clone(),
+        "GET",
+        "/api/v1/fhv1/traces?category=REALTIME&passed=false&page=1&page_size=1",
+        "",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_ne!(first["rows"][0]["trace_id"], page["rows"][0]["trace_id"]);
+    let (status, _, bad) =
+        body_json(app.clone(), "GET", "/api/v1/fhv1/traces?passed=maybe", "").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+
+    let (status, _, created) = body_json(
+        app.clone(),
+        "POST",
+        "/api/v1/fhv1/benchmarks/run",
+        &format!(
+            r#"{{"profile_id":"{profile_id}","samples":[{{"input_id":"oob","category":"OUT_OF_DOMAIN_BENIGN","expected_pass":false,"text":"bench surface alpha"}}],"eval_granularity":"full_only"}}"#
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let run_id = created["run_id"].as_str().expect("run");
+    let (status, _, by_run) = body_json(
+        app.clone(),
+        "GET",
+        &format!("/api/v1/fhv1/traces?run_id={run_id}&page_size=20"),
+        "",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{by_run}");
+    assert!(by_run["total"].as_u64().expect("total") >= 1);
+    assert!(by_run["rows"]
+        .as_array()
+        .expect("rows")
+        .iter()
+        .all(|row| row["run_id"] == run_id && row["category"] == "OUT_OF_DOMAIN_BENIGN"));
+    let (status, _, by_category) = body_json(
+        app.clone(),
+        "GET",
+        "/api/v1/fhv1/traces?category=OUT_OF_DOMAIN_BENIGN&page_size=20",
+        "",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{by_category}");
+    assert_eq!(by_category["total"], by_run["total"]);
+
+    let mut burst = failure_ids;
+    for _ in 0..5 {
+        let (status, headers, _) = body_json(
+            app.clone(),
+            "POST",
+            "/api/v1/fhv1/evaluate",
+            &format!(
+                r#"{{"profile_id":"{profile_id}","text":"hello from the lab","eval_granularity":"full_only"}}"#
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        burst.push(header(&headers, "x-sf-trace-id").to_string());
+    }
+    let mut unique = burst.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(unique.len(), burst.len());
 }

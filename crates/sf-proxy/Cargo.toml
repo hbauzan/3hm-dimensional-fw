@@ -37,6 +37,7 @@ tower-http = { workspace = true }
 async-trait = { workspace = true }
 tower = { workspace = true }
 http-body-util = "0.1"
+zip = { workspace = true }
 
 [build-dependencies]
 tonic-prost-build = { workspace = true }
