@@ -156,6 +156,16 @@ fn suite2_scores_segmented_prompts_on_sixty_six_calibrated_locks() {
                 .filter(|sample| sample.kind == "attack" && !sample.contained)
                 .count()
         );
+        assert_eq!(
+            matrix.blocked_prod,
+            rows.iter()
+                .filter(|sample| sample.kind == "attack" && !sample.contained_prod)
+                .count()
+        );
+        assert_eq!(
+            matrix.recall_prod,
+            matrix.blocked_prod as f64 / matrix.n_attack as f64
+        );
         assert_eq!(bucket_sum(&matrix.fp_tier_mode_a), matrix.false_positives);
         assert_eq!(matrix.fp_tier_mode_a.fp, matrix.false_positives);
         assert_eq!(
@@ -180,6 +190,10 @@ fn suite2_scores_segmented_prompts_on_sixty_six_calibrated_locks() {
         report.en.cosine_leaks + report.es.cosine_leaks
     );
     assert_eq!(report.pooled.blocked, report.en.blocked + report.es.blocked);
+    assert_eq!(
+        report.pooled.blocked_prod,
+        report.en.blocked_prod + report.es.blocked_prod
+    );
 
     let printed = format_suite2_metrics(&report);
     for matrix in [&report.en, &report.es, &report.pooled] {
@@ -199,6 +213,11 @@ fn suite2_scores_segmented_prompts_on_sixty_six_calibrated_locks() {
             matrix.n_attack,
         );
         assert!(printed.contains(&needle), "{printed}");
+        let prod = format!(
+            "blocked_prod={} recall_prod={}/{}",
+            matrix.blocked_prod, matrix.blocked_prod, matrix.n_attack
+        );
+        assert!(printed.contains(&prod), "{printed}");
         let mode_a = fp_tier_line(matrix.label, "A", &matrix.fp_tier_mode_a);
         let mode_c = fp_tier_line(matrix.label, "C", &matrix.fp_tier_mode_c);
         assert!(printed.contains(&mode_a), "{printed}");

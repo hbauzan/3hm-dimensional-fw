@@ -119,13 +119,13 @@ Measured on this Apple M4. The v0.2 engine was not changed. Suite 2 below is the
 
 **Suite 1 (SCPB-220)** is a synthetic algebraic smoke test. The smoke harness still scores **220** attacks. Its containment is not the product false-positive rate, and this page does not use it as one.
 
-**Suite 2** clean samples = 100. Primary Mode C only: L1 = 0, L2 = 3, L3 = 0, so the primary false-positive rate is **3/100**. Production pairwise (`evaluate_pairwise_containment`, Mode C) on that cascade: pairs = 28, total false positives **31/100**. Suite pairwise Mode A on that cascade: pairs = 33, total false positives **36/100**.
+**Suite 2** clean samples = 100. Primary Mode C only: L1 = 0, L2 = 3, L3 = 0, so the primary false-positive rate is **3/100**. Production pairwise (`evaluate_pairwise_containment`, Mode C) on that cascade: pairs = 28, total false positives **31/100**. Suite pairwise Mode A on that cascade: pairs = 33, total false positives **36/100**. Attack recall under that same production path matches Mode A on these fixtures.
 
-| Matrix | Clean | Primary Mode C | Production pairs (Mode C) | Suite pairs (Mode A) | Attacks | Cosine leaks | Blocked |
-| :--- | :---: | :--- | :--- | :--- | :---: | :---: | :---: |
-| **EN** | 10 | L1 = 0, L2 = 0, L3 = 0 | pairs = 3, fp = **3/10** | pairs = 3, fp = **3/10** | 82 | 48/82 | 64/82 |
-| **ES** | 90 | L2 = 3 | pairs = 25, fp = **28/90** | pairs = 30, fp = **33/90** | 90 | 41/90 | 90/90 |
-| **Pooled** | 100 | L1 = 0, L2 = 3, L3 = 0, fp = **3/100** | pairs = 28, fp = **31/100** | pairs = 33, fp = **36/100** | 172 | 89/172 | 154/172 |
+| Matrix | Clean | Primary Mode C | Production pairs (Mode C) | Suite pairs (Mode A) | Attacks | Cosine leaks | Blocked (Mode A) | Blocked prod (Mode C) |
+| :--- | :---: | :--- | :--- | :--- | :---: | :---: | :---: | :---: |
+| **EN** | 10 | L1 = 0, L2 = 0, L3 = 0 | pairs = 3, fp = **3/10** | pairs = 3, fp = **3/10** | 82 | 48/82 | 64/82 | 64/82 |
+| **ES** | 90 | L2 = 3 | pairs = 25, fp = **28/90** | pairs = 30, fp = **33/90** | 90 | 41/90 | 90/90 | 90/90 |
+| **Pooled** | 100 | L1 = 0, L2 = 3, L3 = 0, fp = **3/100** | pairs = 28, fp = **31/100** | pairs = 33, fp = **36/100** | 172 | 89/172 | 154/172 | 154/172 |
 
 ---
 
@@ -199,12 +199,32 @@ pnpm test
 pnpm run lint
 ```
 
+### Playwright (`pnpm --dir frontend test:e2e`)
+
+`frontend/playwright.config.ts` starts Vite on `127.0.0.1:5173`. `sf-proxy` on `127.0.0.1:8088` has to be up already. The passing run uses `SF_EMBEDDER=http` and the catalog written by `calibrate_canonical_pairs`.
+
+```bash
+HF_HUB_OFFLINE=1 uv run --script tools/bge_m3_mps_server.py
+cargo run -p sf-bench --bin calibrate_canonical_pairs -- \
+  --tei-url http://127.0.0.1:8080 \
+  --lancedb-uri data/sf-lancedb
+cargo run -p sf-proxy --bin sf-proxy -- \
+  --listen 127.0.0.1:8088 \
+  --lancedb-uri data/sf-lancedb \
+  --embedder http \
+  --tei-http-url http://127.0.0.1:8080 \
+  --default-domain python
+pnpm --dir frontend test:e2e
+```
+
+`HF_HUB_OFFLINE=1` loads the cached snapshot `~/.cache/huggingface/hub/models--BAAI--bge-m3`. Leave the variable unset when that snapshot is absent and the Hub is reachable. `calibrate_canonical_pairs` overwrites `data/sf-lancedb` with 11 domain locks and 55 pairs. `seed_canonical_locks` writes synthetic spike centroids; that is the catalog `setup.sh` seeds, and it is a separate catalog from this suite. Chromium is the Playwright build (`chromium_headless_shell-1248` for `@playwright/test` 1.64). Set `PLAYWRIGHT_BROWSERS_PATH` to `$HOME/Library/Caches/ms-playwright` when that directory holds the binary.
+
 ### Continuous integration
 
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on push and pull request:
 
-- `rust-x86_64` on `ubuntu-latest`: `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, and `cargo test --workspace`. This is the `x86_64` AVX2/FMA build.
-- `rust-arm64` on `macos-latest`: `cargo clippy --workspace --all-targets -- -D warnings` and `cargo test --workspace`. This is the `arm64` NEON build.
+- `rust-x86_64` on `ubuntu-latest`: `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, and `cargo test --workspace`. The job compiles `avx2.rs` and `avx512.rs` (`#[cfg(target_arch = "x86_64")]`). Dispatch runs `avx512f` when the runner exposes it, otherwise AVX2+FMA. The log does not record which path ran.
+- `rust-arm64` on `macos-latest`: `cargo clippy --workspace --all-targets -- -D warnings` and `cargo test --workspace`. This is the `arm64` NEON build. It does not compile or execute `avx512f`.
 - `frontend` on `ubuntu-latest`: `pnpm --dir frontend install --frozen-lockfile`, then `pnpm --dir frontend lint`, `pnpm --dir frontend build`, and `pnpm --dir frontend test`.
 
 ---

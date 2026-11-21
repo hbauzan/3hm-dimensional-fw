@@ -1,35 +1,29 @@
 ---
-task_id: "TASK-007"
+task_id: "TASK-008"
 status: "DONE"
 assigned_architect: "maximum-architect-agent"
 protocol: "transparent-dev-protocol"
-title: "v0.2 Hardening, Empirical Benchmark Truth & Multi-Arch CI"
-created_at: "2026-11-13T19:56:00-03:00"
+title: "Cierre de auditoría y verificación local v0.2.1"
+created_at: "2026-11-21T09:29:00-03:00"
 ---
 
-# TASK-007: v0.2 Hardening, Empirical Benchmark Truth & Multi-Arch CI
+# TASK-008: Cierre de auditoría y verificación local v0.2.1
 
 ## 1. Objective
-Close the verified v0.2 integrity gaps in `sf-storage`, `sf-proxy`, and `sf-ui`, then align seeding, batch-RPC claims, Suite 2, ingress-only scope, version governance, empirical benchmark reports, and multi-arch CI. One tracer bullet per slice. Spec: `roadmap/v0.2-hardening-and-empirical-truth.prompt.md`.
+Close the pending `v0.2.1` audit (handoff §4 points 1–3) on the tagged baseline. Verify the local suite, tabulate productive Mode C recall beside the existing Mode A recall, run Playwright against the documented gateway, and record AVX-512 runtime coverage on this host. Do not design or implement Resonancia Holística Continua or Egress Semantic Amplification.
 
 ## 2. Invariants & Constraints
-- **Canonical Toolchain**: `cargo` for Rust, `pnpm` for `frontend/`, `uv` for `tools/`. No second package manager.
-- **Zero Warnings**: `cargo clippy --workspace --all-targets -- -D warnings` and `cargo fmt --check`.
-- **Storage**: `domain_hypercubes` keeps `DIM = 1024`, `MAX_TOPK = 128`, and `NoiseBitmask1024` (128 bytes). `top_k_len` round-trips. Mode A scores that length once per coordinate.
-- **Kernels**: 0 ULP bitmask parity and `|simd - scalar| < 1e-14` on `f64` cosine. `NaN` fails closed.
-- **HTTP**: valid `/v1/chat/completions`, `/api/v1/chat`, and `/api/v1/upstream/env` payloads keep their current JSON/SSE contracts.
-- **Scope fence**: no holistic resonance gate and no egress amplification in this task.
+- **Canonical Toolchain**: `cargo` (Rust `1.94.1`), `pnpm` (`frontend/`), `uv` (`tools/`). No second package manager.
+- **Scope fence**: do not change productive scoring in `sf-kernels`, the L1/L2/L3 cascade, or `evaluate_pairwise_containment`.
+- **Suite 2**: existing Mode A `blocked` / `recall` and both false-positive tiers stay numerically unchanged. Productive Mode C recall is an additional count of `!contained_prod` on attack rows.
+- **E2E**: do not weaken or falsify Playwright assertions. Environment or prerequisite fixes only when the contract is unambiguous.
+- **AVX-512**: this host is `arm64`. Do not claim an `avx512f` runtime pass.
 - **Exclusive Authorship**: `hbauzan` (`Héctor Andrés Bauzán Saavedra` <hbauzan@gmail.com>). No `Co-authored-by` trailers.
-- **Delivery**: local commit on the slice branch, then stop for audit. No push and no merge to `main` before an explicit OK.
+- **Delivery**: local commit on this branch, then stop. No push and no merge to `main` before an explicit OK.
+- **Out of scope**: vNext engine design.
 
 ## 3. Tracer Bullet Slices
-- [x] **Slice 1** (`fix/slice-01-lancedb-topk`): Persist `top_k_len` and real `corpus_doc_count` / `sha256_manifest`. `append_batch` restores `top_k_len` capped by `min(MAX_TOPK)`, not `DEFAULT_QUORUM_K`. Round-trip `top_k_len = 27` and score 27 unique dims in `eval_mode_a`.
-- [x] **Slice 2** (`fix/slice-02-http-override-validation`): Reject non-finite overrides, `epsilon < 0`, and thresholds outside `[-1.0, 1.0]` with HTTP 400 before dilation.
-- [x] **Slice 3** (`fix/slice-03-sf-ui-clause-inspect`): Embed each inspect clause with its own vector. Skip pairwise containment when the embedder is mock.
-- [x] **Slice 4** (`feat/slice-04-seeding-66-locks`): Hydrate 11 base locks plus 55 pairs. `MockBatchEmbedder` resolves by `domain_id`.
-- [x] **Slice 5** (`docs/slice-05-batch-rpc-truth`): Keep one `embed_batch_f32` call. Document that short-circuit saves CPU/SIMD clause gates and does not skip the embedding batch.
-- [x] **Slice 6** (`feat/slice-06-suite2-e2e-and-future-adr`): Run Suite 2 through the real pipeline on 66 locks, unify language, and seed `roadmap/future-holistic-resonance-gate.md` without changing the v0.2 scorer.
-- [x] **Slice 7** (`docs/slice-07-ingress-only-scope`): Mark this version ingress-only. Assign egress semantic amplification to v1.1+.
-- [x] **Slice 8** (`chore/slice-08-version-020-and-roadmaps`): Align `/health` and changelog with `0.2.0`. Archive the two merged prompts.
-- [x] **Slice 9** (`feat/slice-09-truthful-benchmarks-and-readme`): Persist load-benchmark JSON and correct README latency, lock size, cosine normalization, and `ceil(0.10 * 1024) = 103`.
-- [x] **Slice 10** (`ci/slice-10-multiarch-github-actions`): Add `.github/workflows/ci.yml` for `x86_64`, `arm64`, and the frontend only after slices 1–9 are on `main`.
+- [x] **Slice 1** (`chore/task-008-v021-audit-verification`): `v0.2.1` is `5f9ab4b` on `main`. Local fmt, clippy, `cargo test --workspace` (111 passed), frontend lint/build/test (44 passed), and `cargo run --release -p sf-bench` reproduced the Suite 2 rates in `README.md`. Gate p50 was 0.542 µs. This run's suite2 gate p99 was 0.625 µs; `reports/load_benchmark_mock.json` stores 0.583 µs.
+- [x] **Slice 2** (`feat/suite2-recall-prod`): `blocked_prod` / `recall_prod` count attack rows with `!contained_prod`. Existing Mode A fields stay. Measured EN 64/82, ES 90/90, pooled 154/172, equal to Mode A on these fixtures. Clean FPR stays 36/100 vs 31/100.
+- [x] **Slice 3** (`test/playwright-e2e-v021`): Assertions stayed. The synthetic catalog failed 3/9 under `SF_EMBEDDER=http` and a different 3/9 under `SF_EMBEDDER=mock`. After `calibrate_canonical_pairs` wrote 66 BGE-M3 locks to `data/sf-lancedb` (backup `data/sf-lancedb.bak-pre-calibrate-20261121`), `SF_EMBEDDER=http` returned PASS, `L1_CENTROID_COSINE`, `L2_CLAUSE_GATE`, `L3_SPECTRAL_QUORUM`, L2 0.8 breach, L2 0.1 pass. `pnpm --dir frontend test:e2e`: 9 passed.
+- [x] **Slice 4** (`docs/avx512-arm64-unverified`): Host is Apple M4 `arm64` with NEON. `avx512f` was not executed. `.github/workflows/ci.yml` records the `#[cfg(target_arch = "x86_64")]` compile gate and that the x86_64 job does not record whether `avx512f` or AVX2+FMA ran.

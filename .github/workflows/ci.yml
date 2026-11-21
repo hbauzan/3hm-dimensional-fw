@@ -10,7 +10,10 @@ permissions:
 jobs:
   rust-x86_64:
     runs-on: ubuntu-latest
-    # The x86_64 job is the AVX2/FMA build.
+    # Compiles avx2.rs and avx512.rs (`#[cfg(target_arch = "x86_64")]` in
+    # crates/sf-kernels/src/simd/mod.rs). Dispatch uses avx512f when the runner
+    # exposes it, otherwise AVX2+FMA. The job does not record which path ran.
+    # An arm64 host executes NEON and does not run avx512f.
     steps:
       - name: Checkout
         uses: actions/checkout@v4
