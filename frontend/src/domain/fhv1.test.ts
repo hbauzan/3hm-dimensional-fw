@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import { parseChatBreach } from './breach.ts'
 import {
+  FHV1_ROGUE_INDICES,
+  FHV1_TIER_NAMES,
   formatLosslessF64,
+  isFhv1RogueDim,
+  movementTierName,
+  parseFhv1BenchmarkDetail,
+  parseFhv1ChatTelemetry,
   parseFhv1Evaluation,
   parseObservedBitsHex,
 } from './fhv1.ts'
@@ -156,4 +162,128 @@ describe('fhv1 lossless formatting', () => {
     store.setItem('sf.spa.filterMode', 'nope')
     expect(loadSession(store).filterMode).toBe('3hm_default')
   })
+
+  it('names movement tiers and the nine rogue coordinates', () => {
+    expect(FHV1_TIER_NAMES.map((_, index) => movementTierName(index))).toEqual([
+      'ZeroSpan',
+      'LowAnchor',
+      'Moderate',
+      'HighVolatility',
+      'ExtremeMovement',
+    ])
+    expect(movementTierName(5)).toBe('tier-5')
+    expect(movementTierName(-1)).toBe('tier--1')
+    expect(FHV1_ROGUE_INDICES).toEqual([292, 297, 308, 329, 386, 404, 577, 616, 780])
+    for (const index of FHV1_ROGUE_INDICES) expect(isFhv1RogueDim(index)).toBe(true)
+    expect(isFhv1RogueDim(0)).toBe(false)
+    expect(isFhv1RogueDim(291)).toBe(false)
+  })
+
+  it('fails closed on incomplete telemetry and evaluation payloads', () => {
+    expect(parseFhv1ChatTelemetry({ ...telemetry, failing_tier: 'L1_CENTROID_COSINE' }).ok).toBe(false)
+    const { trace_id: _traceId, ...withoutTrace } = telemetry
+    expect(parseFhv1ChatTelemetry(withoutTrace).ok).toBe(false)
+    const { overall_passed: _passed, ...withoutVerdict } = evaluation
+    expect(parseFhv1Evaluation(withoutVerdict).ok).toBe(false)
+    expect(parseFhv1Evaluation({ ...evaluation, chunks: 'nope' }).ok).toBe(false)
+  })
+
+  it('parses granularity comparison and oob catch counts, and rejects a bad series', () => {
+    const parsed = parseFhv1BenchmarkDetail({
+      ...benchmarkRun,
+      summary_metrics: {
+        confusion: { tp: 1, tn: 2, fp: 1, fn: 0 },
+        attribution: {
+          in_domain_fail_counts: [0, 1],
+          oob_catch_counts: [4, 0],
+        },
+        granularity_comparison: [
+          {
+            granularity: 'clauses',
+            use_rogue_mask: true,
+            evaluated_dims: 1015,
+            confusion: {
+              tp: 1,
+              tn: 2,
+              fp: 0,
+              fn: 1,
+              far_fpr: 0,
+              frr_fnr: 0.30000000000000004,
+              f1: null,
+            },
+          },
+        ],
+      },
+    })
+    expect(parsed.ok).toBe(true)
+    if (!parsed.ok) return
+    expect(parsed.value.oob_catch_counts).toEqual([4, 0])
+    expect(parsed.value.granularity_comparison).toEqual([
+      {
+        granularity: 'clauses',
+        use_rogue_mask: true,
+        evaluated_dims: 1015,
+        tp: 1,
+        tn: 2,
+        fp: 0,
+        fn: 1,
+        far_fpr: 0,
+        frr_fnr: 0.30000000000000004,
+        f1: null,
+      },
+    ])
+    expect(formatLosslessF64(parsed.value.granularity_comparison?.[0]?.frr_fnr ?? Number.NaN)).toBe(
+      '0.30000000000000004',
+    )
+    expect(
+      parseFhv1BenchmarkDetail({
+        ...benchmarkRun,
+        summary_metrics: { granularity_comparison: [{ granularity: 'clauses' }] },
+      }).ok,
+    ).toBe(false)
+    expect(
+      parseFhv1BenchmarkDetail({
+        ...benchmarkRun,
+        summary_metrics: { attribution: { oob_catch_counts: [1.5] } },
+      }).ok,
+    ).toBe(false)
+    const absent = parseFhv1BenchmarkDetail(benchmarkRun)
+    expect(absent.ok).toBe(true)
+    if (!absent.ok) return
+    expect(absent.value.granularity_comparison).toBeNull()
+    expect(absent.value.oob_catch_counts).toBeNull()
+  })
 })
+
+const evaluation = {
+  trace_id: 'lab-1',
+  profile_id: 'python-v1-abc',
+  policy_id: 'python',
+  eval_granularity: 'clauses',
+  use_rogue_mask: false,
+  overall_passed: false,
+  full_text_passed: false,
+  all_chunks_passed: false,
+  embedding_ms: 0.1,
+  eval_latency_ns: 7,
+  chunks: [
+    {
+      chunk_index: 0,
+      chunk_strategy: 'full_doc',
+      chunk_passed: false,
+      failed_dims_count: 1,
+      max_violation_delta: 0.1,
+    },
+  ],
+}
+
+const benchmarkRun = {
+  run_id: 'bench-1',
+  profile_id: 'python-v1-abc',
+  policy_id: 'python',
+  dataset_name: 'python',
+  eval_granularity: 'clauses',
+  use_rogue_mask: true,
+  total_inputs: 4,
+  total_chunks: 6,
+}

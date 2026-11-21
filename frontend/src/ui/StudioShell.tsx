@@ -43,28 +43,32 @@ export function StudioShell({
           Benchmark explorer
         </button>
       </nav>
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        {view === 'playground' ? (
-          <Playground
-            fetchImpl={fetchImpl}
-            store={store}
-            fill
-            onOpenTrace={(next) => {
-              setTraceId(next)
-              setView('benchmark')
-            }}
-          />
-        ) : null}
-        {view === 'variance' ? <Fhv1VarianceStudio fetchImpl={fetchImpl} store={store} /> : null}
-        {view === 'benchmark' ? (
-          <Fhv1BenchmarkExplorer
-            fetchImpl={fetchImpl}
-            store={store}
-            traceId={traceId}
-            onTraceId={setTraceId}
-          />
-        ) : null}
+      <div className={pane(view === 'playground')} hidden={view !== 'playground'}>
+        <Playground
+          fetchImpl={fetchImpl}
+          store={store}
+          fill
+          onOpenTrace={(next) => {
+            setTraceId(next)
+            setView('benchmark')
+          }}
+        />
+      </div>
+      <div className={pane(view === 'variance')} hidden={view !== 'variance'}>
+        <Fhv1VarianceStudio fetchImpl={fetchImpl} store={store} />
+      </div>
+      <div className={pane(view === 'benchmark')} hidden={view !== 'benchmark'}>
+        <Fhv1BenchmarkExplorer
+          fetchImpl={fetchImpl}
+          store={store}
+          traceId={traceId}
+          onTraceId={setTraceId}
+        />
       </div>
     </div>
   )
+}
+
+function pane(active: boolean): string {
+  return active ? 'flex min-h-0 flex-1 flex-col overflow-hidden' : 'hidden'
 }

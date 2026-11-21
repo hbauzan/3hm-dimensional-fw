@@ -101,4 +101,43 @@ describe('BreachCard', () => {
     expect(within(card).getByText(/Lowest Clause Cosine: 0\.5005 > Threshold: 0\.5000/)).toBeTruthy()
     expect(within(card).getByText('Affirmative votes 842 / K 103')).toBeTruthy()
   })
+
+  it('renders an fhv1 envelope breach with lossless coordinates', () => {
+    render(
+      <BreachCard
+        breach={{
+          decision: 'BREACH',
+          failing_tier: 'FHV1_AABB_ENVELOPE',
+          l1: { passed: true, cosine: 1, threshold: 0.5 },
+          l2: { passed: true, threshold: 0.5 },
+          l3: { evaluated: false },
+          fhv1: {
+            trace_id: 'chat-1',
+            profile_id: 'python-v1-abc',
+            policy_id: 'python',
+            failing_tier: 'FHV1_AABB_ENVELOPE',
+            eval_granularity: 'clauses',
+            use_rogue_mask: true,
+            full_text_passed: false,
+            all_chunks_passed: false,
+            failing_chunk_index: 0,
+            failed_dims_count: 2,
+            underflow_count: 1,
+            overflow_count: 3,
+            max_violation_delta: 0.30000000000000004,
+            embedding_ms: 0.1,
+            eval_latency_ns: 7,
+          },
+        }}
+      />,
+    )
+    const card = screen.getByRole('article', { name: 'Semantic containment breach' })
+    expect(within(card).getByText('FHV1_AABB_ENVELOPE')).toBeTruthy()
+    expect(within(card).getByText('python-v1-abc · clauses · rogue mask on')).toBeTruthy()
+    expect(within(card).getByText('failed dims 2 · underflow 1 · overflow 3')).toBeTruthy()
+    expect(within(card).getByText('max violation 0.30000000000000004')).toBeTruthy()
+    expect(within(card).getByText('embedding 0.1 · latency 7')).toBeTruthy()
+    expect(within(card).queryByText('0.3000')).toBeNull()
+    expect(within(card).queryByText('Cosine: 1.0000 > Threshold: 0.5000')).toBeNull()
+  })
 })

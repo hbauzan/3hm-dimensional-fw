@@ -6,6 +6,7 @@ import {
   type Fhv1Confusion,
   type Fhv1DimView,
   type Fhv1Drilldown,
+  type Fhv1GranularityComparison,
   type Fhv1TraceSummary,
 } from '../domain/fhv1.ts'
 import { browserSessionStore, loadSession, type SessionStore } from '../domain/session.ts'
@@ -119,10 +120,10 @@ export function Fhv1BenchmarkExplorer({
   }, [gatewayBase, traceId, fetchImpl])
 
   const visibleDrill = drill && drill.trace_id === traceId ? drill : null
-  const overlay = useMemo(
-    () => (detail?.in_domain_fail_counts ? attributionOption(detail.in_domain_fail_counts) : null),
-    [detail],
-  )
+  const overlay = useMemo(() => {
+    if (!detail?.in_domain_fail_counts && !detail?.oob_catch_counts) return null
+    return attributionOption(detail.in_domain_fail_counts ?? [], detail.oob_catch_counts)
+  }, [detail])
   const pageCount = Math.max(1, Math.ceil(total / 20))
 
   return (
@@ -159,6 +160,9 @@ export function Fhv1BenchmarkExplorer({
           )
         })}
       </div>
+      {detail?.granularity_comparison && detail.granularity_comparison.length > 0 ? (
+        <ComparisonTable rows={detail.granularity_comparison} />
+      ) : null}
       {overlay ? <Fhv1EChartsCanvas option={overlay} label="fhv1 attribution" /> : null}
       <div className="overflow-auto border border-studio-line">
         <table aria-label="fhv1 audit traces" className="w-full border-collapse font-mono text-[10px]">
@@ -226,6 +230,59 @@ export function Fhv1BenchmarkExplorer({
       ) : null}
     </section>
   )
+}
+
+function ComparisonTable({ rows }: { rows: readonly Fhv1GranularityComparison[] }) {
+  const columns = [
+    'granularity',
+    'use_rogue_mask',
+    'evaluated_dims',
+    'tp',
+    'tn',
+    'fp',
+    'fn',
+    'far_fpr',
+    'frr_fnr',
+    'f1',
+  ] as const
+  return (
+    <div className="overflow-auto border border-studio-line">
+      <table aria-label="Granularity comparison" className="w-full border-collapse font-mono text-[10px]">
+        <caption className="px-1 py-1 text-left text-[10px] uppercase tracking-wide text-studio-muted">
+          Granularity & Mask Comparison
+        </caption>
+        <thead>
+          <tr>
+            {columns.map((column) => (
+              <th key={column} className="border-b border-studio-line px-1 py-1 text-left uppercase text-studio-muted">
+                {column}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, index) => (
+            <tr key={`${row.granularity}-${String(row.use_rogue_mask)}-${index}`}>
+              <td className="px-1 py-0.5">{row.granularity}</td>
+              <td className="px-1 py-0.5">{String(row.use_rogue_mask)}</td>
+              <td className="px-1 py-0.5">{formatLosslessF64(row.evaluated_dims)}</td>
+              <td className="px-1 py-0.5">{formatLosslessF64(row.tp)}</td>
+              <td className="px-1 py-0.5">{formatLosslessF64(row.tn)}</td>
+              <td className="px-1 py-0.5">{formatLosslessF64(row.fp)}</td>
+              <td className="px-1 py-0.5">{formatLosslessF64(row.fn)}</td>
+              <td className="px-1 py-0.5">{shownRate(row.far_fpr)}</td>
+              <td className="px-1 py-0.5">{shownRate(row.frr_fnr)}</td>
+              <td className="px-1 py-0.5">{shownRate(row.f1)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function shownRate(value: number | null): string {
+  return value === null ? 'null' : formatLosslessF64(value)
 }
 
 function ConfusionGrid({ confusion, title }: { confusion: Fhv1Confusion; title: string }) {

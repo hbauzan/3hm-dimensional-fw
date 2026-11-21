@@ -84,8 +84,34 @@ export function rankingOption(detail: Fhv1ProfileDetail, metric: Fhv1Metric): EC
   }
 }
 
-export function attributionOption(counts: readonly number[]): EChartsCoreOption {
-  const rogue = counts.map((value, index) => (isFhv1RogueDim(index) ? value : null))
+export function attributionOption(
+  counts: readonly number[],
+  oobCatch: readonly number[] | null = null,
+): EChartsCoreOption {
+  const width = Math.max(counts.length, oobCatch?.length ?? 0)
+  const axis = Array.from({ length: width }, (_, index) => index)
+  const rogue = axis.map((index) =>
+    isFhv1RogueDim(index) && counts[index] !== undefined ? counts[index] : null,
+  )
+  const inDomain = {
+    name: 'in_domain_fail',
+    type: 'bar',
+    data: axis.map((index) => counts[index] ?? null),
+    itemStyle: { color: ACCENT },
+  }
+  const caught = {
+    name: 'oob_catch',
+    type: 'bar',
+    data: axis.map((index) => oobCatch?.[index] ?? null),
+    itemStyle: { color: PASS },
+  }
+  const rogueSeries = {
+    name: 'rogue',
+    type: 'scatter',
+    data: rogue,
+    itemStyle: { color: WARN },
+    symbol: 'diamond',
+  }
   return {
     textStyle: { color: AXIS },
     tooltip: {
@@ -93,17 +119,18 @@ export function attributionOption(counts: readonly number[]): EChartsCoreOption 
       formatter: (params: unknown) => {
         const dim = pointIndex(params)
         if (dim === undefined) return ''
-        const value = counts[dim]
-        return value === undefined ? '' : `dim ${dim} ${formatLosslessF64(value)}`
+        const lines = [`dim ${dim}`]
+        const inDomainValue = counts[dim]
+        if (inDomainValue !== undefined) lines.push(`in_domain_fail ${formatLosslessF64(inDomainValue)}`)
+        const caughtValue = oobCatch?.[dim]
+        if (caughtValue !== undefined) lines.push(`oob_catch ${formatLosslessF64(caughtValue)}`)
+        return lines.join('\n')
       },
     },
     dataZoom: [{ type: 'inside' }, { type: 'slider' }],
-    xAxis: { type: 'category', data: counts.map((_, index) => index), axisLabel: { color: AXIS } },
+    xAxis: { type: 'category', data: axis, axisLabel: { color: AXIS } },
     yAxis: { type: 'value', axisLabel: { color: AXIS } },
-    series: [
-      { name: 'in_domain_fail', type: 'bar', data: [...counts], itemStyle: { color: ACCENT } },
-      { name: 'rogue', type: 'scatter', data: rogue, itemStyle: { color: WARN }, symbol: 'diamond' },
-    ],
+    series: oobCatch ? [inDomain, caught, rogueSeries] : [inDomain, rogueSeries],
   }
 }
 

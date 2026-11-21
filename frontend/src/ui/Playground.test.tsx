@@ -436,5 +436,175 @@ describe('Playground', () => {
     await user.click(audit)
     expect(await screen.findByText('REALTIME_CHAT BREACH 0.1')).toBeTruthy()
   })
+
+  it('posts 3hm_plus_fhv1 and renders the lossless fhv1 breach card', async () => {
+    const user = userEvent.setup()
+    const calls: { url: string; body: unknown }[] = []
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = String(input)
+      const raw = init?.body
+      calls.push({ url, body: typeof raw === 'string' ? JSON.parse(raw) : null })
+      if (url.endsWith('/api/v1/fhv1/profiles')) return jsonResponse(200, [profile])
+      return jsonResponse(403, {
+        error: {
+          kind: 'fhv1_ingress_breach',
+          code: 'SEMANTIC_CONTAINMENT_BREACH',
+          message: 'fhv1 AABB envelope rejected the prompt',
+          telemetry: {
+            ...fhv1Telemetry,
+            max_violation_delta: 0.30000000000000004,
+            failed_dims_count: 2,
+            underflow_count: 1,
+            overflow_count: 3,
+            use_rogue_mask: true,
+            eval_granularity: 'full_only',
+          },
+        },
+      })
+    }
+    render(<Playground fetchImpl={fetchImpl} store={memorySessionStore()} />)
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Filter mode' }), '3hm_plus_fhv1')
+    await user.selectOptions(await screen.findByRole('combobox', { name: 'fhv1 profile' }), 'python-v1-abc')
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Eval granularity' }), 'full_only')
+    await user.click(screen.getByRole('checkbox', { name: 'Rogue mask' }))
+    await user.type(screen.getByRole('textbox', { name: 'Prompt' }), 'fuera')
+    await user.click(screen.getByRole('button', { name: 'Send' }))
+    expect(await screen.findByText('max violation 0.30000000000000004')).toBeTruthy()
+    expect(screen.getByText('failed dims 2 · underflow 1 · overflow 3')).toBeTruthy()
+    expect(screen.getByText('python-v1-abc · full_only · rogue mask on')).toBeTruthy()
+    expect(screen.queryByText('0.3000')).toBeNull()
+    const chat = calls.find((call) => call.url.includes('/api/v1/chat'))
+    expect(chat?.body).toMatchObject({
+      filter_mode: '3hm_plus_fhv1',
+      fhv1_profile_id: 'python-v1-abc',
+      fhv1_granularity: 'full_only',
+      fhv1_use_rogue_mask: true,
+    })
+  })
+
+  it('streams an fhv1 pass, toggles every granularity, and opens the live trace', async () => {
+    const user = userEvent.setup()
+    const calls: { url: string; body: unknown }[] = []
+    const opened: string[] = []
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = String(input)
+      const raw = init?.body
+      const body = typeof raw === 'string' ? JSON.parse(raw) : null
+      calls.push({ url, body })
+      if (url.endsWith('/api/v1/fhv1/profiles')) return jsonResponse(200, [profile])
+      if (url.includes('/api/v1/fhv1/evaluate')) {
+        return jsonResponse(200, {
+          trace_id: 'lab-pass',
+          profile_id: 'python-v1-abc',
+          policy_id: 'python',
+          eval_granularity: 'clauses',
+          use_rogue_mask: false,
+          overall_passed: true,
+          full_text_passed: true,
+          all_chunks_passed: true,
+          embedding_ms: 0.1,
+          eval_latency_ns: 7,
+          chunks: [
+            {
+              chunk_index: 0,
+              chunk_strategy: 'full_doc',
+              chunk_passed: true,
+              failed_dims_count: 0,
+              max_violation_delta: 0,
+            },
+          ],
+        })
+      }
+      if (url.includes('/api/v1/fhv1/traces')) {
+        return jsonResponse(200, {
+          page: 1,
+          page_size: 20,
+          total: 1,
+          rows: [
+            {
+              trace_id: 'live-1',
+              source_kind: 'REALTIME_CHAT',
+              profile_id: 'python-v1-abc',
+              chunk_index: 0,
+              overall_passed: true,
+              failed_dims_count: 0,
+              max_violation_delta: 0,
+            },
+          ],
+        })
+      }
+      const sent = calls.filter((call) => call.url.includes('/api/v1/chat')).length
+      const content = sent === 1 ? 'pass-full' : sent === 2 ? 'pass-mirror' : 'pass-clauses'
+      return sseResponse([delta(content), 'data: [DONE]\n\n'])
+    }
+    render(
+      <Playground
+        fetchImpl={fetchImpl}
+        store={memorySessionStore()}
+        onOpenTrace={(traceId) => opened.push(traceId)}
+      />,
+    )
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Filter mode' }), 'fhv1')
+    await user.selectOptions(await screen.findByRole('combobox', { name: 'fhv1 profile' }), 'python-v1-abc')
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Eval granularity' }), 'full_only')
+    await user.click(screen.getByRole('checkbox', { name: 'Rogue mask' }))
+    await user.type(screen.getByRole('textbox', { name: 'Prompt' }), 'uno')
+    await user.click(screen.getByRole('button', { name: 'Send' }))
+    expect(await screen.findByText('pass-full')).toBeTruthy()
+
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Eval granularity' }), 'full_mirror')
+    await user.click(screen.getByRole('checkbox', { name: 'Rogue mask' }))
+    await user.type(screen.getByRole('textbox', { name: 'Prompt' }), 'dos')
+    await user.click(screen.getByRole('button', { name: 'Send' }))
+    expect(await screen.findByText('pass-mirror')).toBeTruthy()
+
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Eval granularity' }), 'clauses')
+    await user.type(screen.getByRole('textbox', { name: 'Prompt' }), 'tres')
+    await user.click(screen.getByRole('button', { name: 'Send' }))
+    expect(await screen.findByText('pass-clauses')).toBeTruthy()
+
+    const chats = calls.filter((call) => call.url.includes('/api/v1/chat')).map((call) => call.body)
+    expect(chats[0]).toMatchObject({
+      filter_mode: 'fhv1',
+      fhv1_granularity: 'full_only',
+      fhv1_use_rogue_mask: true,
+    })
+    expect(chats[1]).toMatchObject({ fhv1_granularity: 'full_mirror', fhv1_use_rogue_mask: false })
+    expect(chats[2]).toMatchObject({ fhv1_granularity: 'clauses', fhv1_use_rogue_mask: false })
+
+    await user.type(screen.getByRole('textbox', { name: 'Direct lab sentence' }), 'inside')
+    await user.click(screen.getByRole('button', { name: 'Evaluate sentence' }))
+    expect(await screen.findByText('FHV1 PASS lab-pass delta 0')).toBeTruthy()
+
+    await user.click(screen.getByRole('button', { name: 'Live audit' }))
+    await user.click(await screen.findByRole('button', { name: 'Open trace live-1' }))
+    expect(opened).toEqual(['live-1'])
+  })
 })
+
+const profile = {
+  profile_id: 'python-v1-abc',
+  policy_id: 'python',
+  sample_count: 1,
+  normalize: true,
+  use_rogue_mask_default: false,
+}
+
+const fhv1Telemetry = {
+  trace_id: 'chat-1',
+  profile_id: 'python-v1-abc',
+  policy_id: 'python',
+  failing_tier: 'FHV1_AABB_ENVELOPE',
+  eval_granularity: 'clauses',
+  use_rogue_mask: false,
+  full_text_passed: false,
+  all_chunks_passed: false,
+  failing_chunk_index: 0,
+  failed_dims_count: 1,
+  underflow_count: 0,
+  overflow_count: 1,
+  max_violation_delta: 0.1,
+  embedding_ms: 0.1,
+  eval_latency_ns: 7,
+}
 

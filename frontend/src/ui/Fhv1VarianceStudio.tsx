@@ -110,7 +110,7 @@ export function Fhv1VarianceStudio({
 
   function applyQuantiles() {
     if (!quantilesValid(p25, p75, p90)) {
-      setMessage('quantiles must satisfy 0 < P25 < P75 < P90 < 1')
+      setMessage('quantiles must satisfy 0 <= P25 < P75 < P90 <= 1')
       return
     }
     setApplied({ p25, p75, p90 })
@@ -378,5 +378,13 @@ function quantilesValid(p25: string, p75: string, p90: string): boolean {
   const first = Number(p25)
   const second = Number(p75)
   const third = Number(p90)
-  return Number.isFinite(first) && Number.isFinite(second) && Number.isFinite(third) && first > 0 && first < second && second < third && third < 1
+  return (
+    Number.isFinite(first) &&
+    Number.isFinite(second) &&
+    Number.isFinite(third) &&
+    first >= 0 &&
+    first < second &&
+    second < third &&
+    third <= 1
+  )
 }

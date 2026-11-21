@@ -1,14 +1,24 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useState } from 'react'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { memorySessionStore } from '../domain/session.ts'
 import { Fhv1BenchmarkExplorer } from './Fhv1BenchmarkExplorer.tsx'
+import { attributionOption } from './fhv1Charts.ts'
+
+const charts = vi.hoisted(() => ({
+  options: [] as {
+    series?: { name?: string }[]
+    tooltip?: { formatter?: (params: unknown) => string }
+  }[],
+}))
 
 vi.mock('echarts/core', () => ({
   use: () => undefined,
   init: () => ({
-    setOption: () => undefined,
+    setOption: (option: (typeof charts.options)[number]) => {
+      charts.options.push(option)
+    },
     resize: () => undefined,
     dispose: () => undefined,
   }),
@@ -118,6 +128,10 @@ function traceRow(traceId: string) {
 }
 
 describe('Fhv1BenchmarkExplorer', () => {
+  beforeEach(() => {
+    charts.options.length = 0
+  })
+
   it('shows the four quadrants, a lossless drill-down, and the next page', async () => {
     const user = userEvent.setup()
     const calls: string[] = []
@@ -165,5 +179,115 @@ describe('Fhv1BenchmarkExplorer', () => {
     await user.click(screen.getByRole('button', { name: 'Next page' }))
     expect(await screen.findByRole('button', { name: 'trace-2' })).toBeTruthy()
     expect(calls.some((url) => url.includes('page=2'))).toBe(true)
+  })
+
+  it('renders the granularity comparison and the oob catch series', async () => {
+    const compared = {
+      ...detail,
+      summary_metrics: {
+        ...detail.summary_metrics,
+        attribution: {
+          in_domain_fail_counts: [0, 2],
+          oob_catch_counts: [4, 0],
+        },
+        granularity_comparison: [
+          {
+            granularity: 'clauses',
+            use_rogue_mask: true,
+            evaluated_dims: 1015,
+            confusion: {
+              tp: 1,
+              tn: 2,
+              fp: 0,
+              fn: 1,
+              far_fpr: 0,
+              frr_fnr: 0.30000000000000004,
+              f1: null,
+            },
+          },
+        ],
+      },
+    }
+    const fetchImpl: typeof fetch = async (input) => {
+      const url = String(input)
+      if (url.includes('/api/v1/fhv1/traces?')) {
+        return jsonResponse({ page: 1, page_size: 20, total: 1, rows: [traceRow('trace-1')] })
+      }
+      if (url.includes('/api/v1/fhv1/benchmarks/')) return jsonResponse(compared)
+      if (url.endsWith('/api/v1/fhv1/benchmarks')) return jsonResponse([run])
+      return jsonResponse({})
+    }
+    render(<Fhv1BenchmarkExplorer fetchImpl={fetchImpl} store={memorySessionStore()} />)
+    const table = await screen.findByRole('table', { name: 'Granularity comparison' })
+    expect(table.textContent).toContain('Granularity & Mask Comparison')
+    expect(table.textContent).toContain('clauses')
+    expect(table.textContent).toContain('true')
+    expect(table.textContent).toContain('1015')
+    expect(table.textContent).toContain('0.30000000000000004')
+    expect(table.textContent).toContain('null')
+    expect(screen.queryByText('0.3000')).toBeNull()
+    const tooltip = attributionOption([0, 2], [4, 0]).tooltip as { formatter?: (params: unknown) => string }
+    expect(tooltip.formatter?.([{ dataIndex: 1 }])).toBe('dim 1\nin_domain_fail 2\noob_catch 0')
+    await waitFor(() => {
+      expect(charts.options.some((option) => option.series?.some((series) => series.name === 'oob_catch'))).toBe(true)
+    })
+    const painted = charts.options.find((option) => option.series?.some((series) => series.name === 'oob_catch'))
+    expect(painted?.tooltip?.formatter?.([{ dataIndex: 0 }])).toBe('dim 0\nin_domain_fail 0\noob_catch 4')
+    expect(painted?.tooltip?.formatter?.([{ dataIndex: 0 }])).not.toContain('4.0000')
+  })
+
+  it('resets to page 1 when the benchmark run changes and forwards the trace id', async () => {
+    const user = userEvent.setup()
+    const calls: string[] = []
+    const opened: string[] = []
+    const second = { ...run, run_id: 'bench-2' }
+    const fetchImpl: typeof fetch = async (input) => {
+      const url = String(input)
+      calls.push(url)
+      if (url.includes('/api/v1/fhv1/traces?')) {
+        const page = Number(new URL(url).searchParams.get('page') ?? '1')
+        return jsonResponse({
+          page,
+          page_size: 20,
+          total: 21,
+          rows: [traceRow(page === 1 ? 'trace-1' : 'trace-2')],
+        })
+      }
+      if (url.includes('/api/v1/fhv1/benchmarks/')) return jsonResponse(detail)
+      if (url.endsWith('/api/v1/fhv1/benchmarks')) return jsonResponse([run, second])
+      return jsonResponse({})
+    }
+    render(
+      <Fhv1BenchmarkExplorer
+        fetchImpl={fetchImpl}
+        store={memorySessionStore()}
+        onTraceId={(traceId) => opened.push(traceId)}
+      />,
+    )
+    await user.click(await screen.findByRole('button', { name: 'trace-1' }))
+    expect(opened).toEqual(['trace-1'])
+    await user.click(screen.getByRole('button', { name: 'Next page' }))
+    expect(await screen.findByRole('button', { name: 'trace-2' })).toBeTruthy()
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Benchmark run' }), 'bench-2')
+    await waitFor(() => {
+      const traces = calls.filter((url) => url.includes('/api/v1/fhv1/traces?'))
+      const last = traces[traces.length - 1] ?? ''
+      expect(new URL(last).searchParams.get('page')).toBe('1')
+      expect(new URL(last).searchParams.get('run_id')).toBe('bench-2')
+    })
+    expect(await screen.findByRole('button', { name: 'trace-1' })).toBeTruthy()
+  })
+
+  it('renders an empty run without a comparison table', async () => {
+    const fetchImpl: typeof fetch = async (input) => {
+      const url = String(input)
+      if (url.endsWith('/api/v1/fhv1/benchmarks')) return jsonResponse([])
+      return jsonResponse({ page: 1, page_size: 20, total: 0, rows: [] })
+    }
+    render(<Fhv1BenchmarkExplorer fetchImpl={fetchImpl} store={memorySessionStore()} />)
+    expect(await screen.findByRole('option', { name: 'Select run' })).toBeTruthy()
+    expect(screen.getAllByText('no rows')).toHaveLength(4)
+    expect(screen.queryByRole('table', { name: 'Granularity comparison' })).toBeNull()
+    expect(screen.queryByRole('img', { name: 'fhv1 attribution' })).toBeNull()
   })
 })

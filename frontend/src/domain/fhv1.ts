@@ -105,10 +105,25 @@ export interface Fhv1BenchmarkSummary {
   total_chunks: number
 }
 
+export interface Fhv1GranularityComparison {
+  granularity: string
+  use_rogue_mask: boolean
+  evaluated_dims: number
+  tp: number
+  tn: number
+  fp: number
+  fn: number
+  far_fpr: number | null
+  frr_fnr: number | null
+  f1: number | null
+}
+
 export interface Fhv1BenchmarkDetail extends Fhv1BenchmarkSummary {
   confusion: Fhv1Confusion | null
   per_category: Record<string, Fhv1Confusion>
   in_domain_fail_counts: number[] | null
+  oob_catch_counts: number[] | null
+  granularity_comparison: Fhv1GranularityComparison[] | null
 }
 
 export interface Fhv1DimView {
@@ -425,11 +440,25 @@ export function parseFhv1BenchmarkDetail(value: unknown): ParseResult<Fhv1Benchm
   }
   const attribution = metrics && isRecord(metrics.attribution) ? metrics.attribution : null
   const counts = attribution ? readNumberArray(attribution, 'in_domain_fail_counts') : undefined
+  let comparison: Fhv1GranularityComparison[] | null = null
+  if (metrics && Object.hasOwn(metrics, 'granularity_comparison')) {
+    const parsed = parseGranularityComparison(metrics.granularity_comparison)
+    if (!parsed.ok) return parsed
+    comparison = parsed.value
+  }
+  let oob: number[] | null = null
+  if (attribution && Object.hasOwn(attribution, 'oob_catch_counts')) {
+    const caught = readCountArray(attribution, 'oob_catch_counts')
+    if (!caught) return fail('fhv1 oob_catch_counts is invalid')
+    oob = caught
+  }
   return ok({
     ...summary.value,
     confusion,
     per_category: perCategory,
     in_domain_fail_counts: counts ?? null,
+    oob_catch_counts: oob,
+    granularity_comparison: comparison,
   })
 }
 
@@ -523,6 +552,34 @@ function parseBenchmarkSummary(value: unknown): ParseResult<Fhv1BenchmarkSummary
     total_inputs: inputs,
     total_chunks: chunks,
   })
+}
+
+function parseGranularityComparison(value: unknown): ParseResult<Fhv1GranularityComparison[]> {
+  if (!Array.isArray(value)) return fail('fhv1 granularity_comparison is invalid')
+  const rows: Fhv1GranularityComparison[] = []
+  for (const entry of value) {
+    if (!isRecord(entry)) return fail('fhv1 granularity comparison entry is invalid')
+    const granularity = readString(entry, 'granularity')
+    const mask = readBoolean(entry, 'use_rogue_mask')
+    const dims = readCount(entry, 'evaluated_dims')
+    const confusion = parseConfusion(entry.confusion)
+    if (!granularity || mask === undefined || dims === undefined || !confusion) {
+      return fail('fhv1 granularity comparison entry is incomplete')
+    }
+    rows.push({
+      granularity,
+      use_rogue_mask: mask,
+      evaluated_dims: dims,
+      tp: confusion.tp,
+      tn: confusion.tn,
+      fp: confusion.fp,
+      fn: confusion.fn,
+      far_fpr: confusion.far_fpr,
+      frr_fnr: confusion.frr_fnr,
+      f1: confusion.f1,
+    })
+  }
+  return ok(rows)
 }
 
 function parseConfusion(value: unknown): Fhv1Confusion | null {

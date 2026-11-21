@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Fhv1ProfileDetail } from '../domain/fhv1.ts'
@@ -143,4 +143,117 @@ describe('Fhv1VarianceStudio', () => {
     expect(option.tooltip?.formatter?.([{ dataIndex: 1 }])).toBe('dim 1\nmin 0.2\nmax 0.4\nmean 0.25')
     expect(option.tooltip?.formatter?.([{ dataIndex: 0 }])).not.toContain('0.1000')
   })
+
+  it('switches movement metrics and accepts the closed quantile interval', async () => {
+    const user = userEvent.setup()
+    const calls: string[] = []
+    const fetchImpl: typeof fetch = async (input) => {
+      const url = String(input)
+      calls.push(url)
+      if (url.endsWith('/api/v1/fhv1/profiles')) return jsonResponse(200, [summary])
+      if (url.includes('/api/v1/fhv1/profiles/')) return jsonResponse(200, detail)
+      return jsonResponse(404, { error: url })
+    }
+    render(<Fhv1VarianceStudio fetchImpl={fetchImpl} store={memorySessionStore()} />)
+    expect(await screen.findByText('0.30000000000000004')).toBeTruthy()
+
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Movement metric' }), 'variance')
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Movement metric' }), 'std_dev')
+    await user.clear(screen.getByRole('textbox', { name: 'P25' }))
+    await user.type(screen.getByRole('textbox', { name: 'P25' }), '0')
+    await user.tab()
+    await user.clear(screen.getByRole('textbox', { name: 'P90' }))
+    await user.type(screen.getByRole('textbox', { name: 'P90' }), '1')
+    await user.tab()
+    await waitFor(() => {
+      expect(calls.some((url) => queryOf(url).get('metric') === 'variance')).toBe(true)
+      expect(
+        calls.some((url) => {
+          const query = queryOf(url)
+          return query.get('metric') === 'std_dev' && query.get('p25') === '0' && query.get('p90') === '1'
+        }),
+      ).toBe(true)
+    })
+
+    await user.clear(screen.getByRole('textbox', { name: 'P25' }))
+    await user.type(screen.getByRole('textbox', { name: 'P25' }), '0.9')
+    await user.tab()
+    expect(await screen.findByText('quantiles must satisfy 0 <= P25 < P75 < P90 <= 1')).toBeTruthy()
+    expect(calls.some((url) => queryOf(url).get('p25') === '0.9')).toBe(false)
+  })
+
+  it('uploads a calibration file, exports xlsx and parquet, and filters rogue rows', async () => {
+    const user = userEvent.setup()
+    const calls: { url: string; body: unknown }[] = []
+    const rogueDetail: Fhv1ProfileDetail = {
+      ...detail,
+      min: filled(0),
+      max: filled(1),
+      mean: filled(0),
+      span: filled(1),
+      variance: filled(0, 292, 0.30000000000000004),
+      std_dev: filled(0),
+      movement_tier_codes: filled(0),
+    }
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = String(input)
+      const raw = init?.body
+      calls.push({ url, body: typeof raw === 'string' ? JSON.parse(raw) : null })
+      if (url.includes('/export?')) {
+        return new Response('export', {
+          status: 200,
+          headers: { 'content-disposition': 'attachment; filename="profile.bin"' },
+        })
+      }
+      if (url.endsWith('/api/v1/fhv1/calibrate')) return jsonResponse(200, summary)
+      if (url.endsWith('/api/v1/fhv1/profiles')) return jsonResponse(200, [summary])
+      if (url.includes('/api/v1/fhv1/profiles/')) return jsonResponse(200, rogueDetail)
+      return jsonResponse(404, { error: url })
+    }
+    render(<Fhv1VarianceStudio fetchImpl={fetchImpl} store={memorySessionStore()} />)
+    expect(await screen.findByText('0.30000000000000004')).toBeTruthy()
+
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Movement metric' }), 'variance')
+    await user.upload(
+      screen.getByLabelText('Calibration file'),
+      new File(['linea uno'], 'corpus.txt', { type: 'text/plain' }),
+    )
+    await waitFor(() => {
+      expect((screen.getByRole('button', { name: 'Calibrate profile' }) as HTMLButtonElement).disabled).toBe(false)
+    })
+    await user.click(screen.getByRole('button', { name: 'Calibrate profile' }))
+    const posted = calls.find((call) => call.url.endsWith('/api/v1/fhv1/calibrate'))
+    expect(posted?.body).toEqual({
+      policy_id: 'python',
+      texts: ['linea uno'],
+      normalize: true,
+      use_rogue_mask_default: false,
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Export xlsx' }))
+    await user.click(screen.getByRole('button', { name: 'Export parquet' }))
+    expect(calls.some((call) => call.url.includes('/export?format=xlsx'))).toBe(true)
+    expect(calls.some((call) => call.url.includes('/export?format=parquet'))).toBe(true)
+
+    await user.type(screen.getByRole('textbox', { name: 'Filter dimensions' }), 'yes')
+    const rogueRows = screen.getAllByRole('row').slice(1)
+    expect(rogueRows).toHaveLength(1)
+    expect(rogueRows[0]?.textContent).toContain('292')
+    expect(rogueRows[0]?.textContent).toContain('yes')
+    expect(rogueRows[0]?.textContent).toContain('0.30000000000000004')
+    expect(screen.queryByText('0.3000')).toBeNull()
+
+    await user.clear(screen.getByRole('textbox', { name: 'Filter dimensions' }))
+    await user.type(screen.getByRole('textbox', { name: 'Filter dimensions' }), '292')
+    expect(screen.getAllByRole('row').slice(1)).toHaveLength(1)
+    expect(screen.getByText('292')).toBeTruthy()
+  })
 })
+
+function filled(value: number, at = -1, replacement = value): number[] {
+  return Array.from({ length: 293 }, (_, index) => (index === at ? replacement : value))
+}
+
+function queryOf(url: string): URLSearchParams {
+  return new URL(url).searchParams
+}
