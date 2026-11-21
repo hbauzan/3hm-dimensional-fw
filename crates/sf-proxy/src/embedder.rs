@@ -5,6 +5,9 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 use sf_kernels::{AlignedVec1024, DomainHypercubeLock, DIM};
 
+const RAW_F64_FAIL_CLOSED: &str =
+    "fail-closed: fhv1 raw float64 evaluation requires TeiHttpEmbedder (SF_EMBEDDER=http)";
+
 const SPECTRAL_MARKER: &str = "permutation_noise";
 const SPECTRAL_IN_BOX_VOTES: usize = 75;
 const OUTSIDE_MARGIN: f32 = 1.0e-3;
@@ -27,6 +30,16 @@ pub trait BatchEmbedderClient: Send + Sync {
     /// embeddings false-breach every mock vector.
     fn is_mock(&self) -> bool {
         false
+    }
+
+    /// Lossless binary64 batch. The default fails closed; only `TeiHttpEmbedder` preserves raw `f64`.
+    async fn embed_batch_raw_f64(
+        &self,
+        texts: &[&str],
+        normalize: bool,
+    ) -> Result<Vec<[f64; DIM]>, String> {
+        let _ = (texts, normalize);
+        Err(RAW_F64_FAIL_CLOSED.to_string())
     }
 }
 
@@ -75,6 +88,15 @@ impl BatchEmbedderClient for MockBatchEmbedder {
                 }
             })
             .collect())
+    }
+
+    async fn embed_batch_raw_f64(
+        &self,
+        texts: &[&str],
+        normalize: bool,
+    ) -> Result<Vec<[f64; DIM]>, String> {
+        let _ = (self, texts, normalize);
+        Err(RAW_F64_FAIL_CLOSED.to_string())
     }
 }
 
@@ -243,5 +265,27 @@ mod tests {
             .expect("empty map batch");
         assert_eq!(bits(&empty_batch[0]), bits(&python));
         assert_eq!(bits(&empty_batch[1]), bits(&breach));
+    }
+
+    #[tokio::test]
+    async fn mock_raw_f64_fails_closed() {
+        let embedder = MockBatchEmbedder {
+            pass_vector: AlignedVec1024::zeros(),
+            breach_vector: AlignedVec1024::zeros(),
+            centroids: HashMap::new(),
+        };
+        let err = embedder
+            .embed_batch_raw_f64(&["clause"], false)
+            .await
+            .expect_err("mock raw");
+        assert_eq!(
+            err,
+            "fail-closed: fhv1 raw float64 evaluation requires TeiHttpEmbedder (SF_EMBEDDER=http)"
+        );
+        let normalized = embedder
+            .embed_batch_raw_f64(&["clause"], true)
+            .await
+            .expect_err("mock raw normalized");
+        assert_eq!(normalized, err);
     }
 }

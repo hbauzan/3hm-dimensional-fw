@@ -21,6 +21,21 @@ impl std::fmt::Display for NormalizeError {
 
 impl std::error::Error for NormalizeError {}
 
+/// Accept a finite 1024-d binary64 row. No L2 normalization and no binary32 cast.
+pub fn validate_raw_f64_slice(src: &[f64]) -> Result<[f64; DIM], NormalizeError> {
+    if src.len() != DIM {
+        return Err(NormalizeError::BadLen { len: src.len() });
+    }
+    for (index, value) in src.iter().copied().enumerate() {
+        if !value.is_finite() {
+            return Err(NormalizeError::NonFinite { index });
+        }
+    }
+    let mut out = [0.0; DIM];
+    out.copy_from_slice(src);
+    Ok(out)
+}
+
 pub fn validate_and_normalize_f32_slice(src: &[f32]) -> Result<AlignedVec1024, NormalizeError> {
     if src.len() != DIM {
         return Err(NormalizeError::BadLen { len: src.len() });
@@ -42,4 +57,23 @@ pub fn validate_and_normalize_f32_slice(src: &[f32]) -> Result<AlignedVec1024, N
         out.data[index] = (f64::from(value) * inv) as f32;
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_raw_f64_slice;
+    use sf_kernels::DIM;
+
+    #[test]
+    fn raw_f64_keeps_bits_and_rejects_bad_rows() {
+        let mut row = [0.1f64; DIM];
+        row[3] = f64::from_bits(0.1f64.to_bits() + 1);
+        let out = validate_raw_f64_slice(&row).expect("raw");
+        assert_eq!(out[3].to_bits(), row[3].to_bits());
+        assert_ne!(out[3].to_bits(), f64::from(row[3] as f32).to_bits());
+        assert!(validate_raw_f64_slice(&[0.0; 4]).is_err());
+        let mut poisoned = [0.0; DIM];
+        poisoned[2] = f64::NAN;
+        assert!(validate_raw_f64_slice(&poisoned).is_err());
+    }
 }

@@ -1,8 +1,16 @@
 //! Numerical kernels. Cosine and hypercube masks dispatch to the active ISA.
 
+mod fhv1;
 mod scalar;
 mod simd;
 mod types;
+
+pub use fhv1::{
+    classify_movement_tiers, compute_fhv1_profile_stats, evaluate_fhv1_batch, evaluate_fhv1_chunk,
+    fhv1_evaluated_dims, is_fhv1_rogue_dimension, DimBoundStatus, Fhv1BatchEval, Fhv1ChunkEval,
+    Fhv1DimComparison, Fhv1Error, Fhv1EvalGranularity, Fhv1ProfileStats, Fhv1QuantileCutoffs,
+    Fhv1Quantiles, Fhv1TierClassification, MovementMetric, MovementTier,
+};
 
 pub use scalar::{
     evaluate_l3_gate, scalar_cosine_f64, scalar_cosine_similarity, scalar_hypercube_bitmask,

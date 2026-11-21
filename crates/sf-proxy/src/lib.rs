@@ -35,7 +35,7 @@ pub use env_config::{
 pub use handler::{
     handle_api_v1_upstream_env, handle_v1_chat_completions, router, router_with_cors, ProxyAppState,
 };
-pub use normalize::validate_and_normalize_f32_slice;
+pub use normalize::{validate_and_normalize_f32_slice, validate_raw_f64_slice};
 pub use normalizer::{InputNormalizer, NormalizedInput};
 pub use segmenter::segment_prompt_clauses;
 pub use tei::{embed_request, TeiGrpcEmbedder, TeiHttpEmbedder};

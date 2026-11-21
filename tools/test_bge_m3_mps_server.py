@@ -173,6 +173,25 @@ class HttpContractTest(unittest.TestCase):
         response = self.client.post("/embed", json={"inputs": []})
         self.assertEqual(response.status_code, 400)
 
+    def test_embed_normalize_false_preserves_unnormalized_output(self) -> None:
+        response = self.client.post(
+            "/embed",
+            json={"inputs": ["raw clause"], "normalize": False},
+        )
+        self.assertEqual(response.status_code, 200)
+        matrix = response.json()
+        self.assertEqual(len(matrix), 1)
+        self.assertEqual(len(matrix[0]), 1024)
+        self.assertEqual(matrix[0][0], 4.0)
+        self.assertEqual(matrix[0][1], 0.0)
+        norm = sum(value * value for value in matrix[0]) ** 0.5
+        self.assertAlmostEqual(norm, 4.0, delta=1e-5)
+        self.assertGreater(abs(norm - 1.0), 1e-3)
+        texts, kwargs = self.encoder.calls[-1]
+        self.assertEqual(texts, ["raw clause"])
+        self.assertFalse(kwargs["normalize_embeddings"])
+        self.assertEqual(kwargs["precision"], "float32")
+
     def test_embed_rejects_wrong_dimension(self) -> None:
         encoder = FakeEncoder(dim=8)
         client = TestClient(self.server.create_app(encoder, "cpu", "BAAI/bge-m3"))
