@@ -9,12 +9,43 @@ import {
   type ParseResult,
 } from './types.ts'
 
+export const FHV1_ROGUE_INDICES = [292, 297, 308, 329, 386, 404, 577, 616, 780] as const
+
+export const FHV1_TIER_NAMES = [
+  'ZeroSpan',
+  'LowAnchor',
+  'Moderate',
+  'HighVolatility',
+  'ExtremeMovement',
+] as const
+
+export const FHV1_METRICS = ['variance', 'std_dev', 'span'] as const
+
+export type Fhv1Metric = (typeof FHV1_METRICS)[number]
+
 export interface Fhv1ProfileSummary {
   profile_id: string
   policy_id: string
   sample_count: number
   normalize: boolean
   use_rogue_mask_default: boolean
+}
+
+export interface Fhv1QuantileCutoffs {
+  p25: number
+  p75: number
+  p90: number
+}
+
+export interface Fhv1ProfileDetail extends Fhv1ProfileSummary {
+  min: number[]
+  max: number[]
+  mean: number[]
+  span: number[]
+  variance: number[]
+  std_dev: number[]
+  movement_tier_codes: number[]
+  quantile_cutoffs: Fhv1QuantileCutoffs
 }
 
 export interface Fhv1LabChunk {
@@ -60,12 +91,28 @@ export function formatLosslessF64(value: number): string {
   return String(value)
 }
 
+export function writeExactText(text: string): Promise<void> {
+  return navigator.clipboard.writeText(text)
+}
+
 export function isFhv1FilterMode(value: string): value is Fhv1FilterMode {
   return (FHV1_FILTER_MODES as readonly string[]).includes(value)
 }
 
 export function isFhv1EvalGranularity(value: string): value is Fhv1EvalGranularity {
   return (FHV1_EVAL_GRANULARITIES as readonly string[]).includes(value)
+}
+
+export function isFhv1Metric(value: string): value is Fhv1Metric {
+  return (FHV1_METRICS as readonly string[]).includes(value)
+}
+
+export function isFhv1RogueDim(index: number): boolean {
+  return (FHV1_ROGUE_INDICES as readonly number[]).includes(index)
+}
+
+export function movementTierName(code: number): string {
+  return FHV1_TIER_NAMES[code] ?? `tier-${code}`
 }
 
 export function parseObservedBitsHex(value: unknown): ParseResult<string> {
@@ -129,34 +176,85 @@ export function parseFhv1ChatTelemetry(value: unknown): ParseResult<Fhv1ChatTele
   })
 }
 
+export function parseFhv1ProfileSummary(value: unknown): ParseResult<Fhv1ProfileSummary> {
+  if (!isRecord(value)) return fail('fhv1 profile is not an object')
+  const profileId = readString(value, 'profile_id')
+  const policyId = readString(value, 'policy_id')
+  const sampleCount = readCount(value, 'sample_count')
+  const normalize = readBoolean(value, 'normalize')
+  const mask = readBoolean(value, 'use_rogue_mask_default')
+  if (
+    profileId === undefined ||
+    policyId === undefined ||
+    sampleCount === undefined ||
+    normalize === undefined ||
+    mask === undefined
+  ) {
+    return fail('fhv1 profile summary is incomplete')
+  }
+  return ok({
+    profile_id: profileId,
+    policy_id: policyId,
+    sample_count: sampleCount,
+    normalize,
+    use_rogue_mask_default: mask,
+  })
+}
+
 export function parseFhv1Profiles(value: unknown): ParseResult<Fhv1ProfileSummary[]> {
   if (!Array.isArray(value)) return fail('fhv1 profiles payload is not an array')
   const profiles: Fhv1ProfileSummary[] = []
   for (const entry of value) {
-    if (!isRecord(entry)) return fail('fhv1 profile is not an object')
-    const profileId = readString(entry, 'profile_id')
-    const policyId = readString(entry, 'policy_id')
-    const sampleCount = readCount(entry, 'sample_count')
-    const normalize = readBoolean(entry, 'normalize')
-    const mask = readBoolean(entry, 'use_rogue_mask_default')
-    if (
-      profileId === undefined ||
-      policyId === undefined ||
-      sampleCount === undefined ||
-      normalize === undefined ||
-      mask === undefined
-    ) {
-      return fail('fhv1 profile summary is incomplete')
-    }
-    profiles.push({
-      profile_id: profileId,
-      policy_id: policyId,
-      sample_count: sampleCount,
-      normalize,
-      use_rogue_mask_default: mask,
-    })
+    const parsed = parseFhv1ProfileSummary(entry)
+    if (!parsed.ok) return parsed
+    profiles.push(parsed.value)
   }
   return ok(profiles)
+}
+
+export function parseFhv1ProfileDetail(value: unknown): ParseResult<Fhv1ProfileDetail> {
+  const summary = parseFhv1ProfileSummary(value)
+  if (!summary.ok) return summary
+  if (!isRecord(value)) return fail('fhv1 profile detail is not an object')
+  const min = readNumberArray(value, 'min')
+  const max = readNumberArray(value, 'max')
+  const mean = readNumberArray(value, 'mean')
+  const span = readNumberArray(value, 'span')
+  const variance = readNumberArray(value, 'variance')
+  const stdDev = readNumberArray(value, 'std_dev')
+  const tiers = readCountArray(value, 'movement_tier_codes')
+  const cutoffs = readCutoffs(value.quantile_cutoffs)
+  const width = min?.length
+  if (
+    min === undefined ||
+    max === undefined ||
+    mean === undefined ||
+    span === undefined ||
+    variance === undefined ||
+    stdDev === undefined ||
+    tiers === undefined ||
+    cutoffs === undefined ||
+    width === undefined ||
+    max.length !== width ||
+    mean.length !== width ||
+    span.length !== width ||
+    variance.length !== width ||
+    stdDev.length !== width ||
+    tiers.length !== width
+  ) {
+    return fail('fhv1 profile detail is incomplete')
+  }
+  return ok({
+    ...summary.value,
+    min,
+    max,
+    mean,
+    span,
+    variance,
+    std_dev: stdDev,
+    movement_tier_codes: tiers,
+    quantile_cutoffs: cutoffs,
+  })
 }
 
 export function parseFhv1Evaluation(value: unknown): ParseResult<Fhv1Evaluation> {
@@ -273,6 +371,37 @@ function parseChunks(value: unknown): ParseResult<Fhv1LabChunk[]> {
     })
   }
   return ok(chunks)
+}
+
+function readNumberArray(record: Record<string, unknown>, key: string): number[] | undefined {
+  const value = record[key]
+  if (!Array.isArray(value)) return undefined
+  const numbers: number[] = []
+  for (const entry of value) {
+    if (typeof entry !== 'number' || !Number.isFinite(entry)) return undefined
+    numbers.push(entry)
+  }
+  return numbers
+}
+
+function readCountArray(record: Record<string, unknown>, key: string): number[] | undefined {
+  const value = record[key]
+  if (!Array.isArray(value)) return undefined
+  const numbers: number[] = []
+  for (const entry of value) {
+    if (typeof entry !== 'number' || !Number.isInteger(entry) || entry < 0) return undefined
+    numbers.push(entry)
+  }
+  return numbers
+}
+
+function readCutoffs(value: unknown): Fhv1QuantileCutoffs | undefined {
+  if (!isRecord(value)) return undefined
+  const p25 = readNumber(value, 'p25')
+  const p75 = readNumber(value, 'p75')
+  const p90 = readNumber(value, 'p90')
+  if (p25 === undefined || p75 === undefined || p90 === undefined) return undefined
+  return { p25, p75, p90 }
 }
 
 function readString(record: Record<string, unknown>, key: string): string | undefined {

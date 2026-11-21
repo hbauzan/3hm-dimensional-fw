@@ -1,9 +1,13 @@
 import { resolveChatEndpoint } from '../domain/endpoint.ts'
 import {
   parseFhv1Evaluation,
+  parseFhv1ProfileDetail,
+  parseFhv1ProfileSummary,
   parseFhv1Profiles,
   parseFhv1TracePage,
   type Fhv1Evaluation,
+  type Fhv1Metric,
+  type Fhv1ProfileDetail,
   type Fhv1ProfileSummary,
   type Fhv1TracePage,
 } from '../domain/fhv1.ts'
@@ -23,6 +27,89 @@ export interface Fhv1TraceListQuery {
   sourceKind?: string
   page?: number
   pageSize?: number
+}
+
+export interface Fhv1ProfileQuery {
+  metric: Fhv1Metric
+  p25: string
+  p75: string
+  p90: string
+}
+
+export interface Fhv1CalibrateRequest {
+  policyId: string
+  texts: string[]
+  normalize: boolean
+  useRogueMaskDefault: boolean
+}
+
+export interface Fhv1ExportFile {
+  filename: string
+  blob: Blob
+}
+
+export async function getFhv1Profile(
+  gatewayBase: string,
+  profileId: string,
+  query: Fhv1ProfileQuery,
+  fetchImpl?: typeof fetch,
+): Promise<ParseResult<Fhv1ProfileDetail>> {
+  const params = new URLSearchParams()
+  params.set('metric', query.metric)
+  params.set('p25', query.p25)
+  params.set('p75', query.p75)
+  params.set('p90', query.p90)
+  const loaded = await getJson(
+    gatewayBase,
+    `/api/v1/fhv1/profiles/${encodeURIComponent(profileId)}?${params.toString()}`,
+    fetchImpl,
+  )
+  if (!loaded.ok) return loaded
+  return parseFhv1ProfileDetail(loaded.value)
+}
+
+export async function postFhv1Calibrate(
+  gatewayBase: string,
+  request: Fhv1CalibrateRequest,
+  fetchImpl?: typeof fetch,
+): Promise<ParseResult<Fhv1ProfileSummary>> {
+  const loaded = await sendJson(
+    gatewayBase,
+    '/api/v1/fhv1/calibrate',
+    {
+      policy_id: request.policyId,
+      texts: request.texts,
+      normalize: request.normalize,
+      use_rogue_mask_default: request.useRogueMaskDefault,
+    },
+    fetchImpl,
+  )
+  if (!loaded.ok) return loaded
+  return parseFhv1ProfileSummary(loaded.value)
+}
+
+export async function downloadFhv1Export(
+  gatewayBase: string,
+  profileId: string,
+  format: 'xlsx' | 'csv' | 'parquet',
+  fetchImpl?: typeof fetch,
+): Promise<ParseResult<Fhv1ExportFile>> {
+  const url = resolveFhv1Url(
+    gatewayBase,
+    `/api/v1/fhv1/profiles/${encodeURIComponent(profileId)}/export?format=${format}`,
+  )
+  if (!url.ok) return url
+  const fetchFn = fetchImpl ?? globalThis.fetch
+  try {
+    const response = await fetchFn(url.value)
+    if (!response.ok) return fail(explain(await readUnknown(response)))
+    const header = response.headers.get('content-disposition') ?? ''
+    const matched = /filename="([^"]+)"/.exec(header)
+    const filename = matched?.[1] ?? `${profileId}.${format}`
+    return ok({ filename, blob: await response.blob() })
+  } catch (error) {
+    return fail(error instanceof Error ? error.message : 'fhv1 export failed')
+  }
 }
 
 export async function listFhv1Profiles(
