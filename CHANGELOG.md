@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 - Suite 2 reports `blocked_prod` and `recall_prod` beside Mode A `blocked` / `recall`. The new count is attacks with `!contained_prod` (primary Mode C cascade, then `evaluate_pairwise_containment`). On the v0.2.1 fixtures the attack counts match Mode A: EN 64/82, ES 90/90, pooled 154/172. Clean false positives are unchanged (Mode A 36/100, production Mode C 31/100).
+- `pnpm --dir frontend test:e2e` passes (9 tests) when `sf-proxy` uses `SF_EMBEDDER=http` and `data/sf-lancedb` is the 66-lock catalog written by `calibrate_canonical_pairs` against `BAAI/bge-m3` (`float32`). The synthetic catalog from `seed_canonical_locks` is a different catalog.
 
 ## 0.2.1 - 2026-11-19
 

@@ -199,6 +199,26 @@ pnpm test
 pnpm run lint
 ```
 
+### Playwright (`pnpm --dir frontend test:e2e`)
+
+`frontend/playwright.config.ts` starts Vite on `127.0.0.1:5173`. `sf-proxy` on `127.0.0.1:8088` has to be up already. The passing run uses `SF_EMBEDDER=http` and the catalog written by `calibrate_canonical_pairs`.
+
+```bash
+HF_HUB_OFFLINE=1 uv run --script tools/bge_m3_mps_server.py
+cargo run -p sf-bench --bin calibrate_canonical_pairs -- \
+  --tei-url http://127.0.0.1:8080 \
+  --lancedb-uri data/sf-lancedb
+cargo run -p sf-proxy --bin sf-proxy -- \
+  --listen 127.0.0.1:8088 \
+  --lancedb-uri data/sf-lancedb \
+  --embedder http \
+  --tei-http-url http://127.0.0.1:8080 \
+  --default-domain python
+pnpm --dir frontend test:e2e
+```
+
+`HF_HUB_OFFLINE=1` loads the cached snapshot `~/.cache/huggingface/hub/models--BAAI--bge-m3`. Leave the variable unset when that snapshot is absent and the Hub is reachable. `calibrate_canonical_pairs` overwrites `data/sf-lancedb` with 11 domain locks and 55 pairs. `seed_canonical_locks` writes synthetic spike centroids; that is the catalog `setup.sh` seeds, and it is a separate catalog from this suite. Chromium is the Playwright build (`chromium_headless_shell-1248` for `@playwright/test` 1.64). Set `PLAYWRIGHT_BROWSERS_PATH` to `$HOME/Library/Caches/ms-playwright` when that directory holds the binary.
+
 ### Continuous integration
 
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on push and pull request:
