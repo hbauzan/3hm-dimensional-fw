@@ -5,6 +5,7 @@ mod chat_api;
 mod cors;
 mod embedder;
 mod env_config;
+mod fhv1_api;
 mod fhv1_pipeline;
 mod handler;
 mod normalize;

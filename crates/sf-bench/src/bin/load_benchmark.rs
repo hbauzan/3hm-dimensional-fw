@@ -99,6 +99,7 @@ async fn main() {
         mock_upstream: Arc::new(MockUpstreamForwarder),
         default_domain: "python_receta".to_string(),
         max_telemetry_coords: 1,
+        fhv1_store: None,
     });
     let app = router(state);
 

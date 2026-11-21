@@ -71,6 +71,7 @@ fn state(
         mock_upstream: upstream,
         default_domain: "python".to_string(),
         max_telemetry_coords: 4,
+        fhv1_store: None,
     });
     (registry, app_state)
 }
@@ -406,6 +407,7 @@ async fn chat_mock_upstream_does_not_forward_to_unreachable_network_upstream() {
         mock_upstream: Arc::new(MockUpstreamForwarder),
         default_domain: "python".to_string(),
         max_telemetry_coords: 4,
+        fhv1_store: None,
     });
     let app = router(app_state);
 
@@ -468,6 +470,7 @@ fn app_with_pair(
         mock_upstream: Arc::new(MockUpstreamForwarder),
         default_domain: "python".to_string(),
         max_telemetry_coords: 4,
+        fhv1_store: None,
     }))
 }
 
@@ -596,6 +599,7 @@ async fn permutation_noise_breaches_spectral_quorum_on_an_in_domain_embedding() 
         mock_upstream: Arc::new(MockUpstreamForwarder),
         default_domain: "python".to_string(),
         max_telemetry_coords: 4,
+        fhv1_store: None,
     }));
     let (status, _, body) = oneshot(
         app,
@@ -783,6 +787,7 @@ async fn one_embed_batch_keeps_skipped_clauses_when_the_first_clause_breaches() 
         mock_upstream: Arc::new(MockUpstreamForwarder),
         default_domain: "python".to_string(),
         max_telemetry_coords: 4,
+        fhv1_store: None,
     }));
 
     let (status, _, body) = oneshot(

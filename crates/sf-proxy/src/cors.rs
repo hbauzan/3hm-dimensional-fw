@@ -40,6 +40,9 @@ impl CorsAllow {
                 HeaderName::from_static("x-sf-decision"),
                 HeaderName::from_static("x-sf-latency-ns"),
                 HeaderName::from_static("x-sf-telemetry"),
+                HeaderName::from_static("content-disposition"),
+                HeaderName::from_static("x-sf-trace-id"),
+                HeaderName::from_static("x-sf-fhv1-decision"),
             ]);
         match self {
             Self::Any => layer.allow_origin(Any),

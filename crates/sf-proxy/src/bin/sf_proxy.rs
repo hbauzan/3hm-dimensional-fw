@@ -8,7 +8,7 @@ use sf_proxy::{
     router_with_cors, BatchEmbedderClient, CorsAllow, MockBatchEmbedder, ProxyAppState,
     ReqwestChatForwarder, TeiGrpcEmbedder, TeiHttpEmbedder,
 };
-use sf_storage::{HotRegistry, TABLE_NAME};
+use sf_storage::{Fhv1Store, HotRegistry, TABLE_NAME};
 use tokio::net::TcpListener;
 
 #[derive(Debug, Parser)]
@@ -149,6 +149,7 @@ async fn main() {
         mock_upstream: Arc::new(sf_proxy::MockUpstreamForwarder),
         default_domain,
         max_telemetry_coords,
+        fhv1_store: Some(Arc::new(Fhv1Store::new(lancedb_uri))),
     });
     let app = router_with_cors(state, cors);
     let listener = TcpListener::bind(&listen)

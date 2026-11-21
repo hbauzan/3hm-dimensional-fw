@@ -53,6 +53,7 @@ fn app() -> axum::Router {
         mock_upstream: Arc::new(MockUpstreamForwarder),
         default_domain: "python".to_string(),
         max_telemetry_coords: 4,
+        fhv1_store: None,
     });
     router(state)
 }

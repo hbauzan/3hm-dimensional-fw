@@ -179,6 +179,7 @@ fn app() -> axum::Router {
         }),
         default_domain: "python".to_string(),
         max_telemetry_coords: 4,
+        fhv1_store: None,
     }))
 }
 

@@ -22,6 +22,7 @@ pub struct ProxyAppState {
     pub mock_upstream: Arc<dyn UpstreamLlmForwarder>,
     pub default_domain: String,
     pub max_telemetry_coords: usize,
+    pub fhv1_store: Option<Arc<sf_storage::Fhv1Store>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -50,6 +51,7 @@ pub fn router_with_cors(state: Arc<ProxyAppState>, cors: CorsAllow) -> axum::Rou
             "/api/v1/upstream/env",
             axum::routing::get(handle_api_v1_upstream_env),
         )
+        .merge(crate::fhv1_api::routes())
         .layer(cors.layer())
         .with_state(state)
 }

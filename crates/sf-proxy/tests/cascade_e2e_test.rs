@@ -65,6 +65,7 @@ impl Harness {
             mock_upstream: Arc::new(MockUpstreamForwarder),
             default_domain: "python".to_string(),
             max_telemetry_coords: 4,
+            fhv1_store: None,
         });
         Self { app: router(state) }
     }
@@ -169,6 +170,7 @@ async fn live_hot_swap_from_lancedb_increments_domain_version() {
         mock_upstream: Arc::new(MockUpstreamForwarder),
         default_domain: "python".to_string(),
         max_telemetry_coords: 4,
+        fhv1_store: None,
     });
     let app = router(state);
 

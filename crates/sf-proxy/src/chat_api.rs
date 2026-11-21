@@ -59,6 +59,14 @@ pub struct ChatRequestDto {
     pub domain_id: Option<String>,
     pub overrides: Option<ChatOverridesDto>,
     pub upstream: Option<UpstreamConfigDto>,
+    #[serde(default)]
+    pub filter_mode: Option<String>,
+    #[serde(default)]
+    pub fhv1_profile_id: Option<String>,
+    #[serde(default)]
+    pub fhv1_granularity: Option<String>,
+    #[serde(default)]
+    pub fhv1_use_rogue_mask: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -813,6 +821,40 @@ pub async fn handle_api_v1_chat(
         return json_error(StatusCode::BAD_REQUEST, "missing user message");
     };
     let user_text = user_text.to_string();
+    let filter_mode = match crate::fhv1_api::chat_filter_mode(&payload) {
+        Ok(mode) => mode,
+        Err(response) => return response,
+    };
+    if filter_mode == "fhv1" {
+        if let Err(response) = crate::fhv1_api::run_realtime_chat(
+            &state,
+            crate::fhv1_api::RealtimeChatFhv1 {
+                payload: &payload,
+                user_text: &user_text,
+                preserve_3hm_breach: false,
+                reused_texts: &[],
+                reused_vectors: &[],
+                embedding_ms: 0.0,
+            },
+        )
+        .await
+        {
+            return response;
+        }
+        return forward_accepted_chat(
+            &state,
+            &payload,
+            AcceptedChat {
+                clauses_evaluated: 0,
+                normalizer_segmenter_us: 0,
+                embedding_inference_ms: 0.0,
+                simd_gate_kernel_us: 0,
+                total_pipeline_ms: 0.0,
+                gate_dto: None,
+            },
+        )
+        .await;
+    }
 
     let mut lock = match resolve_lock(&state, payload.domain_id.as_deref()) {
         Ok(lock) => lock,
@@ -892,6 +934,23 @@ pub async fn handle_api_v1_chat(
                 total_pipeline_ms,
                 skipped,
             );
+            if filter_mode == "3hm_plus_fhv1" {
+                if let Err(response) = crate::fhv1_api::run_realtime_chat(
+                    &state,
+                    crate::fhv1_api::RealtimeChatFhv1 {
+                        payload: &payload,
+                        user_text: &user_text,
+                        preserve_3hm_breach: true,
+                        reused_texts: &batch,
+                        reused_vectors: &vectors,
+                        embedding_ms: embedding_inference_ms,
+                    },
+                )
+                .await
+                {
+                    return response;
+                }
+            }
             return res;
         }
     };
@@ -922,10 +981,74 @@ pub async fn handle_api_v1_chat(
                 total_pipeline_ms,
                 0,
             );
+            if filter_mode == "3hm_plus_fhv1" {
+                if let Err(response) = crate::fhv1_api::run_realtime_chat(
+                    &state,
+                    crate::fhv1_api::RealtimeChatFhv1 {
+                        payload: &payload,
+                        user_text: &user_text,
+                        preserve_3hm_breach: true,
+                        reused_texts: &batch,
+                        reused_vectors: &vectors,
+                        embedding_ms: embedding_inference_ms,
+                    },
+                )
+                .await
+                {
+                    return response;
+                }
+            }
             return res;
         }
     }
 
+    if filter_mode == "3hm_plus_fhv1" {
+        if let Err(response) = crate::fhv1_api::run_realtime_chat(
+            &state,
+            crate::fhv1_api::RealtimeChatFhv1 {
+                payload: &payload,
+                user_text: &user_text,
+                preserve_3hm_breach: false,
+                reused_texts: &batch,
+                reused_vectors: &vectors,
+                embedding_ms: embedding_inference_ms,
+            },
+        )
+        .await
+        {
+            return response;
+        }
+    }
+
+    forward_accepted_chat(
+        &state,
+        &payload,
+        AcceptedChat {
+            clauses_evaluated: clauses.len(),
+            normalizer_segmenter_us,
+            embedding_inference_ms,
+            simd_gate_kernel_us,
+            total_pipeline_ms,
+            gate_dto: Some(&gate_dto),
+        },
+    )
+    .await
+}
+
+struct AcceptedChat<'a> {
+    clauses_evaluated: usize,
+    normalizer_segmenter_us: u64,
+    embedding_inference_ms: f64,
+    simd_gate_kernel_us: u64,
+    total_pipeline_ms: f64,
+    gate_dto: Option<&'a ChatBreachDto>,
+}
+
+async fn forward_accepted_chat(
+    state: &ProxyAppState,
+    payload: &ChatRequestDto,
+    accepted: AcceptedChat<'_>,
+) -> Response {
     let upstream = match resolve_chat_upstream(payload.upstream.as_ref()) {
         Ok(upstream) => upstream,
         Err(reject) => return json_error(reject.status, reject.message),
@@ -955,20 +1078,22 @@ pub async fn handle_api_v1_chat(
         Ok(mut response) => {
             let headers = response.headers_mut();
             headers.insert("x-sf-decision", HeaderValue::from_static("PASS"));
-            if let Ok(value) = HeaderValue::from_str(&clauses.len().to_string()) {
+            if let Ok(value) = HeaderValue::from_str(&accepted.clauses_evaluated.to_string()) {
                 headers.insert("x-sf-clauses-evaluated", value);
             }
             add_latency_headers(
                 headers,
-                normalizer_segmenter_us,
-                embedding_inference_ms,
-                simd_gate_kernel_us,
-                total_pipeline_ms,
+                accepted.normalizer_segmenter_us,
+                accepted.embedding_inference_ms,
+                accepted.simd_gate_kernel_us,
+                accepted.total_pipeline_ms,
                 0,
             );
-            if let Ok(json_str) = serde_json::to_string(&gate_dto) {
-                if let Ok(val) = HeaderValue::from_str(&json_str) {
-                    headers.insert("x-sf-telemetry", val);
+            if let Some(gate_dto) = accepted.gate_dto {
+                if let Ok(json_str) = serde_json::to_string(gate_dto) {
+                    if let Ok(val) = HeaderValue::from_str(&json_str) {
+                        headers.insert("x-sf-telemetry", val);
+                    }
                 }
             }
             response
