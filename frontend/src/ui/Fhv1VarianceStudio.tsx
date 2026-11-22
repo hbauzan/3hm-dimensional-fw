@@ -169,8 +169,9 @@ export function Fhv1VarianceStudio({
   }
 
   return (
-    <section aria-label="Variance studio" className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto bg-studio-bg p-3 text-xs text-studio-text">
-      <div className="flex flex-wrap items-end gap-2">
+    <section aria-label="Variance studio" className="min-h-0 flex-1 overflow-y-auto bg-studio-bg p-3 text-xs text-studio-text">
+      <div className="flex flex-col gap-3">
+        <div className="flex flex-wrap items-end gap-2">
         <label className="flex flex-col gap-1 text-[10px] uppercase tracking-wide text-studio-muted">
           fhv1 profile
           <select
@@ -263,7 +264,7 @@ export function Fhv1VarianceStudio({
         Filter dimensions
         <input aria-label="Filter dimensions" className="border border-studio-line bg-studio-bg px-1.5 py-0.5" value={filter} onChange={(event) => setFilter(event.target.value)} />
       </label>
-      <div className="overflow-auto border border-studio-line">
+      <div className="overflow-x-auto border border-studio-line">
         <table aria-label="fhv1 envelope" className="w-full border-collapse font-mono text-[10px]">
           <thead>
             <tr>
@@ -293,6 +294,7 @@ export function Fhv1VarianceStudio({
             ))}
           </tbody>
         </table>
+      </div>
       </div>
     </section>
   )

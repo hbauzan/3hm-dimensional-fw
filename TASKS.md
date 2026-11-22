@@ -1,11 +1,11 @@
 ---
 task_id: "TASK-011"
-status: "IN_PROGRESS"
+status: "DONE"
 assigned_architect: "maximum-architect-agent"
 protocol: "transparent-dev-protocol"
 title: "fhv1 Hardening, Leak-Free Scientific Benchmark, LLM Corpus Augmentation (1B) & Empirical Falsification Re-Run"
 created_at: "2026-11-21T22:45:00-03:00"
-active_slice: "7"
+active_slice: "DONE"
 ---
 
 # TASK-011: `fhv1` Hardening, Leak-Free Scientific Benchmark, LLM Corpus Augmentation (`1B`) & Empirical Falsification Re-Run
@@ -27,4 +27,4 @@ Close all P0 (3), P1 (4), and P2 (6) defects identified in `main @ f239f19` per 
 - [x] **Slice 4**: Curated offline base corpus `150–300` docs/domain (`1A` / `P0-2`), leak-free 400-prompt/domain 4-quadrant benchmark rebuild with `subtype` metadata & strict leak/language/length validators (`P0-1`), and `augment_fhv1_corpus.py --augment-llm` fail-closed CLI + offline tests (`1B` tooling).
 - [x] **Slice 5**: Complete View 3 (`Fhv1BenchmarkExplorer` histogram global/per-category ECharts canvas, 1,024D input vector overlay canvas, lossless drill-down `mean`/`delta_vs_mean`/`norm_pos`, Category/Verdict filters — `P1-1`), default `"variance"` in `Fhv1VarianceStudio.tsx` (`P2-8`), and `fhv1.spec.ts` regex + View 3 E2E assertions (`P2-11`).
 - [x] **Slice 6**: Live `1B` `--augment-llm` expansion (`500–1,000+` cached SHA-256 JSONL texts/domain), purge stale `fhv1_*` ONLY (`domain_hypercubes` untouched), calibrate 4 live profiles (`normalize={true,false}`), execute 24-run live matrix, run `verify_fhv1_exports_0ulp.py` across `.xlsx`/`.csv`/`.parquet`/JSON/LanceDB (`P0-3`), write `reports/fhv1_task011_empirical_report.md` (profiles: `python-v1-42270ed8870d`, `python-v2-42270ed8870d`, `receta-v1-5c820b9b36b3`, `receta-v2-5c820b9b36b3`; `24` runs, `9,600` prompt-scoped traces / `164,924` chunk rows, `76,608,512` floats `max_ulp=0`).
-- [ ] **Slice 7**: Live Playwright E2E certification (`playground.spec.ts` + expanded `fhv1.spec.ts` on `:8080` + `:8088`, `P1-4`), full workspace gate re-verification, `CHANGELOG.md` `## [Unreleased]` sync (`0.2.1` frozen), `TASKS.md` `DONE` + `agent.sh validate`/`notify`, git/authorship/lexical/LanceDB audit, and untracked `audit_task011_evidence.md`.
+- [x] **Slice 7**: Live Playwright E2E certification (`playground.spec.ts` + expanded `fhv1.spec.ts` `14/14` passed on `:8080` + `:8088`, `P1-4`; plus `Fhv1BenchmarkExplorer`/`Fhv1VarianceStudio` flex scroll fix and `*.zip|xlsx` export check), `0-ULP` live confirmation (`76,608,512` floats `max_ulp=0`), full workspace gate re-verification, `CHANGELOG.md` `## [Unreleased]` sync (`0.2.1` frozen), `TASKS.md` `DONE` + `agent.sh validate`/`notify`, git/authorship/lexical/LanceDB audit (`66` rows byte-identical), and untracked `audit_task011_evidence.md`.

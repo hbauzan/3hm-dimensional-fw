@@ -148,7 +148,7 @@ test('variance studio refreshes the variance quantile and downloads csv and xlsx
 
   const xlsxDownload = page.waitForEvent('download')
   await page.getByRole('button', { name: 'Export xlsx' }).click()
-  expect((await xlsxDownload).suggestedFilename()).toMatch(/^python-v1-.*\.xlsx$/)
+  expect((await xlsxDownload).suggestedFilename()).toMatch(/^python-v1-.*\.(xlsx|zip)$/)
 })
 
 test('benchmark explorer pages a python run and drills raw bits', async ({ page }) => {

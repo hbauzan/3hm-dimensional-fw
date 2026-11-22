@@ -162,8 +162,9 @@ export function Fhv1BenchmarkExplorer({
   const pageCount = Math.max(1, Math.ceil(total / 20))
 
   return (
-    <section aria-label="Benchmark explorer" className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto bg-studio-bg p-3 text-xs text-studio-text">
-      <label className="flex max-w-md flex-col gap-1 text-[10px] uppercase tracking-wide text-studio-muted">
+    <section aria-label="Benchmark explorer" className="min-h-0 flex-1 overflow-y-auto bg-studio-bg p-3 text-xs text-studio-text">
+      <div className="flex flex-col gap-3">
+        <label className="flex max-w-md flex-col gap-1 text-[10px] uppercase tracking-wide text-studio-muted">
         Benchmark run
         <select
           aria-label="Benchmark run"
@@ -263,7 +264,7 @@ export function Fhv1BenchmarkExplorer({
           </select>
         </label>
       </div>
-      <div className="overflow-auto border border-studio-line">
+      <div className="overflow-x-auto border border-studio-line">
         <table aria-label="fhv1 audit traces" className="w-full border-collapse font-mono text-[10px]">
           <thead>
             <tr>
@@ -355,6 +356,7 @@ export function Fhv1BenchmarkExplorer({
           ) : null}
         </section>
       ) : null}
+      </div>
     </section>
   )
 }
@@ -373,7 +375,7 @@ function ComparisonTable({ rows }: { rows: readonly Fhv1GranularityComparison[] 
     'f1',
   ] as const
   return (
-    <div className="overflow-auto border border-studio-line">
+    <div className="overflow-x-auto border border-studio-line">
       <table aria-label="Granularity comparison" className="w-full border-collapse font-mono text-[10px]">
         <caption className="px-1 py-1 text-left text-[10px] uppercase tracking-wide text-studio-muted">
           Granularity & Mask Comparison
