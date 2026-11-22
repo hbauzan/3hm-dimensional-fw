@@ -701,5 +701,460 @@ class Mode1BAndDeltaMetricsTest(unittest.TestCase):
         self.assertEqual(args_1b.out, Path("/tmp/custom_1b.json"))
 
 
+def _balanced_population(
+    column_specs: list[tuple[float, float] | np.ndarray],
+    *,
+    n_rows: int = 4,
+) -> np.ndarray:
+    """Rows whose sample mean and ddof=1 std match each (mean, std) column."""
+    signs = np.array([-1.0 if i % 2 == 0 else 1.0 for i in range(n_rows)], dtype=np.float64)
+    unit = signs * math.sqrt((n_rows - 1.0) / n_rows)
+    matrix = np.zeros((n_rows, len(column_specs)), dtype=np.float64)
+    for dim, spec in enumerate(column_specs):
+        if isinstance(spec, np.ndarray):
+            column = np.asarray(spec, dtype=np.float64)
+            if column.shape != (n_rows,):
+                raise ValueError(f"explicit column {dim} shape {column.shape} != ({n_rows},)")
+            matrix[:, dim] = column
+        else:
+            mean, std = spec
+            matrix[:, dim] = float(mean) + unit * float(std)
+    return matrix
+
+
+def _v2_bucket_fixture() -> tuple[np.ndarray, np.ndarray, list[int], np.ndarray, np.ndarray]:
+    """13-D population covering every v2 bucket and the priority edges."""
+    eps = xray.EPS
+    target = _balanced_population(
+        [
+            (0.20, 0.10),  # 0 backbone
+            (0.20, 0.10),  # 1 backbone stats, opposite EN/ES sign
+            (0.40, 0.10),  # 2 locale, would-be polarity
+            (0.30, 0.10),  # 3 locale set, but backbone wins
+            np.array([1.5, 1.5, 0.0, 1.5], dtype=np.float64),  # 4 polarity, sep >= 1, one zero
+            (0.20, 0.40),  # 5 polarity fine
+            (0.50, 0.10),  # 6 firm anchor
+            (0.005, 0.010),  # 7 negative intruder, mean shift
+            (0.20, 0.20),  # 8 subtle
+            (0.02, 0.20),  # 9 low-signal
+            (0.00, 0.01),  # 10 negative intruder, variance energy; mu_T == 0
+            (0.35 * (1.0 + eps), 1.0),  # 11 sep == 0.35 subtle boundary
+            (0.349 * (1.0 + eps), 1.0),  # 12 sep == 0.349 noise boundary
+        ]
+    )
+    contrast = _balanced_population(
+        [
+            (0.20, 0.10),
+            (0.20, 0.10),
+            (-0.40, 0.10),
+            (0.30, 0.10),
+            (-0.50, 0.00),
+            (-0.10, 0.40),
+            (0.10, 0.10),
+            (0.040, 0.010),
+            (0.10, 0.20),
+            (0.01, 0.20),
+            (0.00, 0.02),
+            (0.00, 1.0),
+            (0.00, 1.0),
+        ]
+    )
+    locale_dims = [2, 3]
+    general_prose_en = np.full(target.shape[1], 0.2, dtype=np.float64)
+    general_prose_es = np.full(target.shape[1], 0.2, dtype=np.float64)
+    general_prose_es[1] = -0.2
+    return target, contrast, locale_dims, general_prose_en, general_prose_es
+
+
+def _language_pair(sep: np.ndarray, *, n_rows: int = 8) -> tuple[np.ndarray, np.ndarray]:
+    """EN/ES matrices with sample std 1 and sep_lang exactly equal to `sep`."""
+    signs = np.array([-1.0 if i % 2 == 0 else 1.0 for i in range(n_rows)], dtype=np.float64)
+    unit = signs * math.sqrt((n_rows - 1.0) / n_rows)
+    dim = int(sep.shape[0])
+    en = np.zeros((n_rows, dim), dtype=np.float64)
+    es = np.zeros((n_rows, dim), dtype=np.float64)
+    for d in range(dim):
+        delta = float(sep[d]) * (1.0 + xray.EPS)
+        if d % 2 == 0:
+            mu_en = 0.75 * delta
+            mu_es = -0.25 * delta
+        else:
+            mu_en = -0.25 * delta
+            mu_es = 0.75 * delta
+        en[:, d] = mu_en + unit
+        es[:, d] = mu_es + unit
+    return en, es
+
+
+def _mean_snr_ratio(en_matrix: np.ndarray, es_matrix: np.ndarray) -> float:
+    mu_en = np.mean(en_matrix, axis=0)
+    mu_es = np.mean(es_matrix, axis=0)
+    std_en = np.std(en_matrix, axis=0, ddof=1)
+    std_es = np.std(es_matrix, axis=0, ddof=1)
+    snr_en = np.abs(mu_en) / (std_en + xray.EPS)
+    snr_es = np.abs(mu_es) / (std_es + xray.EPS)
+    return float(np.mean((snr_en + xray.EPS) / (snr_es + xray.EPS)))
+
+
+class ModeV2FineDialsTest(unittest.TestCase):
+    def test_prueba_a_sep_lang_locale_secondary_jaccard_and_unnorm_only_dim(self) -> None:
+        dim = 160
+        sep_true = np.array([(dim - d) / 100.0 for d in range(dim)], dtype=np.float64)
+        sep_false = sep_true.copy()
+        sep_false[159] = 5.0
+        sep_false[127] = 0.001
+        en_true, es_true = _language_pair(sep_true)
+        en_false, es_false = _language_pair(sep_false)
+
+        result = xray.analyze_prueba_a(en_true, es_true, en_false, es_false)
+        np.testing.assert_allclose(result["normalize_true"]["sep_lang"], sep_true, rtol=0.0, atol=1e-12)
+        np.testing.assert_allclose(result["normalize_false"]["sep_lang"], sep_false, rtol=0.0, atol=1e-12)
+        self.assertAlmostEqual(
+            result["normalize_true"]["mean_sep_lang"], float(np.mean(sep_true)), places=12
+        )
+        self.assertAlmostEqual(
+            result["normalize_false"]["mean_sep_lang"], float(np.mean(sep_false)), places=12
+        )
+        self.assertAlmostEqual(result["normalize_true"]["mean_snr_ratio"], _mean_snr_ratio(en_true, es_true), places=12)
+        self.assertAlmostEqual(
+            result["normalize_false"]["mean_snr_ratio"], _mean_snr_ratio(en_false, es_false), places=12
+        )
+        self.assertEqual(result["mean_snr_ratio"]["normalize_true"], result["normalize_true"]["mean_snr_ratio"])
+        self.assertEqual(result["mean_snr_ratio"]["normalize_false"], result["normalize_false"]["mean_snr_ratio"])
+
+        primary = list(range(0, 61))
+        secondary = list(range(61, 96))
+        self.assertEqual(result["locale_lang_dims"], primary)
+        self.assertEqual(result["secondary_band_dims"], secondary)
+        self.assertTrue(set(result["locale_lang_dims"]).isdisjoint(result["secondary_band_dims"]))
+        self.assertNotIn(159, result["locale_lang_dims"])
+        self.assertIn(159, result["normalize_false"]["sep_ge_1_dims"])
+        self.assertEqual(result["only_in_normalize_false_top128"], [159])
+
+        self.assertAlmostEqual(result["jaccard_top_k"]["16"], 15 / 17, places=12)
+        self.assertAlmostEqual(result["jaccard_top_k"]["32"], 31 / 33, places=12)
+        self.assertAlmostEqual(result["jaccard_top_k"]["64"], 63 / 65, places=12)
+        self.assertAlmostEqual(result["jaccard_top_k"]["128"], 127 / 129, places=12)
+
+        en_high = result["top20_en_high"]
+        es_high = result["top20_es_high"]
+        self.assertEqual([row["dim"] for row in en_high], list(range(0, 40, 2)))
+        self.assertEqual([row["dim"] for row in es_high], list(range(1, 41, 2)))
+        true_block = en_high[0]["normalize_true"]
+        false_block = en_high[0]["normalize_false"]
+        self.assertTrue(true_block["mean_en_float64"].startswith("+"))
+        self.assertTrue(true_block["mean_es_float64"].startswith("-"))
+        self.assertTrue(true_block["mean_en_float32"].startswith("+"))
+        self.assertTrue(true_block["mean_es_float32"].startswith("-"))
+        self.assertNotEqual(true_block["mean_en_float64"], true_block["mean_en_float32"])
+        self.assertIn("mean_en_float64", false_block)
+        self.assertIn("mean_es_float32", false_block)
+        self.assertTrue(es_high[0]["normalize_true"]["mean_en_float64"].startswith("-"))
+        self.assertTrue(es_high[0]["normalize_true"]["mean_es_float64"].startswith("+"))
+        json.dumps(result)
+
+    def test_signed_rendering_float64_and_float32_cast(self) -> None:
+        positive = xray.render_signed_float64_and_float32(np.float64(0.1))
+        negative = xray.render_signed_float64_and_float32(np.float64(-0.1))
+        self.assertTrue(positive["float64"].startswith("+"))
+        self.assertTrue(positive["float32"].startswith("+"))
+        self.assertTrue(negative["float64"].startswith("-"))
+        self.assertTrue(negative["float32"].startswith("-"))
+        self.assertNotEqual(positive["float64"], positive["float32"])
+        self.assertNotEqual(negative["float64"], negative["float32"])
+        self.assertAlmostEqual(float(positive["float64"]), float(np.float64(0.1)), places=12)
+        self.assertAlmostEqual(float(positive["float32"]), float(np.float32(np.float64(0.1))), places=12)
+        self.assertAlmostEqual(float(negative["float32"]), float(np.float32(np.float64(-0.1))), places=12)
+        self.assertEqual(xray.render_signed_number(np.float64(0.0)), "+0")
+        self.assertTrue(xray.render_signed_number(np.float64(-0.0)).startswith("-"))
+
+    def test_v2_six_buckets_are_exclusive_and_priority_ordered(self) -> None:
+        target, contrast, locale_dims, gp_en, gp_es = _v2_bucket_fixture()
+        result = xray.classify_dimensions_v2(
+            target,
+            contrast,
+            locale_lang_dims=locale_dims,
+            general_prose_en_mean=gp_en,
+            general_prose_es_mean=gp_es,
+            target_name="python",
+            contrast_name="1B_full:en",
+        )
+        expected = {
+            0: "BACKBONE_UNIVERSAL",
+            1: "LOW_SIGNAL_NOISE",
+            2: "LOCALE_LANG_DIMS",
+            3: "BACKBONE_UNIVERSAL",
+            4: "POLARITY_FLIP_DIALS",
+            5: "POLARITY_FLIP_DIALS",
+            6: "FIRM_DOMAIN_ANCHOR",
+            7: "NEGATIVE_INTRUDER_SENSOR",
+            8: "SUBTLE_DISCRIMINATORS",
+            9: "LOW_SIGNAL_NOISE",
+            10: "NEGATIVE_INTRUDER_SENSOR",
+            11: "SUBTLE_DISCRIMINATORS",
+            12: "LOW_SIGNAL_NOISE",
+        }
+        self.assertEqual(
+            xray.V2_BUCKET_ORDER,
+            (
+                "BACKBONE_UNIVERSAL",
+                "LOCALE_LANG_DIMS",
+                "POLARITY_FLIP_DIALS",
+                "FIRM_DOMAIN_ANCHOR",
+                "NEGATIVE_INTRUDER_SENSOR",
+                "SUBTLE_DISCRIMINATORS",
+                "LOW_SIGNAL_NOISE",
+            ),
+        )
+        self.assertEqual([row["bucket"] for row in result["dimensions"]], [expected[d] for d in range(13)])
+        assigned: list[int] = []
+        for bucket in xray.V2_BUCKET_ORDER:
+            assigned.extend(result["bucket_dims"][bucket])
+            self.assertEqual(result["bucket_counts"][bucket], len(result["bucket_dims"][bucket]))
+        self.assertEqual(sorted(assigned), list(range(13)))
+        self.assertEqual(sum(result["bucket_counts"].values()), 13)
+        # Dim 1 meets the numeric backbone tests but EN and ES general_prose signs disagree.
+        blocked = result["dimensions"][1]
+        self.assertGreaterEqual(blocked["snr_T"], 1.5)
+        self.assertGreaterEqual(blocked["snr_C"], 1.5)
+        self.assertGreater(blocked["mean_T"] * blocked["mean_C"], 0.0)
+        self.assertLess(blocked["sep"], 0.75)
+        self.assertLess(gp_en[1] * gp_es[1], 0.0)
+        self.assertEqual(blocked["bucket"], "LOW_SIGNAL_NOISE")
+        # Locale membership loses to backbone and beats a strong polarity flip.
+        self.assertIn(3, locale_dims)
+        self.assertEqual(result["dimensions"][3]["bucket"], "BACKBONE_UNIVERSAL")
+        self.assertIn(2, locale_dims)
+        self.assertLess(result["dimensions"][2]["mean_T"] * result["dimensions"][2]["mean_C"], 0.0)
+        self.assertGreaterEqual(result["dimensions"][2]["sep"], 1.0)
+        self.assertEqual(result["dimensions"][2]["bucket"], "LOCALE_LANG_DIMS")
+        self.assertNotIn(8, locale_dims)
+        self.assertGreaterEqual(result["dimensions"][8]["sep"], 0.35)
+        self.assertLess(result["dimensions"][8]["sep"], 1.0)
+        self.assertEqual(result["dimensions"][8]["bucket"], "SUBTLE_DISCRIMINATORS")
+        self.assertAlmostEqual(result["dimensions"][11]["sep"], 0.35, places=12)
+        self.assertEqual(result["dimensions"][11]["bucket"], "SUBTLE_DISCRIMINATORS")
+        self.assertLess(result["dimensions"][12]["sep"], 0.35)
+        self.assertEqual(result["dimensions"][12]["bucket"], "LOW_SIGNAL_NOISE")
+        self.assertGreaterEqual(result["dimensions"][7]["sep"], 1.0)
+        self.assertLess(abs(result["dimensions"][7]["mean_T"]), 0.015)
+        self.assertEqual(result["dimensions"][7]["bucket"], "NEGATIVE_INTRUDER_SENSOR")
+        self.assertLess(result["dimensions"][10]["sep"], 1.0)
+        self.assertGreaterEqual(result["dimensions"][10]["intruder_ratio"], 1.8)
+        self.assertEqual(result["dimensions"][10]["bucket"], "NEGATIVE_INTRUDER_SENSOR")
+
+    def test_polarity_flip_beats_anchor_and_records_sign_consistency(self) -> None:
+        target, contrast, locale_dims, gp_en, gp_es = _v2_bucket_fixture()
+        result = xray.classify_dimensions_v2(
+            target,
+            contrast,
+            locale_lang_dims=locale_dims,
+            general_prose_en_mean=gp_en,
+            general_prose_es_mean=gp_es,
+            target_name="python",
+            contrast_name="1B_full:en",
+        )
+        strong = result["dimensions"][4]
+        self.assertLess(strong["mean_T"] * strong["mean_C"], 0.0)
+        self.assertGreaterEqual(strong["sep"], 1.0)
+        self.assertGreaterEqual(strong["snr_T"], 1.0)
+        self.assertGreater(abs(strong["mean_T"]), abs(strong["mean_C"]))
+        self.assertEqual(strong["bucket"], "POLARITY_FLIP_DIALS")
+        self.assertEqual(strong["polarity_band"], "strong")
+        self.assertAlmostEqual(strong["mean_T"], 1.125, places=12)
+        self.assertAlmostEqual(strong["std_T"], 0.75, places=12)
+        self.assertAlmostEqual(strong["mean_C"], -0.5, places=12)
+        self.assertAlmostEqual(strong["std_C"], 0.0, places=12)
+        # Three positive rows match sign(mu_T); the explicit zero is not consistent.
+        self.assertAlmostEqual(strong["sign_consistency_T"], 0.75, places=12)
+        self.assertIn(4, result["polarity_split"]["strong_dims"])
+
+        fine = result["dimensions"][5]
+        self.assertLess(fine["mean_T"] * fine["mean_C"], 0.0)
+        self.assertGreaterEqual(fine["sep"], 0.35)
+        self.assertLess(fine["sep"], 1.0)
+        self.assertEqual(fine["bucket"], "POLARITY_FLIP_DIALS")
+        self.assertEqual(fine["polarity_band"], "fine")
+        self.assertIn(5, result["polarity_split"]["fine_dims"])
+        for key in ("mean_T", "std_T", "mean_C", "std_C", "sep", "sign_consistency_T"):
+            self.assertIn(key, fine)
+
+        zero_mean = result["dimensions"][10]
+        self.assertEqual(zero_mean["mean_T"], 0.0)
+        self.assertEqual(zero_mean["sign_consistency_T"], 0.0)
+        self.assertNotEqual(zero_mean["bucket"], "POLARITY_FLIP_DIALS")
+
+    def test_hypothesis_23_sep_bands_quantiles_polarity_and_top20(self) -> None:
+        dim = 25
+        sep = np.empty(dim, dtype=np.float64)
+        sep[0] = 1.0
+        sep[1] = 0.5
+        sep[2] = 0.35
+        sep[3] = 0.349
+        for d in range(4, dim):
+            sep[d] = 0.30 - (d - 4) * 0.005
+        polarity_dims = {1, 3}
+        n_rows = 8
+        signs = np.array([-1.0 if i % 2 == 0 else 1.0 for i in range(n_rows)], dtype=np.float64)
+        unit = signs * math.sqrt((n_rows - 1.0) / n_rows)
+        target = np.zeros((n_rows, dim), dtype=np.float64)
+        contrast = np.zeros((n_rows, dim), dtype=np.float64)
+        for d in range(dim):
+            delta = float(sep[d]) * (1.0 + xray.EPS)
+            if d in polarity_dims:
+                mu_t = 0.5 * delta
+                mu_c = -0.5 * delta
+            else:
+                mu_t = delta
+                mu_c = 0.0
+            target[:, d] = mu_t + unit
+            contrast[:, d] = mu_c + unit
+
+        result = xray.summarize_hypothesis_23(
+            target,
+            contrast,
+            target_name="python-v1",
+            contrast_name="en_near_ood_neighbor",
+        )
+        self.assertEqual(result["sep_ge_1"], 1)
+        self.assertEqual(result["sep_0_5_to_1"], 1)
+        self.assertEqual(result["sep_0_35_to_0_5"], 1)
+        self.assertEqual(result["polarity_flip_count"], 1)
+        measured = np.asarray([row["sep"] for row in result["top20"]], dtype=np.float64)
+        self.assertEqual(len(result["top20"]), 20)
+        self.assertEqual(result["top20"][0]["dim"], 0)
+        self.assertFalse(result["top20"][0]["polarity_flip"])
+        polarity_rows = [row for row in result["top20"] if row["dim"] == 1]
+        self.assertEqual(len(polarity_rows), 1)
+        self.assertTrue(polarity_rows[0]["polarity_flip"])
+        below = [row for row in result["top20"] if row["dim"] == 3]
+        self.assertEqual(len(below), 1)
+        self.assertFalse(below[0]["polarity_flip"])
+        self.assertNotIn(24, [row["dim"] for row in result["top20"]])
+        self.assertTrue(np.all(measured[:-1] >= measured[1:]))
+
+        mu_t = np.mean(target, axis=0)
+        mu_c = np.mean(contrast, axis=0)
+        std_t = np.std(target, axis=0, ddof=1)
+        std_c = np.std(contrast, axis=0, ddof=1)
+        expected_sep = np.abs(mu_t - mu_c) / (np.sqrt((std_t**2 + std_c**2) / 2.0) + xray.EPS)
+        self.assertAlmostEqual(result["sep_max"], float(np.max(expected_sep)), places=12)
+        self.assertAlmostEqual(result["sep_median"], float(np.quantile(expected_sep, 0.5, method="linear")), places=12)
+        self.assertAlmostEqual(result["sep_p90"], float(np.quantile(expected_sep, 0.9, method="linear")), places=12)
+        self.assertAlmostEqual(result["top20"][0]["sep"], float(expected_sep[0]), places=12)
+        self.assertAlmostEqual(result["top20"][0]["mean_T"], float(mu_t[0]), places=12)
+        self.assertAlmostEqual(result["top20"][0]["std_C"], float(std_c[0]), places=12)
+
+    def test_near_ood_neighbor_turns_on_low_signal_noise_dims(self) -> None:
+        target = _balanced_population([(0.02, 0.20), (0.01, 0.20), (0.20, 0.20)])
+        base = _balanced_population([(0.02, 0.20), (0.01, 0.20), (0.08, 0.20)])
+        full = _balanced_population([(-0.40, 0.10), (0.012, 0.20), (0.00, 0.05)])
+        gp_en = np.full(3, 0.2, dtype=np.float64)
+        gp_es = np.full(3, 0.2, dtype=np.float64)
+        cls_base = xray.classify_dimensions_v2(
+            target,
+            base,
+            locale_lang_dims=[],
+            general_prose_en_mean=gp_en,
+            general_prose_es_mean=gp_es,
+            target_name="python",
+            contrast_name="1B_base_tech:en",
+        )
+        cls_full = xray.classify_dimensions_v2(
+            target,
+            full,
+            locale_lang_dims=[],
+            general_prose_en_mean=gp_en,
+            general_prose_es_mean=gp_es,
+            target_name="python",
+            contrast_name="1B_full:en",
+        )
+        self.assertEqual(cls_base["dimensions"][0]["bucket"], "LOW_SIGNAL_NOISE")
+        self.assertNotEqual(cls_full["dimensions"][0]["bucket"], "LOW_SIGNAL_NOISE")
+        self.assertEqual(cls_base["dimensions"][1]["bucket"], "LOW_SIGNAL_NOISE")
+        self.assertEqual(cls_full["dimensions"][1]["bucket"], "LOW_SIGNAL_NOISE")
+        self.assertNotEqual(cls_base["dimensions"][2]["bucket"], "LOW_SIGNAL_NOISE")
+        self.assertNotEqual(cls_full["dimensions"][2]["bucket"], "LOW_SIGNAL_NOISE")
+        turned = xray.count_turned_on_by_near_ood(cls_base, cls_full)
+        self.assertEqual(turned, {"count": 1, "dims": [0]})
+
+    def test_v2_finalize_deletes_unnorm_only_after_json_parses(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            unnorm = root / "bg_general_unnorm.parquet"
+            unnorm.write_bytes(b"PAR1fake")
+            kept = root / "background_embeddings_1k.parquet"
+            kept.write_bytes(b"keep-1k")
+            out = root / "nested" / "xray_v2.json"
+            payload = {"mode": "v2", "locale_lang_dims": [3, 1]}
+            saw: dict[str, bool] = {"parsed_before_delete": False}
+            original_unlink = Path.unlink
+
+            def spy_unlink(path_self: Path, *args: object, **kwargs: object) -> None:
+                if path_self == unnorm:
+                    self.assertTrue(out.is_file())
+                    parsed = json.loads(out.read_text(encoding="utf-8"))
+                    self.assertEqual(parsed["mode"], "v2")
+                    self.assertEqual(parsed["locale_lang_dims"], [3, 1])
+                    saw["parsed_before_delete"] = True
+                original_unlink(path_self, *args, **kwargs)
+
+            Path.unlink = spy_unlink  # type: ignore[method-assign]
+            try:
+                loaded = xray.finalize_v2_report(out, unnorm, payload)
+            finally:
+                Path.unlink = original_unlink  # type: ignore[method-assign]
+
+            self.assertTrue(saw["parsed_before_delete"])
+            self.assertEqual(loaded["mode"], "v2")
+            self.assertFalse(unnorm.exists())
+            self.assertTrue(kept.is_file())
+            self.assertEqual(json.loads(out.read_text(encoding="utf-8"))["mode"], "v2")
+
+    def test_failed_v2_run_leaves_unnorm_parquet(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            unnorm = root / "bg_general_unnorm.parquet"
+            unnorm.write_bytes(b"PAR1fake")
+            out = root / "xray_v2.json"
+
+            def boom() -> dict[str, object]:
+                raise RuntimeError("v2 analysis failed")
+
+            with self.assertRaises(RuntimeError):
+                xray.execute_mode_v2(out_path=out, unnorm_path=unnorm, build_report=boom)
+            self.assertTrue(unnorm.is_file())
+            self.assertEqual(unnorm.read_bytes(), b"PAR1fake")
+            self.assertFalse(out.exists())
+
+    def test_invalid_v2_payload_does_not_delete_unnorm_parquet(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            unnorm = root / "bg_general_unnorm.parquet"
+            unnorm.write_bytes(b"PAR1fake")
+            out = root / "xray_v2.json"
+            with self.assertRaises(ValueError):
+                xray.finalize_v2_report(out, unnorm, {"mode": "1b"})
+            self.assertTrue(unnorm.is_file())
+            self.assertFalse(out.exists())
+            with self.assertRaises(ValueError):
+                xray.finalize_v2_report(out, unnorm, {"mode": "v2", "bad": float("nan")})
+            self.assertTrue(unnorm.is_file())
+            self.assertEqual(unnorm.read_bytes(), b"PAR1fake")
+
+    def test_cli_accepts_mode_v2_without_changing_legacy_defaults(self) -> None:
+        args_v2 = xray.build_arg_parser().parse_args(
+            ["--mode", "v2", "--out", "/tmp/fhv1_1_id_v2/xray_v2.json"]
+        )
+        self.assertEqual(args_v2.mode, "v2")
+        self.assertEqual(args_v2.out, Path("/tmp/fhv1_1_id_v2/xray_v2.json"))
+        self.assertEqual(args_v2.bg_1k, Path("data/fhv1_1_research/background_embeddings_1k.parquet"))
+        self.assertEqual(args_v2.bg_unnorm_out, Path("/tmp/fhv1_1_id_v2/bg_general_unnorm.parquet"))
+        legacy = xray.build_arg_parser().parse_args([])
+        self.assertEqual(legacy.mode, "1a")
+        self.assertEqual(legacy.out, Path("/tmp/fhv1_1_id/xray_1a.json"))
+        self.assertEqual(legacy.bg_embeddings, Path("data/fhv1_1_research/background_embeddings.parquet"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -8,7 +8,7 @@
 #     "pyarrow>=18.0.0",
 # ]
 # ///
-"""Phase 0 1A/1B read-only 1,024D X-ray analyzer and background embedder for fhv1_1 (RFC-003 IEEE 754 float64)."""
+"""Phase 0 1A/1B and v2 read-only 1,024D X-ray analyzer for fhv1_1 (IEEE 754 float64)."""
 
 from __future__ import annotations
 
@@ -116,6 +116,40 @@ BUCKET_ORDER: tuple[str, ...] = (
     "NEGATIVE_INTRUDER_SENSOR",
     "DEAD_OR_OSCILLATOR",
 )
+V2_BUCKET_ORDER: tuple[str, ...] = (
+    "BACKBONE_UNIVERSAL",
+    "LOCALE_LANG_DIMS",
+    "POLARITY_FLIP_DIALS",
+    "FIRM_DOMAIN_ANCHOR",
+    "NEGATIVE_INTRUDER_SENSOR",
+    "SUBTLE_DISCRIMINATORS",
+    "LOW_SIGNAL_NOISE",
+)
+V2_LANG_TOPK: tuple[int, ...] = (16, 32, 64, 128)
+V2_BASE_STRATA: tuple[str, ...] = ("general_prose", "technical_structured")
+V2_FULL_STRATA: tuple[str, ...] = ("general_prose", "technical_structured", "near_ood_neighbor")
+V2_DOMAIN_LANG: dict[str, str] = {"python": "en", "receta": "es"}
+V2_FULL_DOC_COUNTS: dict[tuple[str, str], int] = {
+    ("en", "general_prose"): 300,
+    ("es", "general_prose"): 300,
+    ("en", "technical_structured"): 100,
+    ("es", "technical_structured"): 100,
+    ("en", "near_ood_neighbor"): 100,
+    ("es", "near_ood_neighbor"): 100,
+}
+V2_CLAUSE_COUNTS: dict[tuple[str, str], int] = {
+    ("en", "general_prose"): 1618,
+    ("en", "technical_structured"): 835,
+    ("en", "near_ood_neighbor"): 855,
+    ("es", "general_prose"): 1661,
+    ("es", "technical_structured"): 884,
+    ("es", "near_ood_neighbor"): 791,
+}
+V2_CALIBRATION_CLAUSE_COUNTS: dict[str, int] = {"python": 3579, "receta": 4066}
+NEG_SENSOR_ABS_MU_MAX_EXCLUSIVE = 0.015
+NEG_SENSOR_SNR_MAX_EXCLUSIVE = 0.75
+NEG_SENSOR_SEP_MIN = 1.0
+NEG_SENSOR_INTRUDER_MIN = 1.8
 BENCHMARK_CATEGORIES: tuple[str, ...] = (
     "IN_DOMAIN_VALID",
     "OUT_OF_DOMAIN_BENIGN",
@@ -304,6 +338,38 @@ def compare_moments_against_stored(
     return diffs
 
 
+def coordinate_contrast_stats(
+    mu_t: np.ndarray,
+    std_t: np.ndarray,
+    mu_c: np.ndarray,
+    std_c: np.ndarray,
+    *,
+    eps: float = EPS,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Return snr_T, snr_C, rms_T, rms_C, sep, and intruder_ratio in float64."""
+    snr_t = np.abs(mu_t) / (std_t + eps)
+    snr_c = np.abs(mu_c) / (std_c + eps)
+    rms_t = np.sqrt(mu_t * mu_t + std_t * std_t)
+    rms_c = np.sqrt(mu_c * mu_c + std_c * std_c)
+    sep = np.abs(mu_t - mu_c) / (np.sqrt((std_t * std_t + std_c * std_c) / 2.0) + eps)
+    intruder_ratio = rms_c / (rms_t + eps)
+    return snr_t, snr_c, rms_t, rms_c, sep, intruder_ratio
+
+
+def negative_intruder_mask(
+    mu_t: np.ndarray,
+    snr_t: np.ndarray,
+    sep: np.ndarray,
+    intruder_ratio: np.ndarray,
+) -> np.ndarray:
+    """Quiet near 0 on T and active on C by the mean-shift or variance-energy rule."""
+    return (
+        (np.abs(mu_t) < NEG_SENSOR_ABS_MU_MAX_EXCLUSIVE)
+        & (snr_t < NEG_SENSOR_SNR_MAX_EXCLUSIVE)
+        & ((sep >= NEG_SENSOR_SEP_MIN) | (intruder_ratio >= NEG_SENSOR_INTRUDER_MIN))
+    )
+
+
 def classify_dimensions(
     target_moments: CoordinateMoments,
     contrast_moments: CoordinateMoments,
@@ -321,22 +387,15 @@ def classify_dimensions(
         raise ValueError(f"dimension mismatch: {mu_t.shape} != {mu_c.shape}")
 
     dim_count = int(mu_t.shape[0])
-    snr_t = np.abs(mu_t) / (sig_t + eps)
-    snr_c = np.abs(mu_c) / (sig_c + eps)
-    rms_t = np.sqrt(mu_t**2 + sig_t**2)
-    rms_c = np.sqrt(mu_c**2 + sig_c**2)
-    sep = np.abs(mu_t - mu_c) / (np.sqrt((sig_t**2 + sig_c**2) / 2.0) + eps)
-    intruder_ratio = rms_c / (rms_t + eps)
+    snr_t, snr_c, rms_t, rms_c, sep, intruder_ratio = coordinate_contrast_stats(
+        mu_t, sig_t, mu_c, sig_c, eps=eps
+    )
     neg_sensor_score = np.maximum(sep, intruder_ratio)
 
     is_backbone = (snr_t >= 1.5) & (snr_c >= 1.5) & ((mu_t * mu_c) > 0.0) & (sep < 0.75)
     is_anchor = (~is_backbone) & (sep >= 1.0) & ((snr_t >= 1.0) | (np.abs(mu_t) > np.abs(mu_c)))
-    is_neg_sensor = (
-        (~is_backbone)
-        & (~is_anchor)
-        & (np.abs(mu_t) < 0.015)
-        & (snr_t < 0.75)
-        & ((sep >= 1.0) | (intruder_ratio >= 1.8))
+    is_neg_sensor = (~is_backbone) & (~is_anchor) & negative_intruder_mask(
+        mu_t, snr_t, sep, intruder_ratio
     )
 
     dimensions: list[dict[str, Any]] = []
@@ -1763,15 +1822,804 @@ def format_stdout_summary_1b(report: Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def render_signed_number(value: float) -> str:
+    """Render a finite float with an explicit leading + or -."""
+    number = np.float64(value)
+    if not np.isfinite(number):
+        raise ValueError("non-finite value in signed render")
+    text = format(float(number), ".16g")
+    if bool(np.signbit(number)):
+        if text.startswith("-"):
+            return text
+        return "-" + text.lstrip("+")
+    if text.startswith("+"):
+        return text
+    if text.startswith("-"):
+        text = text[1:]
+    return "+" + text
+
+
+def render_signed_float64_and_float32(value: float) -> dict[str, str]:
+    """Render one coordinate as signed float64 text and as a signed float32 cast."""
+    value64 = np.float64(value)
+    value32 = np.float64(np.float32(value64))
+    return {
+        "float64": render_signed_number(value64),
+        "float32": render_signed_number(value32),
+    }
+
+
+def sign_consistency_fraction(matrix: np.ndarray, mean: np.ndarray) -> np.ndarray:
+    """Fraction of rows whose sign matches sign(mean). Zeros are not consistent."""
+    values = np.asarray(matrix, dtype=np.float64)
+    mu = np.asarray(mean, dtype=np.float64)
+    if values.ndim != 2 or mu.shape != (values.shape[1],):
+        raise ValueError(f"sign-consistency shape {values.shape} vs mean {mu.shape}")
+    sign_mu = np.sign(mu)
+    consistent = (np.sign(values) == sign_mu) & (values != 0.0) & (sign_mu != 0.0)
+    return np.mean(consistent, axis=0)
+
+
+def rank_coordinates_by_score(score: np.ndarray) -> np.ndarray:
+    """Order coordinates by score descending, then by index ascending."""
+    values = np.asarray(score, dtype=np.float64)
+    if values.ndim != 1:
+        raise ValueError(f"expected 1D score, got {values.shape}")
+    dim_index = np.arange(values.shape[0], dtype=np.int64)
+    return np.lexsort((dim_index, -values))
+
+
+def _jaccard(left: Sequence[int], right: Sequence[int]) -> float:
+    left_set = {int(item) for item in left}
+    right_set = {int(item) for item in right}
+    union = len(left_set | right_set)
+    if union == 0:
+        return 0.0
+    return float(len(left_set & right_set) / union)
+
+
+def _language_separation_block(
+    en_matrix: np.ndarray,
+    es_matrix: np.ndarray,
+    *,
+    eps: float = EPS,
+) -> dict[str, Any]:
+    """sep_lang and SNR ratio for one normalization of EN vs ES general_prose."""
+    en_arr = np.asarray(en_matrix, dtype=np.float64)
+    es_arr = np.asarray(es_matrix, dtype=np.float64)
+    if en_arr.ndim != 2 or es_arr.ndim != 2 or en_arr.shape[1] != es_arr.shape[1]:
+        raise ValueError(f"language matrices {en_arr.shape} vs {es_arr.shape}")
+    dim = int(en_arr.shape[1])
+    en_moments = compute_coordinate_moments(en_arr, expected_dim=dim)
+    es_moments = compute_coordinate_moments(es_arr, expected_dim=dim)
+    snr_en, snr_es, _, _, sep, _ = coordinate_contrast_stats(
+        en_moments.mean,
+        en_moments.std_dev_sample,
+        es_moments.mean,
+        es_moments.std_dev_sample,
+        eps=eps,
+    )
+    snr_ratio = (snr_en + eps) / (snr_es + eps)
+    return {
+        "sample_count_en": en_moments.sample_count,
+        "sample_count_es": es_moments.sample_count,
+        "mean_sep_lang": float(np.mean(sep)),
+        "mean_snr_ratio": float(np.mean(snr_ratio)),
+        "sep_lang": [float(value) for value in sep],
+        "sep_ge_1_dims": [int(dim_index) for dim_index in np.flatnonzero(sep >= 1.0)],
+        "secondary_band_dims": [
+            int(dim_index) for dim_index in np.flatnonzero((sep >= 0.65) & (sep < 1.0))
+        ],
+        "_mu_en": en_moments.mean,
+        "_mu_es": es_moments.mean,
+        "_sep": sep,
+    }
+
+
+def _signed_language_means(mu_en: float, mu_es: float) -> dict[str, str]:
+    en_signed = render_signed_float64_and_float32(mu_en)
+    es_signed = render_signed_float64_and_float32(mu_es)
+    return {
+        "mean_en_float64": en_signed["float64"],
+        "mean_en_float32": en_signed["float32"],
+        "mean_es_float64": es_signed["float64"],
+        "mean_es_float32": es_signed["float32"],
+    }
+
+
+def _public_language_block(block: Mapping[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in block.items() if not str(key).startswith("_")}
+
+
+def analyze_prueba_a(
+    en_normalize_true: np.ndarray,
+    es_normalize_true: np.ndarray,
+    en_normalize_false: np.ndarray,
+    es_normalize_false: np.ndarray,
+    *,
+    eps: float = EPS,
+    topk: Sequence[int] = V2_LANG_TOPK,
+) -> dict[str, Any]:
+    """Prueba A: EN vs ES general_prose full_doc on both normalizations.
+
+    LOCALE_LANG_DIMS and the secondary band come only from normalize=true.
+    mean_snr_ratio is the mean over coordinates of (snr_en + eps) / (snr_es + eps).
+    """
+    true_block = _language_separation_block(en_normalize_true, es_normalize_true, eps=eps)
+    false_block = _language_separation_block(en_normalize_false, es_normalize_false, eps=eps)
+    if len(true_block["sep_lang"]) != len(false_block["sep_lang"]):
+        raise ValueError("Prueba A normalizations disagree on dimension count")
+
+    true_order = rank_coordinates_by_score(true_block["_sep"])
+    false_order = rank_coordinates_by_score(false_block["_sep"])
+    jaccard_top_k = {
+        str(int(k)): _jaccard(true_order[: int(k)].tolist(), false_order[: int(k)].tolist())
+        for k in topk
+    }
+    true_top128 = {int(dim_index) for dim_index in true_order[:128]}
+    false_top128 = {int(dim_index) for dim_index in false_order[:128]}
+    only_false = sorted(false_top128 - true_top128)
+
+    mu_en_true = true_block["_mu_en"]
+    mu_es_true = true_block["_mu_es"]
+    mu_en_false = false_block["_mu_en"]
+    mu_es_false = false_block["_mu_es"]
+    sep_true = true_block["_sep"]
+    sep_false = false_block["_sep"]
+
+    def _top_rows(direction: str) -> list[dict[str, Any]]:
+        if direction == "en_high":
+            selected = [int(dim_index) for dim_index in true_order if mu_en_true[dim_index] > mu_es_true[dim_index]]
+        else:
+            selected = [int(dim_index) for dim_index in true_order if mu_es_true[dim_index] > mu_en_true[dim_index]]
+        rows: list[dict[str, Any]] = []
+        for rank, dim_index in enumerate(selected[:20], start=1):
+            rows.append(
+                {
+                    "dim": dim_index,
+                    "rank": rank,
+                    "sep_lang_normalize_true": float(sep_true[dim_index]),
+                    "sep_lang_normalize_false": float(sep_false[dim_index]),
+                    "normalize_true": _signed_language_means(
+                        float(mu_en_true[dim_index]), float(mu_es_true[dim_index])
+                    ),
+                    "normalize_false": _signed_language_means(
+                        float(mu_en_false[dim_index]), float(mu_es_false[dim_index])
+                    ),
+                }
+            )
+        return rows
+
+    locale_dims = list(true_block["sep_ge_1_dims"])
+    secondary_dims = list(true_block["secondary_band_dims"])
+    if set(locale_dims) & set(secondary_dims):
+        raise ValueError("secondary language band overlaps LOCALE_LANG_DIMS")
+    return {
+        "normalize_true": _public_language_block(true_block),
+        "normalize_false": _public_language_block(false_block),
+        "locale_lang_dims": locale_dims,
+        "secondary_band_dims": secondary_dims,
+        "mean_sep_lang": {
+            "normalize_true": true_block["mean_sep_lang"],
+            "normalize_false": false_block["mean_sep_lang"],
+        },
+        "mean_snr_ratio": {
+            "normalize_true": true_block["mean_snr_ratio"],
+            "normalize_false": false_block["mean_snr_ratio"],
+        },
+        "jaccard_top_k": jaccard_top_k,
+        "only_in_normalize_false_top128": only_false,
+        "top20_en_high": _top_rows("en_high"),
+        "top20_es_high": _top_rows("es_high"),
+    }
+
+
+def classify_dimensions_v2(
+    target_matrix: np.ndarray,
+    contrast_matrix: np.ndarray,
+    *,
+    locale_lang_dims: Sequence[int],
+    general_prose_en_mean: np.ndarray,
+    general_prose_es_mean: np.ndarray,
+    target_name: str,
+    contrast_name: str,
+    eps: float = EPS,
+) -> dict[str, Any]:
+    """Label every coordinate with the six-way v2 priority.
+
+    The language-sign gate uses the supplied EN and ES general_prose means.
+    LOCALE_LANG_DIMS is exactly the caller-supplied primary set; the secondary
+    band is not applied here.
+    """
+    target = np.asarray(target_matrix, dtype=np.float64)
+    contrast = np.asarray(contrast_matrix, dtype=np.float64)
+    if target.ndim != 2 or contrast.ndim != 2 or target.shape[1] != contrast.shape[1]:
+        raise ValueError(f"v2 matrices {target.shape} vs {contrast.shape}")
+    dim = int(target.shape[1])
+    target_moments = compute_coordinate_moments(target, expected_dim=dim)
+    contrast_moments = compute_coordinate_moments(contrast, expected_dim=dim)
+    mu_t = target_moments.mean
+    sig_t = target_moments.std_dev_sample
+    mu_c = contrast_moments.mean
+    sig_c = contrast_moments.std_dev_sample
+    snr_t, snr_c, _, _, sep, intruder_ratio = coordinate_contrast_stats(
+        mu_t, sig_t, mu_c, sig_c, eps=eps
+    )
+    neg_sensor_score = np.maximum(sep, intruder_ratio)
+    consistency = sign_consistency_fraction(target, mu_t)
+
+    gp_en = np.asarray(general_prose_en_mean, dtype=np.float64)
+    gp_es = np.asarray(general_prose_es_mean, dtype=np.float64)
+    if gp_en.shape != (dim,) or gp_es.shape != (dim,):
+        raise ValueError(f"general_prose means shape {gp_en.shape}, {gp_es.shape} != ({dim},)")
+    if not np.all(np.isfinite(gp_en)) or not np.all(np.isfinite(gp_es)):
+        raise ValueError("non-finite general_prose mean")
+
+    locale_mask = np.zeros(dim, dtype=bool)
+    for raw_dim in locale_lang_dims:
+        idx = int(raw_dim)
+        if idx < 0 or idx >= dim:
+            raise ValueError(f"locale dim {idx} outside 0..{dim - 1}")
+        locale_mask[idx] = True
+
+    same_target_contrast = (mu_t * mu_c) > 0.0
+    opposite_target_contrast = (mu_t * mu_c) < 0.0
+    same_language_sign = (gp_en * gp_es) > 0.0
+    is_backbone = (
+        (snr_t >= 1.5) & (snr_c >= 1.5) & same_target_contrast & (sep < 0.75) & same_language_sign
+    )
+    is_locale = (~is_backbone) & locale_mask
+    is_polarity = (~is_backbone) & (~is_locale) & opposite_target_contrast & (sep >= 0.35)
+    is_anchor = (
+        (~is_backbone)
+        & (~is_locale)
+        & (~is_polarity)
+        & (sep >= 1.0)
+        & ((snr_t >= 1.0) | (np.abs(mu_t) > np.abs(mu_c)))
+    )
+    is_neg = (
+        (~is_backbone)
+        & (~is_locale)
+        & (~is_polarity)
+        & (~is_anchor)
+        & negative_intruder_mask(mu_t, snr_t, sep, intruder_ratio)
+    )
+    is_subtle = (
+        (~is_backbone)
+        & (~is_locale)
+        & (~is_polarity)
+        & (~is_anchor)
+        & (~is_neg)
+        & (sep >= 0.35)
+        & (sep < 1.0)
+    )
+    is_noise = ~(is_backbone | is_locale | is_polarity | is_anchor | is_neg | is_subtle)
+    covered = (
+        is_backbone.astype(np.int8)
+        + is_locale.astype(np.int8)
+        + is_polarity.astype(np.int8)
+        + is_anchor.astype(np.int8)
+        + is_neg.astype(np.int8)
+        + is_subtle.astype(np.int8)
+        + is_noise.astype(np.int8)
+    )
+    if not np.all(covered == 1):
+        raise AssertionError("v2 bucket masks are not an exclusive partition")
+
+    masks = {
+        "BACKBONE_UNIVERSAL": is_backbone,
+        "LOCALE_LANG_DIMS": is_locale,
+        "POLARITY_FLIP_DIALS": is_polarity,
+        "FIRM_DOMAIN_ANCHOR": is_anchor,
+        "NEGATIVE_INTRUDER_SENSOR": is_neg,
+        "SUBTLE_DISCRIMINATORS": is_subtle,
+        "LOW_SIGNAL_NOISE": is_noise,
+    }
+    dimensions: list[dict[str, Any]] = []
+    grouped: dict[str, list[dict[str, Any]]] = {bucket: [] for bucket in V2_BUCKET_ORDER}
+    for dim_index in range(dim):
+        bucket = next(name for name, mask in masks.items() if bool(mask[dim_index]))
+        polarity_band = None
+        if bucket == "POLARITY_FLIP_DIALS":
+            polarity_band = "strong" if float(sep[dim_index]) >= 1.0 else "fine"
+        entry = {
+            "dim": dim_index,
+            "bucket": bucket,
+            "mean_T": float(mu_t[dim_index]),
+            "std_T": float(sig_t[dim_index]),
+            "mean_C": float(mu_c[dim_index]),
+            "std_C": float(sig_c[dim_index]),
+            "snr_T": float(snr_t[dim_index]),
+            "snr_C": float(snr_c[dim_index]),
+            "sep": float(sep[dim_index]),
+            "intruder_ratio": float(intruder_ratio[dim_index]),
+            "neg_sensor_score": float(neg_sensor_score[dim_index]),
+            "sign_consistency_T": float(consistency[dim_index]),
+            "polarity_band": polarity_band,
+        }
+        dimensions.append(entry)
+        grouped[bucket].append(entry)
+
+    rank_keys: dict[str, Callable[[dict[str, Any]], tuple[float, int]]] = {
+        "BACKBONE_UNIVERSAL": lambda row: (-min(row["snr_T"], row["snr_C"]), row["dim"]),
+        "LOCALE_LANG_DIMS": lambda row: (-row["sep"], row["dim"]),
+        "POLARITY_FLIP_DIALS": lambda row: (-row["sep"], row["dim"]),
+        "FIRM_DOMAIN_ANCHOR": lambda row: (-row["sep"], row["dim"]),
+        "NEGATIVE_INTRUDER_SENSOR": lambda row: (-row["neg_sensor_score"], row["dim"]),
+        "SUBTLE_DISCRIMINATORS": lambda row: (-row["sep"], row["dim"]),
+        "LOW_SIGNAL_NOISE": lambda row: (-row["sep"], row["dim"]),
+    }
+    bucket_counts: dict[str, int] = {}
+    bucket_dims: dict[str, list[int]] = {}
+    for bucket in V2_BUCKET_ORDER:
+        ranked = sorted(grouped[bucket], key=rank_keys[bucket])
+        bucket_counts[bucket] = len(ranked)
+        bucket_dims[bucket] = [int(row["dim"]) for row in ranked]
+
+    polarity_ranked = bucket_dims["POLARITY_FLIP_DIALS"]
+    strong_dims = [dim_index for dim_index in polarity_ranked if dimensions[dim_index]["sep"] >= 1.0]
+    fine_dims = [dim_index for dim_index in polarity_ranked if dimensions[dim_index]["sep"] < 1.0]
+    return {
+        "target_policy": target_name,
+        "contrast_policy": contrast_name,
+        "target_sample_count": target_moments.sample_count,
+        "contrast_sample_count": contrast_moments.sample_count,
+        "dim_count": dim,
+        "bucket_counts": bucket_counts,
+        "bucket_dims": bucket_dims,
+        "dimensions": dimensions,
+        "polarity_split": {
+            "strong_count": len(strong_dims),
+            "fine_count": len(fine_dims),
+            "strong_dims": strong_dims,
+            "fine_dims": fine_dims,
+        },
+    }
+
+
+def count_turned_on_by_near_ood(
+    classification_base: Mapping[str, Any],
+    classification_full: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Dims that are LOW_SIGNAL_NOISE on 1B_base_tech and leave that bucket on 1B_full."""
+    if int(classification_base["dim_count"]) != int(classification_full["dim_count"]):
+        raise ValueError("near-OOD comparison dimension mismatch")
+    base_noise = [int(dim_index) for dim_index in classification_base["bucket_dims"]["LOW_SIGNAL_NOISE"]]
+    full_rows = classification_full["dimensions"]
+    turned = sorted(
+        dim_index for dim_index in base_noise if full_rows[dim_index]["bucket"] != "LOW_SIGNAL_NOISE"
+    )
+    return {"count": len(turned), "dims": turned}
+
+
+def summarize_hypothesis_23(
+    target_matrix: np.ndarray,
+    contrast_matrix: np.ndarray,
+    *,
+    target_name: str,
+    contrast_name: str,
+    eps: float = EPS,
+) -> dict[str, Any]:
+    """Sep bands, polarity-flip count, and top-20 dims for hypothesis 2.3."""
+    target = np.asarray(target_matrix, dtype=np.float64)
+    contrast = np.asarray(contrast_matrix, dtype=np.float64)
+    if target.ndim != 2 or contrast.ndim != 2 or target.shape[1] != contrast.shape[1]:
+        raise ValueError(f"hypothesis matrices {target.shape} vs {contrast.shape}")
+    dim = int(target.shape[1])
+    target_moments = compute_coordinate_moments(target, expected_dim=dim)
+    contrast_moments = compute_coordinate_moments(contrast, expected_dim=dim)
+    mu_t = target_moments.mean
+    sig_t = target_moments.std_dev_sample
+    mu_c = contrast_moments.mean
+    sig_c = contrast_moments.std_dev_sample
+    _, _, _, _, sep, _ = coordinate_contrast_stats(mu_t, sig_t, mu_c, sig_c, eps=eps)
+    polarity = (mu_t * mu_c < 0.0) & (sep >= 0.35)
+    order = rank_coordinates_by_score(sep)
+    top20: list[dict[str, Any]] = []
+    for dim_index in order[:20]:
+        idx = int(dim_index)
+        top20.append(
+            {
+                "dim": idx,
+                "sep": float(sep[idx]),
+                "mean_T": float(mu_t[idx]),
+                "std_T": float(sig_t[idx]),
+                "mean_C": float(mu_c[idx]),
+                "std_C": float(sig_c[idx]),
+                "polarity_flip": bool(polarity[idx]),
+            }
+        )
+    return {
+        "target": target_name,
+        "contrast": contrast_name,
+        "target_sample_count": target_moments.sample_count,
+        "contrast_sample_count": contrast_moments.sample_count,
+        "dim_count": dim,
+        "sep_ge_1": int(np.sum(sep >= 1.0)),
+        "sep_0_5_to_1": int(np.sum((sep >= 0.5) & (sep < 1.0))),
+        "sep_0_35_to_0_5": int(np.sum((sep >= 0.35) & (sep < 0.5))),
+        "sep_median": float(np.quantile(sep, 0.5, method="linear")),
+        "sep_p90": float(np.quantile(sep, 0.9, method="linear")),
+        "sep_max": float(np.max(sep)),
+        "polarity_flip_count": int(np.sum(polarity)),
+        "top20": top20,
+    }
+
+
+def finalize_v2_report(
+    out_path: Path,
+    unnorm_path: Path,
+    report: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Write v2 JSON, reload it, and only then delete the unnormalized parquet."""
+    if not isinstance(report, Mapping) or report.get("mode") != "v2":
+        raise ValueError("v2 report payload missing mode")
+    if not unnorm_path.is_file():
+        raise FileNotFoundError(f"missing unnormalized parquet: {unnorm_path}")
+    encoded = json.dumps(report, indent=2, allow_nan=False)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(encoded, encoding="utf-8")
+    loaded = json.loads(out_path.read_text(encoding="utf-8"))
+    if not isinstance(loaded, dict) or loaded.get("mode") != "v2":
+        raise ValueError("v2 report failed to parse after write")
+    unnorm_path.unlink()
+    return loaded
+
+
+def execute_mode_v2(
+    *,
+    out_path: Path,
+    unnorm_path: Path,
+    build_report: Callable[[], Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Build a v2 report, then publish it. A failed build leaves the parquet in place."""
+    report = build_report()
+    return finalize_v2_report(out_path, unnorm_path, report)
+
+
+def load_embedding_groups(
+    path: Path,
+    *,
+    expected_dim: int = DIM,
+) -> dict[tuple[str, str, str, bool], dict[str, Any]]:
+    """Group embedding rows by (lang, granularity, stratum, normalize)."""
+    if not path.is_file():
+        raise FileNotFoundError(f"missing embeddings parquet: {path}")
+    table = pq.read_table(
+        str(path),
+        columns=["doc_id", "lang", "stratum", "granularity", "normalize", "vector"],
+    )
+    vectors = _arrow_fixed_list_to_float64(table["vector"], expected_dim=expected_dim)
+    if vectors.shape[0] != table.num_rows:
+        raise RuntimeError(f"vector row count mismatch in {path}")
+    if not np.all(np.isfinite(vectors)):
+        raise ValueError(f"non-finite coordinate in {path}")
+    doc_ids = [str(value) for value in table["doc_id"].to_pylist()]
+    langs = [str(value) for value in table["lang"].to_pylist()]
+    strata = [str(value) for value in table["stratum"].to_pylist()]
+    granularities = [str(value) for value in table["granularity"].to_pylist()]
+    normalizes = [bool(value) for value in table["normalize"].to_pylist()]
+    grouped: dict[tuple[str, str, str, bool], list[int]] = {}
+    for idx in range(table.num_rows):
+        key = (langs[idx], granularities[idx], strata[idx], normalizes[idx])
+        grouped.setdefault(key, []).append(idx)
+    out: dict[tuple[str, str, str, bool], dict[str, Any]] = {}
+    for key, indices in grouped.items():
+        out[key] = {
+            "vectors": vectors[indices],
+            "doc_ids": [doc_ids[i] for i in indices],
+        }
+    return out
+
+
+def _stack_embedding_groups(
+    groups: Mapping[tuple[str, str, str, bool], Mapping[str, Any]],
+    lang: str,
+    granularity: str,
+    strata: Sequence[str],
+    *,
+    normalize: bool,
+) -> np.ndarray:
+    parts: list[np.ndarray] = []
+    for stratum in strata:
+        key = (lang, granularity, stratum, normalize)
+        if key not in groups:
+            raise KeyError(f"missing embedding slice {key}")
+        parts.append(np.asarray(groups[key]["vectors"], dtype=np.float64))
+    if not parts:
+        raise ValueError("empty embedding stack")
+    return np.concatenate(parts, axis=0)
+
+
+def _assert_unit_norm(matrix: np.ndarray, label: str) -> None:
+    norms = np.linalg.norm(matrix, axis=1)
+    error = float(np.max(np.abs(norms - 1.0)))
+    if error > 1e-3:
+        raise RuntimeError(f"{label} normalize=true L2 error {error}")
+
+
+def _assert_unnormalized_norm(matrix: np.ndarray, label: str) -> None:
+    norms = np.linalg.norm(matrix, axis=1)
+    minimum = float(np.min(norms))
+    if minimum <= 1.5:
+        raise RuntimeError(f"{label} normalize=false L2 min {minimum}")
+
+
+def _unique_doc_ids(doc_ids: Sequence[str], label: str) -> set[str]:
+    unique = set(doc_ids)
+    if len(unique) != len(doc_ids):
+        raise RuntimeError(f"duplicate doc_ids in {label}")
+    return unique
+
+
+def load_v1_calibration_matrices(db: lancedb.DBConnection) -> dict[str, dict[str, np.ndarray]]:
+    """Read normalize=true full_doc and clause_opt2c calibration matrices. Read-only."""
+    out: dict[str, dict[str, np.ndarray]] = {}
+    for domain, profile_id in V1_PROFILES.items():
+        stored = load_lancedb_profile_row(db, profile_id)
+        if stored["policy_id"] != domain or stored["normalize"] is not True:
+            raise RuntimeError(f"unexpected v1 profile metadata for {profile_id}")
+        expected = {
+            "full_doc": 600,
+            "clause_opt2c": V2_CALIBRATION_CLAUSE_COUNTS[domain],
+        }
+        matrices: dict[str, np.ndarray] = {}
+        for granularity, count in expected.items():
+            vectors, tags = load_lancedb_calibration_by_profile(
+                db, profile_id, strategy_tag=granularity
+            )
+            if vectors.shape[0] != count or any(tag != granularity for tag in tags):
+                raise RuntimeError(
+                    f"{profile_id} {granularity} count {vectors.shape[0]} != {count}"
+                )
+            if not np.all(np.isfinite(vectors)):
+                raise RuntimeError(f"non-finite calibration vector in {profile_id} {granularity}")
+            matrices[granularity] = vectors
+        out[domain] = matrices
+    return out
+
+
+def _count_pair(groups: Mapping[tuple[str, str, str, bool], Mapping[str, Any]], granularity: str, stratum: str) -> dict[str, int]:
+    return {
+        lang: int(groups[(lang, granularity, stratum, True)]["vectors"].shape[0])
+        for lang in ("en", "es")
+    }
+
+
+def build_v2_report(
+    lancedb_uri: Path,
+    bg_1k_path: Path,
+    unnorm_path: Path,
+) -> dict[str, Any]:
+    """Label all 1,024 coordinates. Does not delete the unnormalized parquet."""
+    groups = load_embedding_groups(bg_1k_path)
+    unnorm_groups = load_embedding_groups(unnorm_path)
+    expected_1k = {
+        (lang, granularity, stratum, True)
+        for lang in ("en", "es")
+        for granularity in ("full_doc", "clause_opt2c")
+        for stratum in V2_FULL_STRATA
+    }
+    if set(groups) != expected_1k:
+        raise RuntimeError(f"unexpected 1k embedding slices: {sorted(set(groups) - expected_1k)}")
+    expected_unnorm = {
+        ("en", "full_doc", "general_prose", False),
+        ("es", "full_doc", "general_prose", False),
+    }
+    if set(unnorm_groups) != expected_unnorm:
+        raise RuntimeError(f"unexpected unnorm slices: {sorted(unnorm_groups)}")
+
+    for key, group in groups.items():
+        label = f"{key[0]}:{key[1]}:{key[2]}"
+        matrix = np.asarray(group["vectors"], dtype=np.float64)
+        expected = V2_FULL_DOC_COUNTS[(key[0], key[2])] if key[1] == "full_doc" else V2_CLAUSE_COUNTS[(key[0], key[2])]
+        if matrix.shape != (expected, DIM):
+            raise RuntimeError(f"{label} shape {matrix.shape} != ({expected}, {DIM})")
+        _assert_unit_norm(matrix, label)
+    for key, group in unnorm_groups.items():
+        matrix = np.asarray(group["vectors"], dtype=np.float64)
+        if matrix.shape != (300, DIM):
+            raise RuntimeError(f"unnorm {key[0]} shape {matrix.shape} != (300, {DIM})")
+        _assert_unnormalized_norm(matrix, f"unnorm {key[0]}")
+        true_ids = _unique_doc_ids(groups[(key[0], "full_doc", "general_prose", True)]["doc_ids"], f"1k {key[0]}")
+        false_ids = _unique_doc_ids(group["doc_ids"], f"unnorm {key[0]}")
+        if true_ids != false_ids:
+            raise RuntimeError(f"{key[0]} general_prose doc_ids differ across normalizations")
+
+    en_true = _stack_embedding_groups(groups, "en", "full_doc", ("general_prose",), normalize=True)
+    es_true = _stack_embedding_groups(groups, "es", "full_doc", ("general_prose",), normalize=True)
+    en_false = _stack_embedding_groups(unnorm_groups, "en", "full_doc", ("general_prose",), normalize=False)
+    es_false = _stack_embedding_groups(unnorm_groups, "es", "full_doc", ("general_prose",), normalize=False)
+    prueba_a = analyze_prueba_a(en_true, es_true, en_false, es_false)
+    locale_dims = prueba_a["locale_lang_dims"]
+    if set(locale_dims) & set(prueba_a["secondary_band_dims"]):
+        raise RuntimeError("secondary band was folded into LOCALE_LANG_DIMS")
+
+    gp_en = np.mean(en_true, axis=0)
+    gp_es = np.mean(es_true, axis=0)
+    db = lancedb.connect(str(lancedb_uri))
+    calibration = load_v1_calibration_matrices(db)
+
+    classifications: dict[str, dict[str, dict[str, Any]]] = {}
+    for granularity in ("full_doc", "clause_opt2c"):
+        classifications[granularity] = {}
+        for background_name, strata in (
+            ("1B_base_tech", V2_BASE_STRATA),
+            ("1B_full", V2_FULL_STRATA),
+        ):
+            classifications[granularity][background_name] = {}
+            for domain, lang in V2_DOMAIN_LANG.items():
+                contrast = _stack_embedding_groups(
+                    groups, lang, granularity, strata, normalize=True
+                )
+                if granularity == "full_doc":
+                    expected_rows = 400 if background_name == "1B_base_tech" else 500
+                    if contrast.shape[0] != expected_rows:
+                        raise RuntimeError(
+                            f"{background_name} {lang} full_doc rows {contrast.shape[0]} != {expected_rows}"
+                        )
+                classifications[granularity][background_name][domain] = classify_dimensions_v2(
+                    calibration[domain][granularity],
+                    contrast,
+                    locale_lang_dims=locale_dims,
+                    general_prose_en_mean=gp_en,
+                    general_prose_es_mean=gp_es,
+                    target_name=domain,
+                    contrast_name=f"{background_name}:{lang}",
+                )
+
+    turned_on = {
+        granularity: {
+            domain: count_turned_on_by_near_ood(
+                classifications[granularity]["1B_base_tech"][domain],
+                classifications[granularity]["1B_full"][domain],
+            )
+            for domain in ("python", "receta")
+        }
+        for granularity in ("full_doc", "clause_opt2c")
+    }
+
+    near_en = _stack_embedding_groups(groups, "en", "full_doc", ("near_ood_neighbor",), normalize=True)
+    near_es = _stack_embedding_groups(groups, "es", "full_doc", ("near_ood_neighbor",), normalize=True)
+    if near_en.shape[0] != 100 or near_es.shape[0] != 100:
+        raise RuntimeError("near_ood_neighbor full_doc counts are not 100 per language")
+    hypothesis = {
+        "python_vs_en_near_ood_neighbor": summarize_hypothesis_23(
+            calibration["python"]["full_doc"],
+            near_en,
+            target_name="python-v1",
+            contrast_name="en_near_ood_neighbor",
+        ),
+        "receta_vs_es_near_ood_neighbor": summarize_hypothesis_23(
+            calibration["receta"]["full_doc"],
+            near_es,
+            target_name="receta-v1",
+            contrast_name="es_near_ood_neighbor",
+        ),
+    }
+
+    def _strata_counts(granularity: str) -> dict[str, dict[str, int]]:
+        counts = {
+            stratum: _count_pair(groups, granularity, stratum) for stratum in V2_FULL_STRATA
+        }
+        counts["1B_base_tech"] = {
+            lang: counts["general_prose"][lang] + counts["technical_structured"][lang]
+            for lang in ("en", "es")
+        }
+        counts["1B_full"] = {
+            lang: counts["1B_base_tech"][lang] + counts["near_ood_neighbor"][lang]
+            for lang in ("en", "es")
+        }
+        return counts
+
+    return {
+        "mode": "v2",
+        "dtype": "float64",
+        "dim": DIM,
+        "eps": EPS,
+        "thresholds": {
+            "eps": EPS,
+            "ddof": 1,
+            "locale_primary_sep_min": 1.0,
+            "locale_secondary_sep_min": 0.65,
+            "polarity_sep_min": 0.35,
+            "subtle_sep_min": 0.35,
+            "subtle_sep_max_exclusive": 1.0,
+            "backbone_snr_min": 1.5,
+            "backbone_sep_max_exclusive": 0.75,
+            "anchor_sep_min": 1.0,
+            "anchor_snr_min": 1.0,
+            "negative_intruder": {
+                "abs_mu_target_max_exclusive": NEG_SENSOR_ABS_MU_MAX_EXCLUSIVE,
+                "snr_target_max_exclusive": NEG_SENSOR_SNR_MAX_EXCLUSIVE,
+                "sep_min_or": NEG_SENSOR_SEP_MIN,
+                "intruder_ratio_min_or": NEG_SENSOR_INTRUDER_MIN,
+            },
+            "language_sign_gate": "normalize=true general_prose full_doc means",
+            "mean_snr_ratio": "(snr_en + eps) / (snr_es + eps), mean over coordinates",
+            "classification_order": list(V2_BUCKET_ORDER),
+        },
+        "sources": {
+            "lancedb_uri": str(lancedb_uri),
+            "bg_embeddings_1k": str(bg_1k_path),
+            "bg_general_unnorm": str(unnorm_path),
+            "profiles": {"python": V1_PROFILES["python"], "receta": V1_PROFILES["receta"]},
+        },
+        "sample_counts": {
+            "background_1k_rows": int(sum(group["vectors"].shape[0] for group in groups.values())),
+            "unnorm_rows": int(sum(group["vectors"].shape[0] for group in unnorm_groups.values())),
+            "full_doc": _strata_counts("full_doc"),
+            "clause_opt2c": _strata_counts("clause_opt2c"),
+            "calibration": {
+                "full_doc": {
+                    domain: int(calibration[domain]["full_doc"].shape[0]) for domain in ("python", "receta")
+                },
+                "clause_opt2c": {
+                    domain: int(calibration[domain]["clause_opt2c"].shape[0])
+                    for domain in ("python", "receta")
+                },
+            },
+        },
+        "prueba_a": prueba_a,
+        "prueba_b": {
+            "full_doc": classifications["full_doc"],
+            "clause_opt2c": classifications["clause_opt2c"],
+            "turned_on_by_near_ood_neighbor": turned_on,
+        },
+        "hypothesis_2_3": hypothesis,
+    }
+
+
+def run_mode_v2(
+    lancedb_uri: Path,
+    bg_1k_path: Path,
+    unnorm_path: Path,
+    out_path: Path,
+) -> dict[str, Any]:
+    """Run v2 and delete the unnormalized parquet only after the JSON parses."""
+
+    def build() -> dict[str, Any]:
+        return build_v2_report(lancedb_uri, bg_1k_path, unnorm_path)
+
+    return execute_mode_v2(out_path=out_path, unnorm_path=unnorm_path, build_report=build)
+
+
+def format_stdout_summary_v2(report: Mapping[str, Any]) -> str:
+    """Render bucket counts and hypothesis 2.3 bands for a v2 report."""
+    prueba_a = report["prueba_a"]
+    lines = [
+        f"=== FHV1.1 v2 fine dials ({report['dtype']}, {report['dim']}D) ===",
+        (
+            f"[Prueba A] LOCALE_LANG_DIMS={len(prueba_a['locale_lang_dims'])} "
+            f"secondary={len(prueba_a['secondary_band_dims'])} "
+            f"jaccard128={prueba_a['jaccard_top_k']['128']:.6f} "
+            f"only_unnorm_top128={len(prueba_a['only_in_normalize_false_top128'])}"
+        ),
+    ]
+    for domain in ("python", "receta"):
+        counts = report["prueba_b"]["full_doc"]["1B_full"][domain]["bucket_counts"]
+        turned = report["prueba_b"]["turned_on_by_near_ood_neighbor"]["full_doc"][domain]["count"]
+        lines.append(f"[1B_full full_doc {domain}] {counts} turned_on={turned}")
+    for key in ("python_vs_en_near_ood_neighbor", "receta_vs_es_near_ood_neighbor"):
+        hyp = report["hypothesis_2_3"][key]
+        lines.append(
+            f"[hypothesis 2.3 {key}] sep>=1:{hyp['sep_ge_1']} "
+            f"[0.5,1):{hyp['sep_0_5_to_1']} [0.35,0.5):{hyp['sep_0_35_to_0_5']} "
+            f"polarity={hyp['polarity_flip_count']} "
+            f"median={hyp['sep_median']:.6f} p90={hyp['sep_p90']:.6f} max={hyp['sep_max']:.6f}"
+        )
+    return "\n".join(lines)
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Read-only 1,024D X-ray analyzer for fhv1_1 Phase 0 diagnostics."
+        description="Read-only 1,024D X-ray analyzer for fhv1_1 Phase 0 and v2 diagnostics."
     )
     parser.add_argument(
         "--mode",
-        choices=("1a", "embed-bg", "1b"),
+        choices=("1a", "embed-bg", "1b", "v2"),
         default="1a",
-        help="Analysis mode (1a, embed-bg, or 1b).",
+        help="Analysis mode (1a, embed-bg, 1b, or v2).",
     )
     parser.add_argument(
         "--lancedb-uri",
@@ -1801,7 +2649,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--bg-unnorm-out",
         type=Path,
         default=Path("/tmp/fhv1_1_id_v2/bg_general_unnorm.parquet"),
-        help="Output Parquet path for normalize=false general_prose full_doc rows.",
+        help="normalize=false general_prose full_doc parquet. embed-bg writes it; v2 reads it and deletes it after the JSON parses.",
     )
     parser.add_argument(
         "--embed-url",
@@ -1826,6 +2674,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path("data/fhv1_1_research/background_embeddings.parquet"),
         help="Path to background embeddings Parquet for --mode 1b.",
+    )
+    parser.add_argument(
+        "--bg-1k",
+        type=Path,
+        default=Path("data/fhv1_1_research/background_embeddings_1k.parquet"),
+        help="normalize=true 1,000-doc background parquet for --mode v2.",
     )
     parser.add_argument(
         "--out",
@@ -1863,6 +2717,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
         print(format_stdout_summary_1b(report))
+        print(f"Wrote {out_path}")
+        return 0
+    if args.mode == "v2":
+        has_explicit_out = any(tok == "--out" or tok.startswith("--out=") for tok in raw_argv)
+        out_path = args.out if has_explicit_out else Path("/tmp/fhv1_1_id_v2/xray_v2.json")
+        report = run_mode_v2(args.lancedb_uri, args.bg_1k, args.bg_unnorm_out, out_path)
+        print(format_stdout_summary_v2(report))
         print(f"Wrote {out_path}")
         return 0
     raise ValueError(f"unsupported mode: {args.mode}")
