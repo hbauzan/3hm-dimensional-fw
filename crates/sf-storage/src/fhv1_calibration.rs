@@ -154,6 +154,7 @@ pub struct Fhv1AuditTraceSummary {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Fhv1TraceQuery {
+    pub trace_id: Option<String>,
     pub run_id: Option<String>,
     pub profile_id: Option<String>,
     pub source_kind: Option<String>,
@@ -277,7 +278,7 @@ pub fn stats_from_profile(profile: &Fhv1ProfileRecord) -> Box<Fhv1ProfileStats> 
         quantiles: Fhv1Quantiles::standard(),
         sample_count: profile.sample_count,
         polarity: profile.polarity,
-        metric: MovementMetric::Span,
+        metric: MovementMetric::Variance,
         cutoffs: Fhv1QuantileCutoffs {
             p25: 0.0,
             p75: 0.0,
@@ -329,5 +330,39 @@ fn profile_from_stats(
         std_dev_vector: box_f64_vector(&stats.std_dev),
         movement_tier_codes: box_u8_vector(&stats.movement_tier_codes),
         created_at_ms,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use sf_kernels::{Fhv1Quantiles, MovementMetric, DIM};
+
+    use super::{assemble_calibration, stats_from_profile, Fhv1CalibrationRequest, Fhv1RawSample};
+
+    #[test]
+    fn stats_from_profile_defaults_to_variance_metric() {
+        let req = Fhv1CalibrationRequest {
+            policy_id: "python".to_string(),
+            normalize: true,
+            use_rogue_mask_default: false,
+            polarity: 0,
+            model_id: "BAAI/bge-m3".to_string(),
+            source_dtype: "float64".to_string(),
+            augmented_llm: false,
+            corpus_sha256: [0x11; 32],
+            metric: MovementMetric::Variance,
+            quantiles: Fhv1Quantiles::standard(),
+            samples: vec![Fhv1RawSample {
+                sample_id: "s0".to_string(),
+                source_ref: "unit".to_string(),
+                strategy_tag: "full_doc".to_string(),
+                raw_text: "hello".to_string(),
+                text_sha256: [0x22; 32],
+                vector: vec![0.1; DIM].into_boxed_slice().try_into().expect("dim"),
+            }],
+        };
+        let (profile, _) = assemble_calibration(&req, 1, 100).expect("assemble");
+        let stats = stats_from_profile(&profile);
+        assert_eq!(stats.metric, MovementMetric::Variance);
     }
 }

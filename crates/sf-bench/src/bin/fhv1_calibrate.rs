@@ -27,13 +27,29 @@ struct Args {
     normalize: bool,
     #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
     use_rogue_mask: bool,
+    #[arg(long, default_value = "variance")]
+    metric: String,
+    #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
+    augmented_llm: bool,
     #[arg(long)]
     export_xlsx: Option<PathBuf>,
+}
+
+fn parse_metric(text: &str) -> Result<MovementMetric, String> {
+    match text {
+        "variance" => Ok(MovementMetric::Variance),
+        "std_dev" => Ok(MovementMetric::StdDev),
+        "span" => Ok(MovementMetric::Span),
+        other => Err(format!(
+            "unknown metric '{other}'; expected variance|std_dev|span"
+        )),
+    }
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
+    let metric = parse_metric(&args.metric)?;
     let documents = match &args.corpus {
         Some(path) => read_corpus_path(path)?,
         None => canonical_fhv1_documents(&args.policy_id)?,
@@ -54,8 +70,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             use_rogue_mask_default: args.use_rogue_mask,
             polarity: 0,
             model_id: "BAAI/bge-m3",
-            augmented_llm: false,
-            metric: MovementMetric::Span,
+            augmented_llm: args.augmented_llm,
+            metric,
             quantiles: Fhv1Quantiles::standard(),
         },
     )
@@ -99,5 +115,43 @@ async fn domain_lock_count(uri: &str) -> Result<usize, String> {
                 Err(rendered)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+    use sf_kernels::MovementMetric;
+
+    use super::{parse_metric, Args};
+
+    #[test]
+    fn cli_defaults_to_variance_metric_and_false_augmented_llm() {
+        let defaults = Args::try_parse_from(["fhv1_calibrate", "--policy-id", "python"])
+            .expect("default args");
+        assert_eq!(defaults.metric, "variance");
+        assert!(!defaults.augmented_llm);
+        assert_eq!(
+            parse_metric(&defaults.metric).expect("metric"),
+            MovementMetric::Variance
+        );
+
+        let custom = Args::try_parse_from([
+            "fhv1_calibrate",
+            "--policy-id",
+            "receta",
+            "--metric",
+            "std_dev",
+            "--augmented-llm",
+            "true",
+        ])
+        .expect("custom args");
+        assert_eq!(
+            parse_metric(&custom.metric).expect("std_dev"),
+            MovementMetric::StdDev
+        );
+        assert!(custom.augmented_llm);
+        assert_eq!(parse_metric("span").expect("span"), MovementMetric::Span);
+        assert!(parse_metric("bad").is_err());
     }
 }

@@ -827,7 +827,7 @@ pub async fn handle_api_v1_chat(
     };
     if filter_mode == "fhv1" {
         let fhv1_trace =
-            match run_fhv1_chat_gate(&state, &payload, &user_text, false, &[], &[], 0.0).await {
+            match run_fhv1_chat_gate(&state, &payload, &user_text, false, &[], None, 0.0).await {
                 Ok(trace_id) => trace_id,
                 Err(response) => return response,
             };
@@ -870,13 +870,22 @@ pub async fn handle_api_v1_chat(
     batch.extend(clauses.iter().copied());
 
     let t_embed_start = std::time::Instant::now();
-    let embedded = if state.embedder.is_mock() {
-        state
-            .embedder
-            .embed_batch_for_domain(Some(lock.domain_id.as_str()), &batch)
-            .await
+    let domain_opt = state.embedder.is_mock().then_some(lock.domain_id.as_str());
+    let (embedded, reused_raw_f64) = if filter_mode == "3hm_plus_fhv1" {
+        match state.embedder.embed_batch_dual(domain_opt, &batch).await {
+            Ok(dual) => (Ok(dual.f32_vectors), dual.raw_f64_vectors),
+            Err(err) => (Err(err), None),
+        }
     } else {
-        state.embedder.embed_batch_f32(&batch).await
+        let res = if let Some(domain_id) = domain_opt {
+            state
+                .embedder
+                .embed_batch_for_domain(Some(domain_id), &batch)
+                .await
+        } else {
+            state.embedder.embed_batch_f32(&batch).await
+        };
+        (res, None)
     };
     let mut vectors = match embedded {
         Ok(vectors) if vectors.len() == batch.len() => vectors,
@@ -932,7 +941,7 @@ pub async fn handle_api_v1_chat(
                     &user_text,
                     true,
                     &batch,
-                    &vectors,
+                    reused_raw_f64.as_deref(),
                     embedding_inference_ms,
                 )
                 .await
@@ -977,7 +986,7 @@ pub async fn handle_api_v1_chat(
                     &user_text,
                     true,
                     &batch,
-                    &vectors,
+                    reused_raw_f64.as_deref(),
                     embedding_inference_ms,
                 )
                 .await
@@ -996,7 +1005,7 @@ pub async fn handle_api_v1_chat(
             &user_text,
             false,
             &batch,
-            &vectors,
+            reused_raw_f64.as_deref(),
             embedding_inference_ms,
         )
         .await
@@ -1030,7 +1039,7 @@ async fn run_fhv1_chat_gate<'a>(
     user_text: &'a str,
     preserve_3hm_breach: bool,
     reused_texts: &'a [&'a str],
-    reused_vectors: &'a [AlignedVec1024],
+    reused_raw_f64: Option<&'a [[f64; DIM]]>,
     embedding_ms: f64,
 ) -> Result<Option<String>, Response> {
     crate::fhv1_api::run_realtime_chat(
@@ -1040,7 +1049,7 @@ async fn run_fhv1_chat_gate<'a>(
             user_text,
             preserve_3hm_breach,
             reused_texts,
-            reused_vectors,
+            reused_raw_f64,
             embedding_ms,
         },
     )

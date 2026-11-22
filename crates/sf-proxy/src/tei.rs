@@ -1,6 +1,6 @@
 //! TEI gRPC and HTTP embedders. Every gRPC request sets `normalize = true`.
 
-use crate::embedder::BatchEmbedderClient;
+use crate::embedder::{BatchEmbedderClient, DualEmbedBatch};
 use crate::normalize::{validate_and_normalize_f32_slice, validate_raw_f64_slice, NormalizeError};
 use async_trait::async_trait;
 use sf_kernels::{AlignedVec1024, DIM};
@@ -109,25 +109,34 @@ impl TeiHttpEmbedder {
 #[async_trait]
 impl BatchEmbedderClient for TeiHttpEmbedder {
     async fn embed_batch_f32(&self, texts: &[&str]) -> Result<Vec<AlignedVec1024>, String> {
-        let rows = self.post_embed(texts, true).await?;
-        let mut vectors = Vec::with_capacity(rows.len());
-        for row in rows {
-            let nums = row
-                .as_array()
-                .ok_or_else(|| "fail-closed: TEI HTTP row is not an array".to_string())?;
-            let mut raw = Vec::with_capacity(nums.len());
-            for number in nums {
-                let value = number.as_f64().ok_or_else(|| {
-                    "fail-closed: TEI HTTP coordinate is not a number".to_string()
-                })?;
-                raw.push(value as f32);
-            }
-            vectors.push(normalize_or_string(&raw)?);
-        }
-        Ok(vectors)
+        let raw_f64 = self.post_embed_f64_rows(texts, true).await?;
+        f64_rows_to_f32(&raw_f64)
     }
 
     async fn embed_batch_raw_f64(
+        &self,
+        texts: &[&str],
+        normalize: bool,
+    ) -> Result<Vec<[f64; DIM]>, String> {
+        self.post_embed_f64_rows(texts, normalize).await
+    }
+
+    async fn embed_batch_dual(
+        &self,
+        _domain_id: Option<&str>,
+        texts: &[&str],
+    ) -> Result<DualEmbedBatch, String> {
+        let raw_f64_vectors = self.post_embed_f64_rows(texts, true).await?;
+        let f32_vectors = f64_rows_to_f32(&raw_f64_vectors)?;
+        Ok(DualEmbedBatch {
+            f32_vectors,
+            raw_f64_vectors: Some(raw_f64_vectors),
+        })
+    }
+}
+
+impl TeiHttpEmbedder {
+    async fn post_embed_f64_rows(
         &self,
         texts: &[&str],
         normalize: bool,
@@ -155,9 +164,7 @@ impl BatchEmbedderClient for TeiHttpEmbedder {
         }
         Ok(vectors)
     }
-}
 
-impl TeiHttpEmbedder {
     async fn post_embed(
         &self,
         texts: &[&str],
@@ -195,6 +202,15 @@ impl TeiHttpEmbedder {
             })
             .ok_or_else(|| "fail-closed: TEI HTTP payload is not an embedding list".to_string())
     }
+}
+
+fn f64_rows_to_f32(rows: &[[f64; DIM]]) -> Result<Vec<AlignedVec1024>, String> {
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        let f32_row = row.map(|value| value as f32);
+        out.push(normalize_or_string(&f32_row)?);
+    }
+    Ok(out)
 }
 
 fn normalize_or_string(values: &[f32]) -> Result<AlignedVec1024, String> {
@@ -260,6 +276,33 @@ mod tests {
             .expect_err("short");
         assert!(err.contains("fail-closed"), "{err}");
         let _ = request.body.await;
+    }
+
+    #[tokio::test]
+    async fn http_dual_batch_preserves_raw_f64_bits_in_single_post() {
+        let mut row = [0.0f64; DIM];
+        row[0] = f64::from_bits(0.1f64.to_bits() + 1);
+        row[1] = 0.99498743710662;
+        let body = serde_json::to_string(&vec![row.to_vec()]).expect("json");
+        let request = serve_once(body).await;
+        let embedder = TeiHttpEmbedder::new(format!("http://{}", request.addr));
+        let dual = embedder
+            .embed_batch_dual(Some("python"), &["clause"])
+            .await
+            .expect("dual");
+        assert_eq!(dual.f32_vectors.len(), 1);
+        let raw = dual
+            .raw_f64_vectors
+            .expect("TeiHttpEmbedder must return raw_f64_vectors");
+        assert_eq!(raw.len(), 1);
+        assert_eq!(raw[0][0].to_bits(), row[0].to_bits());
+        assert_ne!(
+            raw[0][0].to_bits(),
+            f64::from(dual.f32_vectors[0].data[0]).to_bits()
+        );
+        let captured = request.body.await.expect("request");
+        assert!(captured.contains("\"normalize\":true"), "{captured}");
+        assert!(captured.contains("\"inputs\":[\"clause\"]"), "{captured}");
     }
 
     struct PendingRequest {

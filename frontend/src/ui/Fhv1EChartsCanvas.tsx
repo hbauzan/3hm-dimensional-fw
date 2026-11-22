@@ -47,5 +47,5 @@ export function Fhv1EChartsCanvas({
     chart.current?.setOption(option, true)
   }, [option])
 
-  return <div ref={node} role="img" aria-label={label} className="h-64 w-full" />
+  return <div ref={node} role="img" aria-label={label} className="h-64 w-full shrink-0" />
 }

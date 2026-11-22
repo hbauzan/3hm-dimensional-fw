@@ -4,10 +4,12 @@ import {
   FHV1_ROGUE_INDICES,
   FHV1_TIER_NAMES,
   formatLosslessF64,
+  formatViolationMagnitudeDirection,
   isFhv1RogueDim,
   movementTierName,
   parseFhv1BenchmarkDetail,
   parseFhv1ChatTelemetry,
+  parseFhv1Drilldown,
   parseFhv1Evaluation,
   parseObservedBitsHex,
 } from './fhv1.ts'
@@ -252,6 +254,157 @@ describe('fhv1 lossless formatting', () => {
     if (!absent.ok) return
     expect(absent.value.granularity_comparison).toBeNull()
     expect(absent.value.oob_catch_counts).toBeNull()
+    expect(absent.value.failed_dims_count_histogram).toBeNull()
+    expect(absent.value.failed_dims_count_histogram_by_category).toBeNull()
+  })
+
+  it('parses failed dimension histograms and fails closed on malformed payloads', () => {
+    const parsed = parseFhv1BenchmarkDetail({
+      ...benchmarkRun,
+      summary_metrics: {
+        failed_dims_count_histogram: { '0': 3, '12': 1 },
+        failed_dims_count_histogram_by_category: {
+          IN_DOMAIN_VALID: { '0': 2 },
+          OUT_OF_DOMAIN_BENIGN: { '12': 1 },
+          HYBRID_BOUNDARY: { '0': 1 },
+          ADVERSARIAL_FUZZING: {},
+        },
+      },
+    })
+    expect(parsed.ok).toBe(true)
+    if (!parsed.ok) return
+    expect(parsed.value.failed_dims_count_histogram).toEqual({ '0': 3, '12': 1 })
+    expect(parsed.value.failed_dims_count_histogram_by_category).toEqual({
+      IN_DOMAIN_VALID: { '0': 2 },
+      OUT_OF_DOMAIN_BENIGN: { '12': 1 },
+      HYBRID_BOUNDARY: { '0': 1 },
+      ADVERSARIAL_FUZZING: {},
+    })
+
+    for (const badMetrics of [
+      { failed_dims_count_histogram: null },
+      { failed_dims_count_histogram: [] },
+      { failed_dims_count_histogram: { '-1': 2 } },
+      { failed_dims_count_histogram: { abc: 2 } },
+      { failed_dims_count_histogram: { '0': -1 } },
+      { failed_dims_count_histogram: { '0': 1.5 } },
+      { failed_dims_count_histogram_by_category: null },
+      { failed_dims_count_histogram_by_category: { IN_DOMAIN_VALID: 'bad' } },
+      { failed_dims_count_histogram_by_category: { '': { '0': 1 } } },
+      { failed_dims_count_histogram_by_category: { IN_DOMAIN_VALID: { '0': 1.25 } } },
+    ]) {
+      expect(
+        parseFhv1BenchmarkDetail({
+          ...benchmarkRun,
+          summary_metrics: badMetrics,
+        }).ok,
+      ).toBe(false)
+    }
+  })
+
+  it('preserves drill-down mean, delta_vs_mean, norm_pos, and lossless violation direction', () => {
+    const parsed = parseFhv1Drilldown({
+      trace_id: 'trace-1',
+      profile_id: 'python-v1-abc',
+      chunks: [
+        {
+          chunk_index: 0,
+          chunk_strategy: 'full_doc',
+          chunk_text: 'hola',
+          chunk_passed: false,
+          dimensions: [
+            {
+              observed: 0.1,
+              observed_bits_hex: '0x3fb999999999999a',
+              min: 0.25,
+              max: 0.75,
+              mean: 0.5,
+              status: 'underflow',
+              violation_delta: 0.15000000000000002,
+              delta_vs_mean: -0.4,
+              norm_pos: -0.3,
+            },
+            {
+              observed: 0.85,
+              observed_bits_hex: '0x3feb333333333333',
+              min: 0.25,
+              max: 0.55,
+              mean: 0.4,
+              status: 'overflow',
+              violation_delta: 0.30000000000000004,
+              delta_vs_mean: 0.45,
+              norm_pos: 2,
+            },
+            {
+              observed: 0.5,
+              observed_bits_hex: '0x3fe0000000000000',
+              min: 0.5,
+              max: 0.5,
+              mean: 0.5,
+              status: 'in_bounds',
+              violation_delta: 0,
+              delta_vs_mean: 0,
+              norm_pos: null,
+            },
+          ],
+        },
+      ],
+    })
+    expect(parsed.ok).toBe(true)
+    if (!parsed.ok) return
+    const dims = parsed.value.chunks[0]?.dimensions ?? []
+    expect(dims[0]?.mean).toBe(0.5)
+    expect(dims[0]?.delta_vs_mean).toBe(-0.4)
+    expect(dims[0]?.norm_pos).toBe(-0.3)
+    expect(dims[2]?.norm_pos).toBeNull()
+    expect(formatViolationMagnitudeDirection(dims[0]!)).toBe('underflow min-x=0.15000000000000002')
+    expect(formatViolationMagnitudeDirection(dims[1]!)).toBe('overflow x-max=0.30000000000000004')
+    expect(formatViolationMagnitudeDirection(dims[2]!)).toBe('0')
+    expect(
+      formatViolationMagnitudeDirection({
+        observed: 0,
+        observed_bits_hex: '0x0000000000000000',
+        min: 0,
+        max: 1,
+        mean: 0.5,
+        status: 'pruned_rogue',
+        violation_delta: 0,
+        delta_vs_mean: -0.5,
+        norm_pos: 0,
+      }),
+    ).toBe('0')
+
+    const baseDim = {
+      observed: 0.1,
+      observed_bits_hex: '0x3fb999999999999a',
+      min: 0,
+      max: 1,
+      mean: 0.5,
+      status: 'in_bounds',
+      violation_delta: 0,
+      delta_vs_mean: -0.4,
+      norm_pos: 0.1,
+    }
+    const { mean: _m, ...withoutMean } = baseDim
+    const { delta_vs_mean: _d, ...withoutDelta } = baseDim
+    const { norm_pos: _n, ...withoutNorm } = baseDim
+    for (const badDim of [withoutMean, withoutDelta, withoutNorm, { ...baseDim, norm_pos: 'bad' }]) {
+      expect(
+        parseFhv1Drilldown({
+          trace_id: 'trace-1',
+          profile_id: 'python-v1-abc',
+          chunks: [
+            {
+              chunk_index: 0,
+              chunk_strategy: 'full_doc',
+              chunk_text: 'hola',
+              chunk_passed: true,
+              dimensions: [badDim],
+            },
+          ],
+        }).ok,
+      ).toBe(false)
+    }
   })
 })
 

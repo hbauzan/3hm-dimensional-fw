@@ -2,11 +2,13 @@
 
 use async_trait::async_trait;
 use sf_bench::{
-    confusion_from_flags, forbidden_digests, metrics_for, overlap_ids, persist_benchmark_run,
-    prepare_prompts, score_view, select_view, Fhv1Prompt, PersistRequest,
+    canonical_fhv1_documents, confusion_from_flags, forbidden_digests, metrics_for, overlap_ids,
+    persist_benchmark_run, prepare_prompts, score_view, select_view, Fhv1Prompt, PersistRequest,
 };
 use sf_kernels::{AlignedVec1024, Fhv1EvalGranularity, Fhv1Quantiles, MovementMetric, DIM};
-use sf_proxy::{calibrate_fhv1_corpus, BatchEmbedderClient, Fhv1CalibrateSpec};
+use sf_proxy::{
+    calibrate_fhv1_corpus, expand_for_granularity, BatchEmbedderClient, Fhv1CalibrateSpec,
+};
 use sf_storage::{Fhv1Store, Fhv1TraceQuery};
 
 const INSIDE: &str = "Inside document stays within the calibrated envelope.";
@@ -43,13 +45,24 @@ impl BatchEmbedderClient for TestRawF64Embedder {
     }
 }
 
-fn prompt(id: &str, category: &str, expected: bool, text: &str) -> Fhv1Prompt {
+fn prompt_with_subtype(
+    id: &str,
+    category: &str,
+    expected: bool,
+    text: &str,
+    subtype: Option<&str>,
+) -> Fhv1Prompt {
     Fhv1Prompt {
         input_id: id.to_string(),
         category: category.to_string(),
         expected_pass: expected,
         text: text.to_string(),
+        subtype: subtype.map(str::to_string),
     }
+}
+
+fn prompt(id: &str, category: &str, expected: bool, text: &str) -> Fhv1Prompt {
+    prompt_with_subtype(id, category, expected, text, None)
 }
 
 #[test]
@@ -117,9 +130,21 @@ async fn granularity_mask_and_lance_persistence_diverge() {
     .expect("calibrate");
     let mixed = format!("{INSIDE} {LEAVING}.");
     let prompts = vec![
-        prompt("in", "IN_DOMAIN_VALID", true, INSIDE),
-        prompt("hybrid", "IN_DOMAIN_VALID", true, &mixed),
-        prompt("rogue", "ADVERSARIAL_FUZZING", false, ROGUE),
+        prompt_with_subtype("in", "IN_DOMAIN_VALID", true, INSIDE, Some("short_en")),
+        prompt_with_subtype(
+            "hybrid",
+            "IN_DOMAIN_VALID",
+            true,
+            &mixed,
+            Some("clause_mix"),
+        ),
+        prompt_with_subtype(
+            "rogue",
+            "ADVERSARIAL_FUZZING",
+            false,
+            ROGUE,
+            Some("rogue_probe"),
+        ),
     ];
     let prepared = prepare_prompts(&TestRawF64Embedder, &prompts, false)
         .await
@@ -175,6 +200,21 @@ async fn granularity_mask_and_lance_persistence_diverge() {
             .expect("count")
             > 0
     );
+    assert!(
+        clause_metrics.summary["failed_dims_count_histogram_by_category"]["IN_DOMAIN_VALID"]
+            .is_object()
+    );
+    assert_eq!(
+        clause_metrics.summary["failed_dims_stats_by_category"]["IN_DOMAIN_VALID"]["prompt_count"],
+        2
+    );
+    assert_eq!(
+        clause_metrics.summary["per_subtype"]["short_en"]["passed"],
+        1
+    );
+    assert!(clause_metrics.summary["latency"]["prompt_eval_p50_ns"]
+        .as_f64()
+        .is_some());
     let run_id = "fhv1-e2e-clauses";
     persist_benchmark_run(
         &store,
@@ -199,6 +239,7 @@ async fn granularity_mask_and_lance_persistence_diverge() {
     assert!(runs[0].summary_metrics_json.contains("confusion"));
     let page = store
         .query_audit_trace_summaries(&Fhv1TraceQuery {
+            trace_id: None,
             run_id: Some(run_id.to_string()),
             profile_id: None,
             source_kind: Some("BENCHMARK".to_string()),
@@ -213,4 +254,57 @@ async fn granularity_mask_and_lance_persistence_diverge() {
     assert!(page.rows.iter().all(|row| row.source_kind == "BENCHMARK"));
     assert!(!path.join("domain_hypercubes.lance").exists());
     let _ = std::fs::remove_dir_all(&path);
+}
+
+#[test]
+fn curated_corpus_and_benchmark_banks_have_zero_rust_overlap_and_nonempty_chunks() {
+    let banks: serde_json::Value =
+        serde_json::from_str(include_str!("../../../tools/fhv1_benchmark_banks.json"))
+            .expect("parse fhv1_benchmark_banks.json");
+
+    for policy_id in ["python", "receta"] {
+        let corpus = canonical_fhv1_documents(policy_id).expect("corpus");
+        let forbidden = forbidden_digests(&corpus);
+        let domain_bank = banks
+            .get(policy_id)
+            .and_then(|v| v.as_object())
+            .expect("domain bank");
+        let mut prompts = Vec::new();
+        for (quadrant, entries) in domain_bank {
+            for (idx, item) in entries.as_array().expect("entries").iter().enumerate() {
+                let text = item
+                    .get("text")
+                    .and_then(|v| v.as_str())
+                    .expect("text")
+                    .to_string();
+                prompts.push(prompt_with_subtype(
+                    &format!("{policy_id}-{quadrant}-{idx}"),
+                    quadrant,
+                    quadrant == "in_domain_valid",
+                    &text,
+                    item.get("subtype").and_then(|v| v.as_str()),
+                ));
+            }
+        }
+        let hits = overlap_ids(&forbidden, &prompts);
+        assert!(
+            hits.is_empty(),
+            "{policy_id} Rust forbidden_digests overlap with benchmark banks: {hits:?}"
+        );
+        for item in &prompts {
+            for gran in [
+                Fhv1EvalGranularity::FullOnly,
+                Fhv1EvalGranularity::Clauses,
+                Fhv1EvalGranularity::FullMirror,
+            ] {
+                let chunks = expand_for_granularity(&item.text, gran);
+                assert!(
+                    !chunks.is_empty(),
+                    "{policy_id} prompt {} expanded to zero chunks for {gran:?}: {:?}",
+                    item.input_id,
+                    item.text
+                );
+            }
+        }
+    }
 }

@@ -1,9 +1,10 @@
 //! `/api/v1/fhv1` routes and the realtime chat gate.
 #![allow(clippy::result_large_err)]
 
+use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
@@ -13,19 +14,22 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sf_kernels::{
-    classify_movement_tiers, evaluate_fhv1_batch, AlignedVec1024, DimBoundStatus,
-    Fhv1EvalGranularity, Fhv1Quantiles, MovementMetric, DIM,
+    classify_movement_tiers, DimBoundStatus, Fhv1EvalGranularity, Fhv1Quantiles, MovementMetric,
+    DIM,
 };
 use sf_storage::{
-    export_csv, export_parquet, export_xlsx, stats_from_profile, Fhv1AuditTrace, Fhv1BenchmarkRun,
-    Fhv1ProfileRecord, Fhv1Store, Fhv1TraceQuery, Fhv1XlsxPayload, FHV1_XLSX_MAX_ROWS,
+    export_csv, export_parquet, export_xlsx, Fhv1AuditTrace, Fhv1BenchmarkRun, Fhv1ProfileRecord,
+    Fhv1Store, Fhv1TraceQuery, Fhv1XlsxPayload, FHV1_XLSX_MAX_ROWS,
 };
 use sha2::{Digest, Sha256};
 
 use crate::chat_api::ChatRequestDto;
-use crate::fhv1_pipeline::{
-    evaluate_fhv1_input, expand_for_granularity, Fhv1CalibrateSpec, Fhv1EvaluateSpec,
+use crate::fhv1_eval::{
+    attach_comparison, build_benchmark_run, forbid_surface, granularity_name, metrics_for,
+    overlap_ids, parse_granularity as parse_eval_granularity, persist_benchmark_run,
+    prepare_prompts_for, score_view, select_view, Fhv1Prompt, PersistRequest,
 };
+use crate::fhv1_pipeline::Fhv1EvaluatedInput;
 use crate::handler::ProxyAppState;
 
 pub fn routes() -> Router<Arc<ProxyAppState>> {
@@ -50,7 +54,7 @@ pub struct RealtimeChatFhv1<'a> {
     pub user_text: &'a str,
     pub preserve_3hm_breach: bool,
     pub reused_texts: &'a [&'a str],
-    pub reused_vectors: &'a [AlignedVec1024],
+    pub reused_raw_f64: Option<&'a [[f64; DIM]]>,
     pub embedding_ms: f64,
 }
 
@@ -98,7 +102,7 @@ pub async fn run_realtime_chat(
         use_rogue_mask,
         ReusedBatch {
             texts: request.reused_texts,
-            vectors: request.reused_vectors,
+            raw_f64_vectors: request.reused_raw_f64,
             embedding_ms: request.embedding_ms,
         },
     )
@@ -123,13 +127,13 @@ pub async fn run_realtime_chat(
         },
         &evaluated.chunks,
         &evaluated.vectors,
-        &evaluated.scored,
+        &evaluated,
     )
     .await?;
     if request.preserve_3hm_breach {
         return Ok(None);
     }
-    if evaluated.scored.batch.overall_passed {
+    if evaluated.batch.overall_passed {
         return Ok(Some(trace_id));
     }
     Err(fhv1_breach_response(
@@ -141,16 +145,9 @@ pub async fn run_realtime_chat(
     ))
 }
 
-struct ScoredRealtime {
-    chunks: Vec<crate::fhv1_pipeline::ExpandedChunk>,
-    vectors: Vec<Box<[f64; DIM]>>,
-    scored: crate::fhv1_pipeline::Fhv1EvaluatedInput,
-    embedding_ms: f64,
-}
-
 struct ReusedBatch<'a> {
     texts: &'a [&'a str],
-    vectors: &'a [AlignedVec1024],
+    raw_f64_vectors: Option<&'a [[f64; DIM]]>,
     embedding_ms: f64,
 }
 
@@ -161,42 +158,37 @@ async fn score_realtime(
     granularity: Fhv1EvalGranularity,
     use_rogue_mask: bool,
     reused: ReusedBatch<'_>,
-) -> Result<ScoredRealtime, Response> {
-    let chunks = expand_for_granularity(user_text, granularity);
-    let reuse = profile.normalize
-        && granularity != Fhv1EvalGranularity::FullMirror
-        && chunks.len() == reused.texts.len()
-        && chunks.len() == reused.vectors.len()
-        && chunks
-            .iter()
-            .zip(reused.texts)
-            .all(|(chunk, text)| chunk.text == *text);
-    if reuse {
-        let vectors: Vec<Box<[f64; DIM]>> = reused.vectors.iter().map(promote_f32).collect();
-        let rows: Vec<&[f64]> = vectors.iter().map(|row| row.as_slice()).collect();
-        let stats = stats_from_profile(profile);
-        let eval_started = Instant::now();
-        let batch = evaluate_fhv1_batch(&stats, &rows, granularity, use_rogue_mask)
-            .map_err(|err| error_response(StatusCode::BAD_REQUEST, &err.to_string()))?;
-        let eval_latency_ns = u64::try_from(eval_started.elapsed().as_nanos()).unwrap_or(u64::MAX);
-        let scored = crate::fhv1_pipeline::Fhv1EvaluatedInput {
-            chunks: chunks.clone(),
-            vectors: vectors.clone(),
-            batch,
-            embedding_ms: reused.embedding_ms,
-            eval_latency_ns,
-        };
-        return Ok(ScoredRealtime {
+) -> Result<Fhv1EvaluatedInput, Response> {
+    let chunks = crate::fhv1_pipeline::expand_for_granularity(user_text, granularity);
+    if let Some(raw_f64) = (profile.normalize && granularity != Fhv1EvalGranularity::FullMirror)
+        .then_some(reused.raw_f64_vectors)
+        .flatten()
+        .filter(|raw_f64| {
+            !chunks.is_empty()
+                && chunks.len() == reused.texts.len()
+                && chunks.len() == raw_f64.len()
+                && chunks
+                    .iter()
+                    .zip(reused.texts)
+                    .all(|(chunk, text)| chunk.text == *text)
+        })
+    {
+        let vectors: Vec<Box<[f64; DIM]>> =
+            raw_f64.iter().map(crate::fhv1_pipeline::box_row).collect();
+        return crate::fhv1_pipeline::score_expanded_vectors(
+            profile,
             chunks,
             vectors,
-            scored,
-            embedding_ms: reused.embedding_ms,
-        });
+            granularity,
+            use_rogue_mask,
+            reused.embedding_ms,
+        )
+        .map_err(|err| error_response(StatusCode::BAD_REQUEST, &err));
     }
-    let scored = evaluate_fhv1_input(
+    crate::fhv1_pipeline::evaluate_fhv1_input(
         state.embedder.as_ref(),
         profile,
-        &Fhv1EvaluateSpec {
+        &crate::fhv1_pipeline::Fhv1EvaluateSpec {
             raw_text: user_text,
             granularity,
             normalize_embeddings: profile.normalize,
@@ -204,25 +196,7 @@ async fn score_realtime(
         },
     )
     .await
-    .map_err(|err| error_response(StatusCode::BAD_GATEWAY, &err))?;
-    let chunks = scored.chunks.clone();
-    let vectors = scored.vectors.clone();
-    let embedding_ms = scored.embedding_ms;
-    Ok(ScoredRealtime {
-        chunks,
-        vectors,
-        scored,
-        embedding_ms,
-    })
-}
-
-fn promote_f32(vector: &AlignedVec1024) -> Box<[f64; DIM]> {
-    let mut row = vec![0.0; DIM];
-    for (index, value) in vector.data.iter().enumerate() {
-        row[index] = f64::from(*value);
-    }
-    let boxed: Box<[f64]> = row.into_boxed_slice();
-    boxed.try_into().unwrap_or_else(|_| unreachable!("dim"))
+    .map_err(|err| error_response(StatusCode::BAD_GATEWAY, &err))
 }
 
 fn fhv1_breach_response(
@@ -230,16 +204,15 @@ fn fhv1_breach_response(
     trace_id: &str,
     granularity: Fhv1EvalGranularity,
     use_rogue_mask: bool,
-    evaluated: &ScoredRealtime,
+    evaluated: &Fhv1EvaluatedInput,
 ) -> Response {
     let failing = evaluated
-        .scored
         .batch
         .chunks
         .iter()
         .position(|chunk| !chunk.chunk_passed)
         .unwrap_or(0);
-    let chunk = &evaluated.scored.batch.chunks[failing];
+    let chunk = &evaluated.batch.chunks[failing];
     let body = json!({
         "error": {
             "kind": "fhv1_ingress_breach",
@@ -252,15 +225,15 @@ fn fhv1_breach_response(
                 "failing_tier": "FHV1_AABB_ENVELOPE",
                 "eval_granularity": granularity_name(granularity),
                 "use_rogue_mask": use_rogue_mask,
-                "full_text_passed": evaluated.scored.batch.full_text_passed,
-                "all_chunks_passed": evaluated.scored.batch.all_chunks_passed,
+                "full_text_passed": evaluated.batch.full_text_passed,
+                "all_chunks_passed": evaluated.batch.all_chunks_passed,
                 "failing_chunk_index": failing,
                 "failed_dims_count": chunk.failed_dims_count,
                 "underflow_count": chunk.underflow_count,
                 "overflow_count": chunk.overflow_count,
                 "max_violation_delta": chunk.max_violation_delta,
                 "embedding_ms": evaluated.embedding_ms,
-                "eval_latency_ns": evaluated.scored.eval_latency_ns,
+                "eval_latency_ns": evaluated.eval_latency_ns,
             }
         }
     });
@@ -346,18 +319,22 @@ async fn calibrate(
         Ok(store) => store,
         Err(response) => return response,
     };
+    let metric = match parse_metric(body.metric.as_deref()) {
+        Ok(metric) => metric,
+        Err(response) => return response,
+    };
     let profile = crate::fhv1_pipeline::calibrate_fhv1_corpus(
         store,
         state.embedder.as_ref(),
-        &Fhv1CalibrateSpec {
+        &crate::fhv1_pipeline::Fhv1CalibrateSpec {
             policy_id: &body.policy_id,
             raw_texts: &body.texts,
             normalize: body.normalize.unwrap_or(true),
             use_rogue_mask_default: body.use_rogue_mask_default.unwrap_or(false),
             polarity: 0,
             model_id: "BAAI/bge-m3",
-            augmented_llm: false,
-            metric: MovementMetric::Span,
+            augmented_llm: body.augmented_llm.unwrap_or(false),
+            metric,
             quantiles: Fhv1Quantiles::standard(),
         },
     )
@@ -440,10 +417,10 @@ async fn evaluate(
     let use_rogue_mask = body
         .use_rogue_mask
         .unwrap_or(profile.use_rogue_mask_default);
-    let scored = match evaluate_fhv1_input(
+    let scored = match crate::fhv1_pipeline::evaluate_fhv1_input(
         state.embedder.as_ref(),
         &profile,
-        &Fhv1EvaluateSpec {
+        &crate::fhv1_pipeline::Fhv1EvaluateSpec {
             raw_text: &body.text,
             granularity,
             normalize_embeddings: profile.normalize,
@@ -580,92 +557,69 @@ async fn run_benchmark(
         Ok(samples) => samples,
         Err(err) => return store_error(err),
     };
-    let mut banned = std::collections::BTreeSet::new();
-    for sample in &samples {
-        banned.insert(digest_text(&sample.raw_text));
-        banned.insert(digest_text(&nfkc_lower(&sample.raw_text)));
-    }
-    for prompt in &prompts {
-        if banned.contains(&digest_text(&prompt.text))
-            || banned.contains(&digest_text(&nfkc_lower(&prompt.text)))
-        {
-            return error_response(StatusCode::CONFLICT, "calibration overlap fail-closed");
-        }
+    let sample_texts: Vec<String> = samples.into_iter().map(|sample| sample.raw_text).collect();
+    let mut forbidden = BTreeSet::new();
+    forbid_surface(&mut forbidden, &sample_texts);
+    if !overlap_ids(&forbidden, &prompts).is_empty() {
+        return error_response(StatusCode::CONFLICT, "calibration overlap fail-closed");
     }
     let granularity = match parse_granularity(body.eval_granularity.as_deref()) {
         Ok(granularity) => granularity,
         Err(response) => return response,
     };
     let use_rogue_mask = body.use_rogue_mask.unwrap_or(false);
-    let mut traces = Vec::new();
-    let mut passed_flags = Vec::new();
+    let prepared = match prepare_prompts_for(
+        state.embedder.as_ref(),
+        &prompts,
+        profile.normalize,
+        &[granularity],
+    )
+    .await
+    {
+        Ok(prepared) => prepared,
+        Err(err) => return error_response(StatusCode::BAD_GATEWAY, &err),
+    };
+    let mut scored = Vec::with_capacity(prepared.len());
+    for item in &prepared {
+        let view = match select_view(item, granularity) {
+            Ok(view) => view,
+            Err(err) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &err),
+        };
+        match score_view(&profile, view, use_rogue_mask) {
+            Ok(row) => scored.push(row),
+            Err(err) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &err),
+        }
+    }
+    let mut metrics = metrics_for(
+        &prompts,
+        &scored,
+        granularity,
+        use_rogue_mask,
+        profile.movement_tier_codes.as_ref(),
+    );
+    attach_comparison(&mut metrics.summary, &[metrics.comparison_row]);
     let run_id = new_trace_id("bench");
     let created_at_ms = now_ms();
-    for prompt in &prompts {
-        let scored = match evaluate_fhv1_input(
-            state.embedder.as_ref(),
-            &profile,
-            &Fhv1EvaluateSpec {
-                raw_text: &prompt.text,
-                granularity,
-                normalize_embeddings: profile.normalize,
-                use_rogue_mask,
-            },
-        )
-        .await
-        {
-            Ok(scored) => scored,
-            Err(err) => return error_response(StatusCode::BAD_GATEWAY, &err),
-        };
-        passed_flags.push(scored.batch.overall_passed);
-        let prompt_trace_id = format!("{run_id}-{}", prompt.input_id);
-        push_traces(
-            &mut traces,
-            &profile,
-            &TraceMeta {
-                trace_id: &prompt_trace_id,
-                run_id: &run_id,
-                source_kind: "BENCHMARK",
-                category: &prompt.category,
-                expected_pass: Some(prompt.expected_pass),
-                raw_text: &prompt.text,
-                input_id: &prompt.input_id,
-                granularity,
-                use_rogue_mask,
-                embedding_ms: scored.embedding_ms,
-                created_at_ms,
-            },
-            &scored.chunks,
-            &scored.vectors,
-            &scored,
-        );
-    }
-    if let Err(err) = store.append_audit_traces(&traces).await {
-        return store_error(err);
-    }
-    let summary = confusion_summary(&prompts, &passed_flags);
-    let run = Fhv1BenchmarkRun {
-        run_id: run_id.clone(),
-        profile_id: profile.profile_id.clone(),
-        policy_id: profile.policy_id.clone(),
-        dataset_name: body
-            .dataset_path
-            .clone()
-            .unwrap_or_else(|| "samples".to_string()),
-        dataset_sha256: digest_bytes(&serde_json::to_vec(&prompts).unwrap_or_default()),
-        eval_granularity: granularity_name(granularity).to_string(),
+    let dataset_name = body.dataset_path.as_deref().unwrap_or("samples");
+    let dataset_sha256 = digest_bytes(&serde_json::to_vec(&prompts).unwrap_or_default());
+    let persist_request = PersistRequest {
+        granularity,
         use_rogue_mask,
-        total_inputs: prompts.len() as u64,
-        total_chunks: traces.len() as u64,
-        summary_metrics_json: summary.to_string(),
+        dataset_name,
+        dataset_sha256,
+        summary: &metrics.summary,
+        run_id: &run_id,
         created_at_ms,
     };
-    if let Err(err) = store.save_benchmark_run(&run).await {
-        return store_error(err);
+    let run = build_benchmark_run(&profile, prepared.len() as u64, &scored, &persist_request);
+    if let Err(err) =
+        persist_benchmark_run(store, &profile, &prepared, &scored, &persist_request).await
+    {
+        return error_response(StatusCode::INTERNAL_SERVER_ERROR, &err);
     }
-    let mut body = run_summary(&run);
-    body["summary_metrics"] = summary;
-    Json(body).into_response()
+    let mut response_body = run_summary(&run);
+    response_body["summary_metrics"] = metrics.summary;
+    Json(response_body).into_response()
 }
 
 async fn list_traces(
@@ -687,6 +641,7 @@ async fn list_traces(
         }
     };
     let request = Fhv1TraceQuery {
+        trace_id: query.trace_id,
         run_id: query.run_id,
         profile_id: query.profile_id,
         source_kind: query.source_kind,
@@ -757,6 +712,10 @@ struct CalibrateBody {
     texts: Vec<String>,
     normalize: Option<bool>,
     use_rogue_mask_default: Option<bool>,
+    #[serde(default)]
+    augmented_llm: Option<bool>,
+    #[serde(default)]
+    metric: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -773,25 +732,18 @@ struct EvaluateBody {
     use_rogue_mask: Option<bool>,
 }
 
-#[derive(Debug, Clone, Deserialize, serde::Serialize)]
-struct BenchmarkPrompt {
-    input_id: String,
-    category: String,
-    expected_pass: bool,
-    text: String,
-}
-
 #[derive(Debug, Deserialize)]
 struct BenchmarkBody {
     profile_id: String,
     dataset_path: Option<String>,
-    samples: Option<Vec<BenchmarkPrompt>>,
+    samples: Option<Vec<Fhv1Prompt>>,
     eval_granularity: Option<String>,
     use_rogue_mask: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
 struct TraceQuery {
+    trace_id: Option<String>,
     run_id: Option<String>,
     profile_id: Option<String>,
     source_kind: Option<String>,
@@ -801,7 +753,7 @@ struct TraceQuery {
     page_size: Option<u32>,
 }
 
-fn load_benchmark_prompts(body: &BenchmarkBody) -> Result<Vec<BenchmarkPrompt>, Response> {
+fn load_benchmark_prompts(body: &BenchmarkBody) -> Result<Vec<Fhv1Prompt>, Response> {
     if let Some(samples) = &body.samples {
         if samples.is_empty() {
             return Err(error_response(
@@ -825,7 +777,7 @@ fn load_benchmark_prompts(body: &BenchmarkBody) -> Result<Vec<BenchmarkPrompt>, 
         if trimmed.is_empty() {
             continue;
         }
-        let prompt: BenchmarkPrompt = serde_json::from_str(trimmed).map_err(|err| {
+        let prompt: Fhv1Prompt = serde_json::from_str(trimmed).map_err(|err| {
             error_response(
                 StatusCode::BAD_REQUEST,
                 &format!("dataset line {}: {err}", index + 1),
@@ -840,22 +792,6 @@ fn load_benchmark_prompts(body: &BenchmarkBody) -> Result<Vec<BenchmarkPrompt>, 
         ));
     }
     Ok(prompts)
-}
-
-fn confusion_summary(prompts: &[BenchmarkPrompt], passed: &[bool]) -> Value {
-    let mut tp = 0u64;
-    let mut tn = 0u64;
-    let mut fp = 0u64;
-    let mut fn_ = 0u64;
-    for (prompt, flag) in prompts.iter().zip(passed.iter()) {
-        match (prompt.expected_pass, *flag) {
-            (true, true) => tp += 1,
-            (true, false) => fn_ += 1,
-            (false, false) => tn += 1,
-            (false, true) => fp += 1,
-        }
-    }
-    json!({"confusion": {"tp": tp, "tn": tn, "fp": fp, "fn": fn_}})
 }
 
 fn profile_summary(profile: &Fhv1ProfileRecord) -> Value {
@@ -1011,27 +947,12 @@ fn store_error(err: impl ToString) -> Response {
 }
 
 fn parse_granularity(text: Option<&str>) -> Result<Fhv1EvalGranularity, Response> {
-    match text.unwrap_or("clauses") {
-        "full_only" => Ok(Fhv1EvalGranularity::FullOnly),
-        "clauses" => Ok(Fhv1EvalGranularity::Clauses),
-        "full_mirror" => Ok(Fhv1EvalGranularity::FullMirror),
-        other => Err(error_response(
-            StatusCode::BAD_REQUEST,
-            &format!("unknown eval_granularity {other}"),
-        )),
-    }
-}
-
-fn granularity_name(granularity: Fhv1EvalGranularity) -> &'static str {
-    match granularity {
-        Fhv1EvalGranularity::FullOnly => "full_only",
-        Fhv1EvalGranularity::Clauses => "clauses",
-        Fhv1EvalGranularity::FullMirror => "full_mirror",
-    }
+    parse_eval_granularity(text.unwrap_or("clauses"))
+        .map_err(|err| error_response(StatusCode::BAD_REQUEST, &err))
 }
 
 fn parse_metric(text: Option<&str>) -> Result<MovementMetric, Response> {
-    match text.unwrap_or("span") {
+    match text.unwrap_or("variance") {
         "variance" => Ok(MovementMetric::Variance),
         "std_dev" => Ok(MovementMetric::StdDev),
         "span" => Ok(MovementMetric::Span),
@@ -1040,15 +961,6 @@ fn parse_metric(text: Option<&str>) -> Result<MovementMetric, Response> {
             &format!("unknown metric {other}"),
         )),
     }
-}
-
-fn nfkc_lower(text: &str) -> String {
-    use unicode_normalization::UnicodeNormalization;
-    text.nfkc().collect::<String>().to_lowercase()
-}
-
-fn digest_text(text: &str) -> [u8; 32] {
-    digest_bytes(text.as_bytes())
 }
 
 fn digest_bytes(bytes: &[u8]) -> [u8; 32] {
@@ -1073,4 +985,111 @@ fn new_trace_id(prefix: &str) -> String {
     static TRACE_SEQ: AtomicU64 = AtomicU64::new(0);
     let seq = TRACE_SEQ.fetch_add(1, Ordering::Relaxed);
     format!("{prefix}-{}-{seq}", now_ms())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use http_body_util::BodyExt;
+    use serde_json::Value;
+    use sf_kernels::{AlignedVec1024, DIM};
+    use sf_storage::{Fhv1AuditTrace, Fhv1Store, HotRegistry};
+    use tower::ServiceExt;
+
+    use crate::{router, MockBatchEmbedder, MockUpstreamForwarder, ProxyAppState};
+
+    fn sample_trace(trace_id: &str, created_at_ms: i64) -> Fhv1AuditTrace {
+        let vec = vec![0.0; DIM].into_boxed_slice().try_into().expect("dim");
+        Fhv1AuditTrace {
+            trace_id: trace_id.to_string(),
+            run_id: String::new(),
+            source_kind: "REALTIME_LAB".to_string(),
+            profile_id: "python-v1-test".to_string(),
+            policy_id: "python".to_string(),
+            category: "REALTIME".to_string(),
+            expected_pass: None,
+            input_id: trace_id.to_string(),
+            raw_text: "hello".to_string(),
+            eval_granularity: "full_only".to_string(),
+            use_rogue_mask: false,
+            chunk_index: 0,
+            chunk_strategy: "full_doc".to_string(),
+            chunk_text: "hello".to_string(),
+            input_vector: vec,
+            chunk_passed: true,
+            overall_passed: true,
+            full_text_passed: true,
+            all_chunks_passed: true,
+            evaluated_dims: 1024,
+            failed_dims_count: 0,
+            underflow_count: 0,
+            overflow_count: 0,
+            max_violation_delta: 0.0,
+            mean_abs_delta_vs_mean: 0.0,
+            eval_latency_ns: 10,
+            embedding_ms: 1.0,
+            created_at_ms,
+        }
+    }
+
+    #[tokio::test]
+    async fn list_traces_pushes_down_trace_id_query_param() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let path =
+            std::env::temp_dir().join(format!("fhv1-api-trace-id-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&path).expect("temp dir");
+        let store = Arc::new(Fhv1Store::new(path.to_str().expect("utf8")));
+        store
+            .append_audit_traces(&[
+                sample_trace("trace-keep", 100),
+                sample_trace("trace-drop", 200),
+            ])
+            .await
+            .expect("append traces");
+
+        let app = router(Arc::new(ProxyAppState {
+            registry: Arc::new(HotRegistry::from_locks([])),
+            embedder: Arc::new(MockBatchEmbedder {
+                pass_vector: AlignedVec1024::zeros(),
+                breach_vector: AlignedVec1024::zeros(),
+                centroids: HashMap::new(),
+            }),
+            upstream: Arc::new(MockUpstreamForwarder),
+            mock_upstream: Arc::new(MockUpstreamForwarder),
+            default_domain: "python".to_string(),
+            max_telemetry_coords: 4,
+            fhv1_store: Some(store),
+        }));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/v1/fhv1/traces?trace_id=trace-keep")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let payload: Value = serde_json::from_slice(&bytes).expect("json");
+        assert_eq!(payload["total"], 1);
+        let rows = payload["rows"].as_array().expect("rows");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["trace_id"], "trace-keep");
+        let _ = std::fs::remove_dir_all(&path);
+    }
 }

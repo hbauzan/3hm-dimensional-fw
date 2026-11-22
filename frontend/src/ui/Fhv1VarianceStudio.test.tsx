@@ -102,9 +102,12 @@ describe('Fhv1VarianceStudio', () => {
     expect(screen.queryByText('0.3000')).toBeNull()
     expect(screen.getByRole('img', { name: 'fhv1 envelope' })).toBeTruthy()
     expect(
+      (screen.getByRole('combobox', { name: 'Movement metric' }) as HTMLSelectElement).value,
+    ).toBe('variance')
+    expect(
       calls.some(
         (call) =>
-          call.url.includes('metric=span') &&
+          call.url.includes('metric=variance') &&
           call.url.includes('p25=0.25') &&
           call.url.includes('p75=0.75') &&
           call.url.includes('p90=0.90'),
@@ -157,7 +160,7 @@ describe('Fhv1VarianceStudio', () => {
     render(<Fhv1VarianceStudio fetchImpl={fetchImpl} store={memorySessionStore()} />)
     expect(await screen.findByText('0.30000000000000004')).toBeTruthy()
 
-    await user.selectOptions(screen.getByRole('combobox', { name: 'Movement metric' }), 'variance')
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Movement metric' }), 'span')
     await user.selectOptions(screen.getByRole('combobox', { name: 'Movement metric' }), 'std_dev')
     await user.clear(screen.getByRole('textbox', { name: 'P25' }))
     await user.type(screen.getByRole('textbox', { name: 'P25' }), '0')
@@ -166,7 +169,7 @@ describe('Fhv1VarianceStudio', () => {
     await user.type(screen.getByRole('textbox', { name: 'P90' }), '1')
     await user.tab()
     await waitFor(() => {
-      expect(calls.some((url) => queryOf(url).get('metric') === 'variance')).toBe(true)
+      expect(calls.some((url) => queryOf(url).get('metric') === 'span')).toBe(true)
       expect(
         calls.some((url) => {
           const query = queryOf(url)

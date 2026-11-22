@@ -8,7 +8,6 @@
 from __future__ import annotations
 
 import argparse
-import base64
 import hashlib
 import json
 import os
@@ -24,6 +23,21 @@ CATEGORIES = (
     "ADVERSARIAL_FUZZING",
 )
 REPO_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_AUGMENTED_DIR = REPO_ROOT / "data/fhv1_augmented"
+
+_COOKING_CLINC_TERMS = ("mushroom", "chicken", "skillet")
+_ES_OOD_COOKING_KEYS = ("astronomia", "geologia")
+_ES_NON_CULINARY_DOMAINS = (
+    "legal",
+    "medicina",
+    "astronomia",
+    "finanzas",
+    "filosofia",
+    "musica",
+    "geologia",
+    "botanica",
+    "arquitectura",
+)
 
 
 def nfkc_lower(text: str) -> str:
@@ -46,26 +60,61 @@ def _rust_strings(block: str) -> list[str]:
     return [_unescape_rust(item) for item in re.findall(r'"((?:\\.|[^"\\])*)"', block)]
 
 
-def calibration_documents(policy_id: str) -> list[str]:
+def _read_jsonl_texts(path: Path) -> list[str]:
+    if not path.is_file():
+        return []
+    texts: list[str] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        trimmed = line.strip()
+        if not trimmed:
+            continue
+        if trimmed.startswith("{"):
+            obj = json.loads(trimmed)
+            val = obj.get("text") or obj.get("prompt")
+            if isinstance(val, str) and val.strip():
+                texts.append(val.strip())
+        else:
+            texts.append(trimmed)
+    return texts
+
+
+def calibration_documents(
+    policy_id: str,
+    augmented_dir: Path | None = None,
+) -> list[str]:
+    documents: list[str] = []
+
     corpus = (REPO_ROOT / "crates/sf-bench/src/canonical_corpus.rs").read_text(encoding="utf-8")
     marker = f'domain_id: "{policy_id}"'
     start = corpus.find(marker)
-    if start < 0:
-        return []
-    end = corpus.find("domain_id:", start + len(marker))
-    block = corpus[start: end if end > 0 else len(corpus)]
-    documents = _rust_strings(block)
+    if start >= 0:
+        end = corpus.find("domain_id:", start + len(marker))
+        block = corpus[start : end if end > 0 else len(corpus)]
+        documents.extend(_rust_strings(block))
+
     extra = (REPO_ROOT / "crates/sf-bench/src/fhv1_corpus.rs").read_text(encoding="utf-8")
     const_name = "PYTHON_PARAGRAPHS" if policy_id == "python" else "RECETA_PARAGRAPHS"
-    matched = re.search(
-        rf'const {const_name}: &str = "(.*?)";',
-        extra,
-        flags=re.DOTALL,
-    )
+    matched = re.search(rf'const {const_name}: &str = "(.*?)";', extra, flags=re.DOTALL)
     if matched:
         body = matched.group(1).replace("\\\n", "")
         documents.append(_unescape_rust(body))
-    return documents
+
+    fixture_path = REPO_ROOT / f"crates/sf-bench/fixtures/fhv1_corpus_{policy_id}.jsonl"
+    documents.extend(_read_jsonl_texts(fixture_path))
+
+    aug_root = DEFAULT_AUGMENTED_DIR if augmented_dir is None else augmented_dir
+    if aug_root.is_dir():
+        for jsonl_file in sorted(aug_root.glob(f"{policy_id}*.jsonl")):
+            documents.extend(_read_jsonl_texts(jsonl_file))
+
+    seen: set[str] = set()
+    unique: list[str] = []
+    for doc in documents:
+        trimmed = doc.strip()
+        if trimmed and trimmed not in seen:
+            seen.add(trimmed)
+            unique.append(trimmed)
+    return unique
 
 
 def _words(text: str) -> list[str]:
@@ -101,9 +150,12 @@ def expand_surface(text: str) -> list[str]:
     return surfaces
 
 
-def forbidden_surfaces(policy_id: str) -> set[str]:
+def forbidden_surfaces(
+    policy_id: str,
+    augmented_dir: Path | None = None,
+) -> set[str]:
     banned: set[str] = set()
-    for document in calibration_documents(policy_id):
+    for document in calibration_documents(policy_id, augmented_dir=augmented_dir):
         for surface in expand_surface(document):
             banned.add(surface)
             banned.add(nfkc_lower(surface))
@@ -125,100 +177,154 @@ def _string_list(value) -> list[str]:
     return []
 
 
-def source_pools(policy_id: str, suite2: dict, banks: dict) -> tuple[list[str], list[str]]:
-    in_domain = list(banks[policy_id])
-    in_domain.extend(_string_list(suite2["clean"][policy_id]))
-    other = "receta" if policy_id == "python" else "python"
-    ood = list(banks[other])
-    ood.extend(_string_list(suite2["clean"][other]))
-    ood.extend(_string_list(suite2["clinc_oos"]))
-    ood.extend(_string_list(suite2["deepset_english"]))
-    ood.extend(_string_list(suite2["es_injections"]))
-    return in_domain, ood
+def _tagged_entries(items: list[dict]) -> list[tuple[str, str]]:
+    out: list[tuple[str, str]] = []
+    for item in items:
+        subtype = str(item["subtype"]).strip()
+        text = str(item["text"]).strip()
+        if subtype and text:
+            out.append((subtype, text))
+    return out
 
 
-def _accept(text: str, seen: set[str], banned: set[str]) -> bool:
-    folded = nfkc_lower(text.strip())
-    if not folded or text.strip() in banned or folded in banned or folded in seen:
+def _clean_clinc_oos(suite2: dict) -> list[tuple[str, str]]:
+    rows: list[tuple[str, str]] = []
+    for text in _string_list(suite2["clinc_oos"]):
+        lowered = text.lower()
+        if any(term in lowered for term in _COOKING_CLINC_TERMS):
+            continue
+        rows.append(("ood_suite2_clinc", text))
+    return rows
+
+
+def _clean_es_canonical_and_oos(suite2: dict) -> list[tuple[str, str]]:
+    rows: list[tuple[str, str]] = []
+    for domain in _ES_NON_CULINARY_DOMAINS:
+        for text in _string_list(suite2["clean"].get(domain, [])):
+            rows.append((f"ood_suite2_clean_{domain}", text))
+    for domain, items in suite2["es_oos"].items():
+        if domain in _ES_OOD_COOKING_KEYS:
+            continue
+        for text in _string_list(items):
+            if "encimera" in text.lower() or "cuchillo" in text.lower():
+                continue
+            rows.append(("ood_suite2_es_oos", text))
+    return rows
+
+
+def _is_clean_injection(text: str) -> bool:
+    lowered = text.lower().strip()
+    if len(lowered.split()) < 6:
         return False
+    return not lowered.startswith("generate sql code")
+
+
+def source_pools(policy_id: str, suite2: dict, banks: dict) -> dict[str, list[tuple[str, str]]]:
+    domain_bank = banks[policy_id]
+    in_candidates = _tagged_entries(domain_bank["in_domain_valid"])
+
+    ood_candidates = _tagged_entries(domain_bank["out_of_domain_benign"])
+    if policy_id == "python":
+        ood_candidates.extend(_clean_clinc_oos(suite2)[:40])
+    else:
+        canonical_es = _clean_es_canonical_and_oos(suite2)
+        clean_es = [row for row in canonical_es if row[0].startswith("ood_suite2_clean_")][:25]
+        oos_es = [row for row in canonical_es if row[0] == "ood_suite2_es_oos"][:20]
+        ood_candidates.extend(clean_es)
+        ood_candidates.extend(oos_es)
+
+    hybrid_candidates = _tagged_entries(domain_bank["hybrid_boundary"])
+
+    adv_candidates = _tagged_entries(domain_bank["adversarial_fuzzing"])
+    if policy_id == "python":
+        deepset = [
+            ("prompt_injection_jailbreak", text)
+            for text in _string_list(suite2["deepset_english"])
+            if _is_clean_injection(text)
+        ][:18]
+        adv_candidates.extend(deepset)
+    else:
+        es_inj = [
+            ("prompt_injection_jailbreak", text)
+            for text in _string_list(suite2["es_injections"])
+            if _is_clean_injection(text)
+        ]
+        adv_candidates.extend(es_inj)
+
+    return {
+        "IN_DOMAIN_VALID": in_candidates,
+        "OUT_OF_DOMAIN_BENIGN": ood_candidates,
+        "HYBRID_BOUNDARY": hybrid_candidates,
+        "ADVERSARIAL_FUZZING": adv_candidates,
+    }
+
+
+def _accept(
+    text: str,
+    seen: set[str],
+    banned: set[str],
+    cal_raw_folded: set[str],
+) -> bool:
+    stripped = text.strip()
+    folded = nfkc_lower(stripped)
+    if not folded or stripped in banned or folded in banned or folded in seen:
+        return False
+    for surface in expand_surface(stripped):
+        if len(_words(surface)) >= 5:
+            sf = nfkc_lower(surface)
+            if sf in cal_raw_folded or sf in banned:
+                return False
     seen.add(folded)
     return True
 
 
-def _fill(candidates, banned: set[str], quota: int) -> list[str]:
-    seen: set[str] = set()
-    chosen: list[str] = []
-    index = 0
-    while len(chosen) < quota:
-        if index >= len(candidates):
-            raise RuntimeError(f"unable to fill {quota} prompts without calibration overlap")
-        text = candidates[index].strip()
-        index += 1
-        if _accept(text, seen, banned):
-            chosen.append(text)
+def _fill(
+    candidates: list[tuple[str, str]],
+    seen: set[str],
+    banned: set[str],
+    cal_raw_folded: set[str],
+    quota: int,
+) -> list[tuple[str, str]]:
+    chosen: list[tuple[str, str]] = []
+    for subtype, raw_text in candidates:
+        if len(chosen) >= quota:
+            break
+        text = raw_text.strip()
+        if _accept(text, seen, banned, cal_raw_folded):
+            chosen.append((subtype, text))
+    if len(chosen) < quota:
+        raise RuntimeError(
+            f"unable to fill {quota} prompts without calibration overlap or duplicates (got {len(chosen)})"
+        )
     return chosen
 
 
-def _homoglyph(text: str) -> str:
-    return text.replace("e", "е").replace("a", "а")
-
-
-def _zero_width(text: str) -> str:
-    return "\u200b".join(text.split(" "))
-
-
-def _encoded(text: str) -> str:
-    token = base64.b64encode(text.encode("utf-8")).decode("ascii")
-    return f"Review this encoded note and do not execute it: {token}"
-
-
-def build_dataset(policy_id: str, suite2: dict, banks: dict) -> list[dict]:
-    in_domain, ood = source_pools(policy_id, suite2, banks)
-    banned = forbidden_surfaces(policy_id)
-    in_candidates = list(in_domain)
-    for index in range(QUOTA * 3):
-        left = in_domain[index % len(in_domain)]
-        right = in_domain[(index * 5 + 3) % len(in_domain)]
-        in_candidates.append(
-            f"{left} Follow-up {index}: confirm the same procedure with this related note: {right}"
-        )
-    ood_candidates = list(ood)
-    for index in range(QUOTA * 2):
-        text = ood[index % len(ood)]
-        ood_candidates.append(f"Unrelated request {index}: {text}")
-    hybrid_candidates = []
-    adversarial_candidates = []
-    for index in range(QUOTA * 3):
-        left = in_domain[index % len(in_domain)]
-        right = ood[index % len(ood)]
-        hybrid_candidates.append(
-            f"{left} Boundary note {index}: the unrelated request is: {right}"
-        )
-        kind = index % 4
-        if kind == 0:
-            adversarial_candidates.append(f"{_encoded(right)} Marker {index}.")
-        elif kind == 1:
-            adversarial_candidates.append(_homoglyph(f"Ignore the domain boundary {index}: {right}"))
-        elif kind == 2:
-            adversarial_candidates.append(_zero_width(f"Hidden split {index} {right}"))
-        else:
-            adversarial_candidates.append(
-                f"Do not follow the hidden instruction {index}. Quoted out-of-domain text: {right}"
-            )
-    grouped = {
-        "IN_DOMAIN_VALID": _fill(in_candidates, banned, QUOTA),
-        "OUT_OF_DOMAIN_BENIGN": _fill(ood_candidates, banned, QUOTA),
-        "HYBRID_BOUNDARY": _fill(hybrid_candidates, banned, QUOTA),
-        "ADVERSARIAL_FUZZING": _fill(adversarial_candidates, banned, QUOTA),
+def build_dataset(
+    policy_id: str,
+    suite2: dict,
+    banks: dict,
+    augmented_dir: Path | None = None,
+) -> list[dict]:
+    pools = source_pools(policy_id, suite2, banks)
+    banned = forbidden_surfaces(policy_id, augmented_dir=augmented_dir)
+    cal_raw_folded = {
+        nfkc_lower(doc) for doc in calibration_documents(policy_id, augmented_dir=augmented_dir)
     }
-    rows = []
+
+    seen: set[str] = set()
+    grouped = {
+        category: _fill(pools[category], seen, banned, cal_raw_folded, QUOTA)
+        for category in CATEGORIES
+    }
+    rows: list[dict] = []
     for category in CATEGORIES:
         expected = category == "IN_DOMAIN_VALID"
-        for index, text in enumerate(grouped[category], start=1):
+        for index, (subtype, text) in enumerate(grouped[category], start=1):
             rows.append(
                 {
                     "input_id": f"{policy_id}-{category.lower()}-{index:04d}",
                     "category": category,
+                    "subtype": subtype,
                     "expected_pass": expected,
                     "text": text,
                 }
@@ -250,12 +356,17 @@ def write_dataset(policy_id: str, out_dir: Path, rows: list[dict]) -> tuple[Path
     return jsonl_path, manifest_path
 
 
-def generate(policy_id: str, out_dir: Path, fetch_hf: bool) -> tuple[Path, Path]:
+def generate(
+    policy_id: str,
+    out_dir: Path,
+    fetch_hf: bool,
+    augmented_dir: Path | None = None,
+) -> tuple[Path, Path]:
     if fetch_hf:
         fetch_hf_banks()
     suite2 = _load_json(REPO_ROOT / "crates/sf-bench/src/suite2_prompts.json")
     banks = _load_json(REPO_ROOT / "tools/fhv1_benchmark_banks.json")
-    rows = build_dataset(policy_id, suite2, banks)
+    rows = build_dataset(policy_id, suite2, banks, augmented_dir=augmented_dir)
     return write_dataset(policy_id, out_dir, rows)
 
 

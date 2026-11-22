@@ -12,6 +12,12 @@ const SPECTRAL_MARKER: &str = "permutation_noise";
 const SPECTRAL_IN_BOX_VOTES: usize = 75;
 const OUTSIDE_MARGIN: f32 = 1.0e-3;
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct DualEmbedBatch {
+    pub f32_vectors: Vec<AlignedVec1024>,
+    pub raw_f64_vectors: Option<Vec<[f64; DIM]>>,
+}
+
 #[async_trait]
 pub trait BatchEmbedderClient: Send + Sync {
     async fn embed_batch_f32(&self, texts: &[&str]) -> Result<Vec<AlignedVec1024>, String>;
@@ -24,6 +30,19 @@ pub trait BatchEmbedderClient: Send + Sync {
     ) -> Result<Vec<AlignedVec1024>, String> {
         let _ = domain_id;
         self.embed_batch_f32(texts).await
+    }
+
+    /// Dual f32 + optional lossless f64 batch. Default never promotes f32 to f64.
+    async fn embed_batch_dual(
+        &self,
+        domain_id: Option<&str>,
+        texts: &[&str],
+    ) -> Result<DualEmbedBatch, String> {
+        let f32_vectors = self.embed_batch_for_domain(domain_id, texts).await?;
+        Ok(DualEmbedBatch {
+            f32_vectors,
+            raw_f64_vectors: None,
+        })
     }
 
     /// Synthetic centroids are not bge-m3 points. Differential locks calibrated on real
@@ -287,5 +306,25 @@ mod tests {
             .await
             .expect_err("mock raw normalized");
         assert_eq!(normalized, err);
+    }
+
+    #[tokio::test]
+    async fn mock_dual_batch_preserves_domain_routing_and_never_promotes_f32() {
+        let python = spike(0);
+        let receta = spike(1);
+        let embedder = MockBatchEmbedder {
+            pass_vector: python,
+            breach_vector: spike(2),
+            centroids: HashMap::from([
+                ("python".to_string(), python),
+                ("receta".to_string(), receta),
+            ]),
+        };
+        let dual = embedder
+            .embed_batch_dual(Some("receta"), &["clause-a"])
+            .await
+            .expect("dual");
+        assert_eq!(bits(&dual.f32_vectors[0]), bits(&receta));
+        assert!(dual.raw_f64_vectors.is_none());
     }
 }

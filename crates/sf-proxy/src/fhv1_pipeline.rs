@@ -189,17 +189,854 @@ fn sentences_of(text: &str) -> Vec<String> {
     out
 }
 
-fn atomic_phrases(text: &str) -> Vec<String> {
-    let words = words_of(text);
-    let mut out = Vec::new();
-    for word in &words {
-        let token: String = word.chars().filter(|ch| ch.is_alphanumeric()).collect();
-        if token.chars().count() >= 2 {
-            out.push(token);
+const STOPWORDS: &[&str] = &[
+    "a",
+    "about",
+    "above",
+    "aca",
+    "acaso",
+    "across",
+    "actually",
+    "acá",
+    "ademas",
+    "además",
+    "after",
+    "again",
+    "against",
+    "ahi",
+    "ahora",
+    "ahí",
+    "al",
+    "algo",
+    "algun",
+    "alguna",
+    "algunas",
+    "alguno",
+    "algunos",
+    "algún",
+    "all",
+    "alla",
+    "alli",
+    "allá",
+    "allí",
+    "almost",
+    "along",
+    "already",
+    "alrededor",
+    "also",
+    "although",
+    "always",
+    "am",
+    "ambas",
+    "ambos",
+    "among",
+    "an",
+    "and",
+    "another",
+    "ante",
+    "antes",
+    "any",
+    "anybody",
+    "anyone",
+    "anything",
+    "anyway",
+    "apenas",
+    "aquel",
+    "aquella",
+    "aquellas",
+    "aquello",
+    "aquellos",
+    "aqui",
+    "aquí",
+    "are",
+    "aren't",
+    "around",
+    "as",
+    "asi",
+    "así",
+    "at",
+    "aun",
+    "aunque",
+    "away",
+    "ayer",
+    "aún",
+    "back",
+    "bajo",
+    "basically",
+    "bastante",
+    "be",
+    "because",
+    "been",
+    "before",
+    "behind",
+    "being",
+    "below",
+    "beneath",
+    "beside",
+    "between",
+    "beyond",
+    "bien",
+    "both",
+    "but",
+    "by",
+    "cabe",
+    "cada",
+    "can",
+    "can't",
+    "cannot",
+    "casi",
+    "cerca",
+    "certainly",
+    "claro",
+    "clearly",
+    "como",
+    "completamente",
+    "con",
+    "conforme",
+    "conmigo",
+    "consigo",
+    "contigo",
+    "contra",
+    "could",
+    "couldn't",
+    "cual",
+    "cuales",
+    "cualesquiera",
+    "cualquier",
+    "cualquiera",
+    "cuando",
+    "cuanto",
+    "cuál",
+    "cuáles",
+    "cuándo",
+    "cuánto",
+    "cómo",
+    "de",
+    "debajo",
+    "debe",
+    "debemos",
+    "deben",
+    "debería",
+    "deberían",
+    "debes",
+    "debo",
+    "del",
+    "delante",
+    "demas",
+    "demasiado",
+    "demás",
+    "dentro",
+    "deprisa",
+    "desde",
+    "despite",
+    "despues",
+    "después",
+    "detras",
+    "detrás",
+    "did",
+    "didn't",
+    "do",
+    "does",
+    "doesn't",
+    "doing",
+    "don't",
+    "donde",
+    "done",
+    "down",
+    "durante",
+    "during",
+    "dónde",
+    "e",
+    "each",
+    "either",
+    "el",
+    "ella",
+    "ellas",
+    "ello",
+    "ellos",
+    "else",
+    "en",
+    "encima",
+    "enfrente",
+    "enough",
+    "enseguida",
+    "entonces",
+    "entre",
+    "era",
+    "erais",
+    "eran",
+    "eras",
+    "eres",
+    "es",
+    "esa",
+    "esas",
+    "ese",
+    "eso",
+    "esos",
+    "esta",
+    "estaba",
+    "estabais",
+    "estaban",
+    "estabas",
+    "estad",
+    "estada",
+    "estadas",
+    "estado",
+    "estados",
+    "estamos",
+    "estan",
+    "estando",
+    "estar",
+    "estaremos",
+    "estará",
+    "estarán",
+    "estarás",
+    "estaré",
+    "estaría",
+    "estarían",
+    "estas",
+    "este",
+    "estemos",
+    "esten",
+    "estes",
+    "esto",
+    "estos",
+    "estoy",
+    "estuve",
+    "estuviera",
+    "estuvieron",
+    "estuviese",
+    "estuvimos",
+    "estuviste",
+    "estuvo",
+    "estábamos",
+    "están",
+    "estás",
+    "esté",
+    "estéis",
+    "estén",
+    "estés",
+    "etc",
+    "even",
+    "ever",
+    "every",
+    "everybody",
+    "everyone",
+    "everything",
+    "except",
+    "far",
+    "few",
+    "for",
+    "from",
+    "fue",
+    "fuera",
+    "fueran",
+    "fueras",
+    "fueron",
+    "fuese",
+    "fuesen",
+    "fui",
+    "fuimos",
+    "fuiste",
+    "further",
+    "generally",
+    "generalmente",
+    "ha",
+    "habemos",
+    "haber",
+    "habido",
+    "habiendo",
+    "habremos",
+    "habrá",
+    "habrán",
+    "habrás",
+    "habré",
+    "habría",
+    "habrían",
+    "habéis",
+    "había",
+    "habían",
+    "habías",
+    "hacia",
+    "had",
+    "hadn't",
+    "han",
+    "has",
+    "hasn't",
+    "hasta",
+    "have",
+    "haven't",
+    "having",
+    "hay",
+    "haya",
+    "hayamos",
+    "hayan",
+    "hayas",
+    "he",
+    "he's",
+    "hemos",
+    "her",
+    "here",
+    "hers",
+    "herself",
+    "him",
+    "himself",
+    "his",
+    "how",
+    "however",
+    "hoy",
+    "hube",
+    "hubiera",
+    "hubieran",
+    "hubieron",
+    "hubiese",
+    "hubimos",
+    "hubo",
+    "i",
+    "i'd",
+    "i'll",
+    "i'm",
+    "i've",
+    "iba",
+    "iban",
+    "if",
+    "igual",
+    "in",
+    "incluso",
+    "indeed",
+    "instead",
+    "into",
+    "ir",
+    "irá",
+    "irán",
+    "is",
+    "isn't",
+    "it",
+    "it's",
+    "its",
+    "itself",
+    "jamas",
+    "jamás",
+    "junto",
+    "just",
+    "la",
+    "las",
+    "later",
+    "le",
+    "lejos",
+    "les",
+    "less",
+    "let's",
+    "like",
+    "likely",
+    "lo",
+    "los",
+    "luego",
+    "mainly",
+    "mal",
+    "many",
+    "mas",
+    "may",
+    "maybe",
+    "mayormente",
+    "mañana",
+    "me",
+    "mediante",
+    "mejor",
+    "menos",
+    "merely",
+    "mi",
+    "mia",
+    "mias",
+    "mientras",
+    "might",
+    "mightn't",
+    "mine",
+    "mio",
+    "mios",
+    "mis",
+    "more",
+    "moreover",
+    "most",
+    "mostly",
+    "much",
+    "mucha",
+    "muchas",
+    "mucho",
+    "muchos",
+    "must",
+    "mustn't",
+    "muy",
+    "my",
+    "myself",
+    "más",
+    "mí",
+    "mía",
+    "mías",
+    "mío",
+    "míos",
+    "nada",
+    "nadie",
+    "near",
+    "neither",
+    "never",
+    "ni",
+    "ningun",
+    "ninguna",
+    "ningunas",
+    "ninguno",
+    "ningunos",
+    "ningún",
+    "no",
+    "nobody",
+    "none",
+    "nonetheless",
+    "nor",
+    "nos",
+    "nosotras",
+    "nosotros",
+    "not",
+    "nothing",
+    "now",
+    "nuestra",
+    "nuestras",
+    "nuestro",
+    "nuestros",
+    "nunca",
+    "o",
+    "of",
+    "off",
+    "often",
+    "on",
+    "one",
+    "ones",
+    "only",
+    "onto",
+    "or",
+    "os",
+    "other",
+    "otherwise",
+    "otra",
+    "otras",
+    "otro",
+    "otros",
+    "ought",
+    "our",
+    "ours",
+    "ourselves",
+    "out",
+    "over",
+    "own",
+    "para",
+    "past",
+    "per",
+    "perhaps",
+    "pero",
+    "please",
+    "poca",
+    "pocas",
+    "poco",
+    "pocos",
+    "podemos",
+    "poder",
+    "podrá",
+    "podrán",
+    "podría",
+    "podrían",
+    "podéis",
+    "podía",
+    "podían",
+    "por",
+    "porque",
+    "possibly",
+    "probably",
+    "pronto",
+    "pude",
+    "pudieron",
+    "pudo",
+    "puede",
+    "pueden",
+    "puedes",
+    "puedo",
+    "pues",
+    "que",
+    "quien",
+    "quienes",
+    "quite",
+    "quiza",
+    "quizas",
+    "quizá",
+    "quizás",
+    "quién",
+    "quiénes",
+    "qué",
+    "rather",
+    "really",
+    "realmente",
+    "recien",
+    "recién",
+    "regarding",
+    "same",
+    "se",
+    "sea",
+    "seamos",
+    "sean",
+    "seas",
+    "segun",
+    "según",
+    "seldom",
+    "ser",
+    "seremos",
+    "será",
+    "serán",
+    "serás",
+    "seré",
+    "sería",
+    "serían",
+    "several",
+    "seáis",
+    "shall",
+    "shan't",
+    "she",
+    "she's",
+    "should",
+    "shouldn't",
+    "si",
+    "sido",
+    "siempre",
+    "siendo",
+    "simplemente",
+    "simply",
+    "sin",
+    "since",
+    "sino",
+    "so",
+    "sobre",
+    "sois",
+    "solamente",
+    "solo",
+    "some",
+    "somebody",
+    "someone",
+    "something",
+    "sometimes",
+    "somos",
+    "son",
+    "soon",
+    "soy",
+    "still",
+    "su",
+    "such",
+    "suele",
+    "suelen",
+    "sus",
+    "suya",
+    "suyas",
+    "suyo",
+    "suyos",
+    "sí",
+    "sólo",
+    "tal",
+    "tales",
+    "tambien",
+    "también",
+    "tampoco",
+    "tan",
+    "tanta",
+    "tantas",
+    "tanto",
+    "tantos",
+    "tarde",
+    "te",
+    "temprano",
+    "tenemos",
+    "tener",
+    "tengo",
+    "tenía",
+    "tenían",
+    "than",
+    "that",
+    "that's",
+    "the",
+    "their",
+    "theirs",
+    "them",
+    "themselves",
+    "then",
+    "there",
+    "there's",
+    "therefore",
+    "these",
+    "they",
+    "they'd",
+    "they'll",
+    "they're",
+    "they've",
+    "this",
+    "those",
+    "though",
+    "through",
+    "throughout",
+    "thus",
+    "ti",
+    "tiene",
+    "tienen",
+    "tienes",
+    "till",
+    "to",
+    "toda",
+    "todas",
+    "todavia",
+    "todavía",
+    "today",
+    "todo",
+    "todos",
+    "together",
+    "too",
+    "toward",
+    "towards",
+    "tras",
+    "tu",
+    "tus",
+    "tuve",
+    "tuviera",
+    "tuvieran",
+    "tuvieron",
+    "tuvo",
+    "tuya",
+    "tuyas",
+    "tuyo",
+    "tuyos",
+    "tú",
+    "u",
+    "un",
+    "una",
+    "unas",
+    "under",
+    "underneath",
+    "unless",
+    "uno",
+    "unos",
+    "until",
+    "unto",
+    "up",
+    "upon",
+    "us",
+    "usted",
+    "ustedes",
+    "usually",
+    "va",
+    "vamos",
+    "van",
+    "varias",
+    "varios",
+    "vas",
+    "versus",
+    "very",
+    "via",
+    "vos",
+    "vosotras",
+    "vosotros",
+    "voy",
+    "vuestra",
+    "vuestras",
+    "vuestro",
+    "vuestros",
+    "vía",
+    "was",
+    "wasn't",
+    "we",
+    "we'd",
+    "we'll",
+    "we're",
+    "we've",
+    "well",
+    "were",
+    "weren't",
+    "what",
+    "what's",
+    "whatever",
+    "when",
+    "whenever",
+    "where",
+    "wherever",
+    "whether",
+    "which",
+    "whichever",
+    "while",
+    "who",
+    "who's",
+    "whoever",
+    "whom",
+    "whose",
+    "why",
+    "will",
+    "with",
+    "within",
+    "without",
+    "won't",
+    "would",
+    "wouldn't",
+    "y",
+    "ya",
+    "yes",
+    "yet",
+    "yo",
+    "you",
+    "you'd",
+    "you'll",
+    "you're",
+    "you've",
+    "your",
+    "yours",
+    "yourself",
+    "yourselves",
+    "él",
+    "éramos",
+];
+
+fn is_span_boundary(ch: char) -> bool {
+    matches!(
+        ch,
+        '\n' | '\r'
+            | '!'
+            | '?'
+            | ';'
+            | ','
+            | ':'
+            | '('
+            | ')'
+            | '['
+            | ']'
+            | '{'
+            | '}'
+            | '"'
+            | '«'
+            | '»'
+            | '“'
+            | '”'
+            | '„'
+            | '‹'
+            | '›'
+            | '¡'
+            | '¿'
+            | '…'
+            | '—'
+            | '–'
+            | '|'
+            | '/'
+            | '\\'
+            | '<'
+            | '>'
+            | '='
+            | '#'
+            | '*'
+            | '`'
+    )
+}
+
+fn is_word_char(ch: char) -> bool {
+    ch.is_alphanumeric() || ch == '_'
+}
+
+fn clean_token(raw: &str) -> &str {
+    raw.trim_matches(|ch: char| !ch.is_alphanumeric())
+}
+
+fn is_pure_number(token: &str) -> bool {
+    !token.is_empty()
+        && token
+            .chars()
+            .all(|ch| ch.is_numeric() || matches!(ch, '.' | ',' | '-' | '+'))
+        && token.chars().any(|ch| ch.is_numeric())
+}
+
+fn is_stopword(token: &str) -> bool {
+    let lower = token.to_lowercase();
+    STOPWORDS.binary_search(&lower.as_str()).is_ok()
+}
+
+fn is_meaningful_token(token: &str) -> bool {
+    token.chars().count() >= 2
+        && token.chars().any(|ch| ch.is_alphabetic())
+        && !is_pure_number(token)
+        && !is_stopword(token)
+}
+
+fn scan_spans(text: &str) -> Vec<Vec<String>> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut spans: Vec<Vec<String>> = Vec::new();
+    let mut current_span: Vec<String> = Vec::new();
+    let mut current_token = String::new();
+
+    let flush_token = |token: &mut String, span: &mut Vec<String>| {
+        if !token.is_empty() {
+            let cleaned = clean_token(token);
+            if !cleaned.is_empty() {
+                span.push(cleaned.to_string());
+            }
+            token.clear();
+        }
+    };
+
+    let flush_span = |span: &mut Vec<String>, all_spans: &mut Vec<Vec<String>>| {
+        if !span.is_empty() {
+            all_spans.push(std::mem::take(span));
+        }
+    };
+
+    for (idx, &ch) in chars.iter().enumerate() {
+        let prev = idx.checked_sub(1).map(|i| chars[i]);
+        let next = chars.get(idx + 1).copied();
+        if ch.is_whitespace() {
+            flush_token(&mut current_token, &mut current_span);
+            if matches!(ch, '\n' | '\r') {
+                flush_span(&mut current_span, &mut spans);
+            }
+        } else if is_span_boundary(ch) {
+            flush_token(&mut current_token, &mut current_span);
+            flush_span(&mut current_span, &mut spans);
+        } else if matches!(ch, '.' | '\'' | '’' | '-') {
+            let internal = prev.is_some_and(is_word_char) && next.is_some_and(is_word_char);
+            if internal {
+                current_token.push(ch);
+            } else {
+                flush_token(&mut current_token, &mut current_span);
+                flush_span(&mut current_span, &mut spans);
+            }
+        } else if is_word_char(ch) {
+            current_token.push(ch);
+        } else {
+            flush_token(&mut current_token, &mut current_span);
+            flush_span(&mut current_span, &mut spans);
         }
     }
-    for pair in words.windows(2) {
-        out.push(format!("{} {}", pair[0], pair[1]));
+    flush_token(&mut current_token, &mut current_span);
+    flush_span(&mut current_span, &mut spans);
+    spans
+}
+
+fn atomic_phrases(text: &str) -> Vec<String> {
+    let spans = scan_spans(text);
+    let mut out = Vec::new();
+    let mut seen = BTreeSet::new();
+    for tokens in spans {
+        for start in 0..tokens.len() {
+            if !is_meaningful_token(&tokens[start]) {
+                continue;
+            }
+            let max_end = tokens.len().min(start + 4);
+            for end in (start + 1)..max_end {
+                if !is_meaningful_token(&tokens[end]) {
+                    continue;
+                }
+                let phrase = tokens[start..=end].join(" ");
+                if seen.insert(phrase.to_lowercase()) {
+                    out.push(phrase);
+                }
+                break;
+            }
+        }
     }
     out
 }
@@ -232,15 +1069,23 @@ fn extend_strategy(
     }
 }
 
+fn push_full_doc_and_payloads(
+    out: &mut Vec<ExpandedChunk>,
+    seen: &mut BTreeSet<(&'static str, [u8; 32])>,
+    normalized: &crate::normalizer::NormalizedInput,
+) {
+    push_unique(out, seen, "full_doc", &normalized.text);
+    for payload in &normalized.decoded_payloads {
+        push_unique(out, seen, "full_doc", payload);
+    }
+}
+
 /// Ten strategy families. `chunk[0]` is the normalized full document.
 pub fn expand_text_multi_granularity(raw_text: &str) -> Vec<ExpandedChunk> {
     let normalized = InputNormalizer::normalize(raw_text);
     let mut out = Vec::new();
     let mut seen = BTreeSet::new();
-    push_unique(&mut out, &mut seen, "full_doc", &normalized.text);
-    for payload in &normalized.decoded_payloads {
-        push_unique(&mut out, &mut seen, "full_doc", payload);
-    }
+    push_full_doc_and_payloads(&mut out, &mut seen, &normalized);
     let base = if out.is_empty() {
         normalized.text.clone()
     } else {
@@ -289,7 +1134,7 @@ pub fn expand_for_granularity(
             let normalized = InputNormalizer::normalize(raw_text);
             let mut out = Vec::new();
             let mut seen = BTreeSet::new();
-            push_unique(&mut out, &mut seen, "full_doc", &normalized.text);
+            push_full_doc_and_payloads(&mut out, &mut seen, &normalized);
             if granularity == Fhv1EvalGranularity::Clauses {
                 let clauses: Vec<String> = normalized
                     .segment_all_clauses()
@@ -316,12 +1161,52 @@ fn expand_corpus(raw_texts: &[String]) -> Vec<ExpandedChunk> {
     out
 }
 
-fn box_row(row: &[f64; DIM]) -> Box<[f64; DIM]> {
+pub(crate) fn box_row(row: &[f64; DIM]) -> Box<[f64; DIM]> {
     let boxed: Box<[f64]> = row.to_vec().into_boxed_slice();
     match boxed.try_into() {
         Ok(vector) => vector,
         Err(_) => unreachable!("fhv1 vector width is {DIM}"),
     }
+}
+
+pub const EMBED_BATCH_SIZE: usize = 64;
+
+pub(crate) struct EmbeddedRawF64 {
+    pub vectors: Vec<Box<[f64; DIM]>>,
+    pub per_item_ms: Vec<f64>,
+}
+
+pub(crate) async fn embed_raw_f64_batched<E>(
+    embedder: &E,
+    texts: &[&str],
+    normalize: bool,
+) -> Result<EmbeddedRawF64, String>
+where
+    E: BatchEmbedderClient + ?Sized,
+{
+    let mut vectors = Vec::with_capacity(texts.len());
+    let mut per_item_ms = Vec::with_capacity(texts.len());
+    for batch in texts.chunks(EMBED_BATCH_SIZE) {
+        let started = Instant::now();
+        let embedded = embedder.embed_batch_raw_f64(batch, normalize).await?;
+        if embedded.len() != batch.len() {
+            return Err(format!(
+                "embedder returned {} rows for {} chunks",
+                embedded.len(),
+                batch.len()
+            ));
+        }
+        let elapsed_ms = started.elapsed().as_secs_f64() * 1_000.0;
+        let share = elapsed_ms / batch.len() as f64;
+        for row in &embedded {
+            vectors.push(box_row(row));
+            per_item_ms.push(share);
+        }
+    }
+    Ok(EmbeddedRawF64 {
+        vectors,
+        per_item_ms,
+    })
 }
 
 async fn embed_chunks<E>(
@@ -332,23 +1217,10 @@ async fn embed_chunks<E>(
 where
     E: BatchEmbedderClient + ?Sized,
 {
-    const BATCH: usize = 16;
-    let mut vectors = Vec::with_capacity(chunks.len());
-    for batch in chunks.chunks(BATCH) {
-        let texts: Vec<&str> = batch.iter().map(|chunk| chunk.text.as_str()).collect();
-        let embedded = embedder.embed_batch_raw_f64(&texts, normalize).await?;
-        if embedded.len() != batch.len() {
-            return Err(format!(
-                "embedder returned {} rows for {} chunks",
-                embedded.len(),
-                batch.len()
-            ));
-        }
-        for row in &embedded {
-            vectors.push(box_row(row));
-        }
-    }
-    Ok(vectors)
+    let texts: Vec<&str> = chunks.iter().map(|chunk| chunk.text.as_str()).collect();
+    Ok(embed_raw_f64_batched(embedder, &texts, normalize)
+        .await?
+        .vectors)
 }
 
 /// Expand, embed, and persist one profile. Does not open `domain_hypercubes`.
@@ -400,6 +1272,29 @@ where
         .map_err(|err| err.to_string())
 }
 
+pub(crate) fn score_expanded_vectors(
+    profile: &Fhv1ProfileRecord,
+    chunks: Vec<ExpandedChunk>,
+    vectors: Vec<Box<[f64; DIM]>>,
+    granularity: Fhv1EvalGranularity,
+    use_rogue_mask: bool,
+    embedding_ms: f64,
+) -> Result<Fhv1EvaluatedInput, String> {
+    let eval_started = Instant::now();
+    let stats = sf_storage::stats_from_profile(profile);
+    let rows: Vec<&[f64]> = vectors.iter().map(|row| row.as_slice()).collect();
+    let batch = evaluate_fhv1_batch(&stats, &rows, granularity, use_rogue_mask)
+        .map_err(|err| err.to_string())?;
+    let eval_latency_ns = u64::try_from(eval_started.elapsed().as_nanos()).unwrap_or(u64::MAX);
+    Ok(Fhv1EvaluatedInput {
+        chunks,
+        vectors,
+        batch,
+        embedding_ms,
+        eval_latency_ns,
+    })
+}
+
 /// Embed every chunk of one input and score it against a stored profile. No early exit.
 pub async fn evaluate_fhv1_input<E>(
     embedder: &E,
@@ -416,19 +1311,14 @@ where
     let started = Instant::now();
     let vectors = embed_chunks(embedder, &chunks, spec.normalize_embeddings).await?;
     let embedding_ms = started.elapsed().as_secs_f64() * 1_000.0;
-    let eval_started = Instant::now();
-    let stats = sf_storage::stats_from_profile(profile);
-    let rows: Vec<&[f64]> = vectors.iter().map(|row| row.as_slice()).collect();
-    let batch = evaluate_fhv1_batch(&stats, &rows, spec.granularity, spec.use_rogue_mask)
-        .map_err(|err| err.to_string())?;
-    let eval_latency_ns = u64::try_from(eval_started.elapsed().as_nanos()).unwrap_or(u64::MAX);
-    Ok(Fhv1EvaluatedInput {
+    score_expanded_vectors(
+        profile,
         chunks,
         vectors,
-        batch,
+        spec.granularity,
+        spec.use_rogue_mask,
         embedding_ms,
-        eval_latency_ns,
-    })
+    )
 }
 
 #[cfg(test)]
@@ -440,11 +1330,45 @@ mod tests {
     use sf_kernels::{AlignedVec1024, Fhv1EvalGranularity, Fhv1Quantiles, MovementMetric, DIM};
     use sf_storage::Fhv1Store;
 
+    use std::sync::Mutex;
+
     use super::{
-        calibrate_fhv1_corpus, evaluate_fhv1_input, expand_for_granularity,
-        expand_text_multi_granularity, strategy_tags, Fhv1CalibrateSpec, Fhv1EvaluateSpec,
+        calibrate_fhv1_corpus, embed_chunks, evaluate_fhv1_input, expand_for_granularity,
+        expand_text_multi_granularity, strategy_tags, ExpandedChunk, Fhv1CalibrateSpec,
+        Fhv1EvaluateSpec, EMBED_BATCH_SIZE, STOPWORDS,
     };
     use crate::embedder::BatchEmbedderClient;
+
+    struct CountingRawF64Embedder {
+        batch_sizes: Mutex<Vec<usize>>,
+    }
+
+    impl CountingRawF64Embedder {
+        fn new() -> Self {
+            Self {
+                batch_sizes: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl BatchEmbedderClient for CountingRawF64Embedder {
+        async fn embed_batch_f32(&self, _texts: &[&str]) -> Result<Vec<AlignedVec1024>, String> {
+            Err("unused".to_string())
+        }
+
+        async fn embed_batch_raw_f64(
+            &self,
+            texts: &[&str],
+            _normalize: bool,
+        ) -> Result<Vec<[f64; DIM]>, String> {
+            self.batch_sizes
+                .lock()
+                .expect("batch_sizes")
+                .push(texts.len());
+            Ok(vec![[0.25; DIM]; texts.len()])
+        }
+    }
 
     struct TestRawF64Embedder;
 
@@ -586,5 +1510,198 @@ mod tests {
         assert_eq!(evaluated.batch.chunks.len(), 1);
         assert!(evaluated.batch.full_text_passed);
         let _ = std::fs::remove_dir_all(&path);
+    }
+
+    #[test]
+    fn full_only_and_clauses_emit_decoded_base64_payloads_as_full_doc() {
+        let b64 = "cmVjZXRhIGRlIHJpc290dG8gY29uIHF1ZXNvIHkgaG9uZ29z";
+        let raw = format!("Please review this encoded string: {b64} for performance.");
+        let full = expand_for_granularity(&raw, Fhv1EvalGranularity::FullOnly);
+        assert_eq!(full.len(), 2, "{full:?}");
+        assert_eq!(full[0].strategy_tag, "full_doc");
+        assert_eq!(full[0].text, raw);
+        assert_eq!(full[1].strategy_tag, "full_doc");
+        assert_eq!(full[1].text, "receta de risotto con queso y hongos");
+
+        let clauses = expand_for_granularity(&raw, Fhv1EvalGranularity::Clauses);
+        let clause_full_docs: Vec<&str> = clauses
+            .iter()
+            .filter(|chunk| chunk.strategy_tag == "full_doc")
+            .map(|chunk| chunk.text.as_str())
+            .collect();
+        assert_eq!(
+            clause_full_docs,
+            vec![raw.as_str(), "receta de risotto con queso y hongos"]
+        );
+    }
+
+    #[test]
+    fn atomic_phrases_filter_stopwords_boundaries_numbers_and_punct_duplicates() {
+        let en = "A Python service keeps its event loop free by awaiting each socket read before it parses the next frame.\n\n\
+            The second paragraph records how a frozen dataclass stores the threshold, the domain name, and the digest without a mutable dictionary. \
+            Call asyncio.gather(task_a, task_b) inside of the handler in a cluster, with 123 456 and socket read.";
+        let en_chunks = expand_text_multi_granularity(en);
+        let en_phrases: Vec<&str> = en_chunks
+            .iter()
+            .filter(|chunk| chunk.strategy_tag == "atomic_phrase")
+            .map(|chunk| chunk.text.as_str())
+            .collect();
+        assert!(!en_phrases.is_empty());
+        assert!(
+            en_phrases.len() * 100 <= en_chunks.len() * 55,
+            "EN atomic_phrase ratio too high: {}/{}",
+            en_phrases.len(),
+            en_chunks.len()
+        );
+        for phrase in &en_phrases {
+            let count = phrase.split_whitespace().count();
+            assert!(
+                (2..=4).contains(&count),
+                "EN phrase length out of 2..=4: {phrase:?}"
+            );
+        }
+        for forbidden in [
+            "of the",
+            "in a",
+            "digest without",
+            "without a",
+            "threshold, the",
+            "123 456",
+            "the",
+            "by",
+            "and",
+        ] {
+            assert!(
+                !en_phrases.contains(&forbidden),
+                "forbidden EN phrase leaked: {forbidden:?} in {en_phrases:?}"
+            );
+        }
+        for expected in [
+            "Python service",
+            "event loop",
+            "socket read",
+            "frozen dataclass",
+            "domain name",
+            "mutable dictionary",
+            "Call asyncio.gather",
+        ] {
+            assert!(
+                en_phrases.contains(&expected),
+                "missing EN phrase {expected:?} in {en_phrases:?}"
+            );
+        }
+        assert_eq!(
+            en_phrases
+                .iter()
+                .filter(|phrase| phrase.eq_ignore_ascii_case("socket read"))
+                .count(),
+            1,
+            "trailing-punctuation duplicate emitted for socket read: {en_phrases:?}"
+        );
+
+        let es = "Sofreír la cebolla despacio y sumar el arroz tostado antes de mojar con el primer cucharón de caldo caliente.\n\n\
+            El segundo párrafo deja reposar el guiso tapado para que el almidón espese el fondo sin revolver de más. \
+            Además «caldo caliente» con salsa de tomate, sin revolver de más.";
+        let es_chunks = expand_text_multi_granularity(es);
+        let es_phrases: Vec<&str> = es_chunks
+            .iter()
+            .filter(|chunk| chunk.strategy_tag == "atomic_phrase")
+            .map(|chunk| chunk.text.as_str())
+            .collect();
+        assert!(!es_phrases.is_empty());
+        assert!(
+            es_phrases.len() * 100 <= es_chunks.len() * 55,
+            "ES atomic_phrase ratio too high: {}/{}",
+            es_phrases.len(),
+            es_chunks.len()
+        );
+        for phrase in &es_phrases {
+            let count = phrase.split_whitespace().count();
+            assert!(
+                (2..=4).contains(&count),
+                "ES phrase length out of 2..=4: {phrase:?}"
+            );
+        }
+        for forbidden in [
+            "revolver de",
+            "de más.",
+            "de más",
+            "sin revolver",
+            "para que",
+            "la",
+            "el",
+            "de",
+            "más",
+        ] {
+            assert!(
+                !es_phrases.contains(&forbidden),
+                "forbidden ES phrase leaked: {forbidden:?} in {es_phrases:?}"
+            );
+        }
+        for expected in [
+            "Sofreír la cebolla",
+            "arroz tostado",
+            "cucharón de caldo",
+            "caldo caliente",
+            "guiso tapado",
+            "salsa de tomate",
+        ] {
+            assert!(
+                es_phrases.contains(&expected),
+                "missing ES phrase {expected:?} in {es_phrases:?}"
+            );
+        }
+        assert_eq!(
+            es_phrases
+                .iter()
+                .filter(|phrase| phrase.eq_ignore_ascii_case("caldo caliente"))
+                .count(),
+            1,
+            "trailing-punctuation duplicate emitted for caldo caliente: {es_phrases:?}"
+        );
+
+        let noise_only =
+            expand_text_multi_granularity("of the in a 123 456 ... ! ? a b c sin con de la");
+        assert!(
+            !noise_only
+                .iter()
+                .any(|chunk| chunk.strategy_tag == "atomic_phrase"),
+            "noise-only input produced atomic_phrases: {noise_only:?}"
+        );
+    }
+
+    #[test]
+    fn stopwords_are_strictly_sorted_and_lowercase() {
+        for word in STOPWORDS {
+            assert_eq!(*word, word.to_lowercase(), "non-lowercase stopword {word}");
+        }
+        for pair in STOPWORDS.windows(2) {
+            assert!(
+                pair[0] < pair[1],
+                "unsorted or duplicate stopwords: {:?} >= {:?}",
+                pair[0],
+                pair[1]
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn embed_chunks_bounds_batches_at_embed_batch_size() {
+        let chunks: Vec<ExpandedChunk> = (0..(EMBED_BATCH_SIZE + 5))
+            .map(|idx| ExpandedChunk {
+                strategy_tag: "full_doc",
+                text: format!("chunk-{idx}"),
+                text_sha256: [0; 32],
+            })
+            .collect();
+        let embedder = CountingRawF64Embedder::new();
+        let vectors = embed_chunks(&embedder, &chunks, true)
+            .await
+            .expect("embed_chunks");
+        assert_eq!(vectors.len(), EMBED_BATCH_SIZE + 5);
+        assert_eq!(
+            *embedder.batch_sizes.lock().expect("sizes"),
+            vec![EMBED_BATCH_SIZE, 5]
+        );
     }
 }

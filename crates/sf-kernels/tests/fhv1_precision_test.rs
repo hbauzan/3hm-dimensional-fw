@@ -294,8 +294,7 @@ fn zero_span_norm_pos_is_absent_and_batch_does_not_stop_early() {
             batch.chunks[2].dimensions[9].status,
             DimBoundStatus::Underflow
         );
-        let expect_overall = matches!(granularity, Fhv1EvalGranularity::FullOnly);
-        assert_eq!(batch.overall_passed, expect_overall);
+        assert!(!batch.overall_passed);
         assert_eq!(batch.granularity, granularity);
     }
 
@@ -315,6 +314,28 @@ fn zero_span_norm_pos_is_absent_and_batch_does_not_stop_early() {
         evaluate_fhv1_batch(&wide, &empty, Fhv1EvalGranularity::Clauses, false).unwrap_err(),
         Fhv1Error::EmptyCorpus
     );
+}
+
+#[test]
+fn full_only_enforces_all_chunks_passed_for_decoded_payloads() {
+    let wide = envelope(0.0, 1.0);
+    let passing_full_doc = [0.5; DIM];
+    let mut breaching_decoded_payload = [0.5; DIM];
+    breaching_decoded_payload[3] = 2.5;
+
+    let batch = evaluate_fhv1_batch(
+        &wide,
+        &[passing_full_doc, breaching_decoded_payload],
+        Fhv1EvalGranularity::FullOnly,
+        false,
+    )
+    .expect("full_only batch");
+    assert_eq!(batch.chunks.len(), 2);
+    assert!(batch.chunks[0].chunk_passed);
+    assert!(!batch.chunks[1].chunk_passed);
+    assert!(batch.full_text_passed);
+    assert!(!batch.all_chunks_passed);
+    assert!(!batch.overall_passed);
 }
 
 #[test]
@@ -508,6 +529,33 @@ fn evaluate_chunk_rejects_bad_dim_and_non_finite() {
             dim: 9
         }
     );
+}
+
+#[test]
+fn non_zero_polarity_fails_closed_on_calibration_and_evaluation() {
+    let rows = [[0.0; DIM], [1.0; DIM]];
+    let observed = [0.5; DIM];
+
+    for polarity in [1u8, 255u8] {
+        let cal_err = compute_fhv1_profile_stats(&rows, polarity, MovementMetric::Span, standard())
+            .unwrap_err();
+        assert_eq!(cal_err, Fhv1Error::UnsupportedPolarity(polarity));
+        assert!(
+            cal_err.to_string().contains(&polarity.to_string()),
+            "unexpected display: {cal_err}"
+        );
+
+        let mut stats = envelope(0.0, 1.0);
+        stats.polarity = polarity;
+
+        let chunk_err = evaluate_fhv1_chunk(&stats, &observed, false).unwrap_err();
+        assert_eq!(chunk_err, Fhv1Error::UnsupportedPolarity(polarity));
+
+        let batch_err =
+            evaluate_fhv1_batch(&stats, &[observed], Fhv1EvalGranularity::FullOnly, false)
+                .unwrap_err();
+        assert_eq!(batch_err, Fhv1Error::UnsupportedPolarity(polarity));
+    }
 }
 
 fn linear_reference(sorted: &[f64], p: f64) -> f64 {

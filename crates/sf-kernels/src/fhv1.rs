@@ -16,6 +16,7 @@ pub enum Fhv1Error {
     NonFinite { sample_index: usize, dim: usize },
     EmptyCorpus,
     InvalidQuantiles,
+    UnsupportedPolarity(u8),
 }
 
 impl fmt::Display for Fhv1Error {
@@ -28,6 +29,12 @@ impl fmt::Display for Fhv1Error {
             Self::EmptyCorpus => write!(f, "fhv1 corpus is empty"),
             Self::InvalidQuantiles => {
                 write!(f, "fhv1 quantiles require 0 <= p25 < p75 < p90 <= 1")
+            }
+            Self::UnsupportedPolarity(polarity) => {
+                write!(
+                    f,
+                    "unsupported fhv1 polarity {polarity}; only 0 (allowlist) is supported"
+                )
             }
         }
     }
@@ -130,7 +137,7 @@ pub struct Fhv1ProfileStats {
 /// How many chunks decide `overall_passed`. Every chunk is still evaluated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Fhv1EvalGranularity {
-    /// `overall_passed` follows chunk 0 (`full_text_passed`).
+    /// `overall_passed` follows `all_chunks_passed` across `full_doc` and decoded Base64 payloads.
     FullOnly,
     /// `overall_passed` follows `all_chunks_passed`.
     Clauses,
@@ -205,7 +212,16 @@ pub fn fhv1_evaluated_dims(use_rogue_mask: bool) -> u16 {
     }
 }
 
-/// Welford envelopes and movement tiers. Rejects an empty corpus, a short row, and any non-finite coordinate.
+#[inline]
+fn ensure_allowlist_polarity(polarity: u8) -> Result<(), Fhv1Error> {
+    if polarity == 0 {
+        Ok(())
+    } else {
+        Err(Fhv1Error::UnsupportedPolarity(polarity))
+    }
+}
+
+/// Welford envelopes and movement tiers. Rejects non-zero polarity, an empty corpus, a short row, and any non-finite coordinate.
 pub fn compute_fhv1_profile_stats<R>(
     rows: &[R],
     polarity: u8,
@@ -215,6 +231,7 @@ pub fn compute_fhv1_profile_stats<R>(
 where
     R: AsRef<[f64]>,
 {
+    ensure_allowlist_polarity(polarity)?;
     if rows.is_empty() {
         return Err(Fhv1Error::EmptyCorpus);
     }
@@ -301,8 +318,8 @@ pub fn evaluate_fhv1_chunk(
 
 /// Score every chunk. No short-circuit: a failing chunk does not skip the rest.
 ///
-/// `full_text_passed` is chunk 0. `overall_passed` is chunk 0 for [`Fhv1EvalGranularity::FullOnly`]
-/// and `all_chunks_passed` for clause and full-mirror granularity.
+/// `full_text_passed` records chunk 0 while `overall_passed` follows `all_chunks_passed`
+/// across every granularity (including decoded Base64 payload chunks in [`Fhv1EvalGranularity::FullOnly`]).
 pub fn evaluate_fhv1_batch<R>(
     stats: &Fhv1ProfileStats,
     rows: &[R],
@@ -312,6 +329,7 @@ pub fn evaluate_fhv1_batch<R>(
 where
     R: AsRef<[f64]>,
 {
+    ensure_allowlist_polarity(stats.polarity)?;
     if rows.is_empty() {
         return Err(Fhv1Error::EmptyCorpus);
     }
@@ -322,8 +340,9 @@ where
     let full_text_passed = chunks[0].chunk_passed;
     let all_chunks_passed = chunks.iter().all(|chunk| chunk.chunk_passed);
     let overall_passed = match granularity {
-        Fhv1EvalGranularity::FullOnly => full_text_passed,
-        Fhv1EvalGranularity::Clauses | Fhv1EvalGranularity::FullMirror => all_chunks_passed,
+        Fhv1EvalGranularity::FullOnly
+        | Fhv1EvalGranularity::Clauses
+        | Fhv1EvalGranularity::FullMirror => all_chunks_passed,
     };
     Ok(Fhv1BatchEval {
         chunks,
@@ -400,6 +419,7 @@ fn evaluate_row(
     use_rogue_mask: bool,
     sample_index: usize,
 ) -> Result<Fhv1ChunkEval, Fhv1Error> {
+    ensure_allowlist_polarity(stats.polarity)?;
     if observed.len() != DIM {
         return Err(Fhv1Error::BadDim {
             len: observed.len(),

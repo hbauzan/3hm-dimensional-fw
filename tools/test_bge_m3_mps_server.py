@@ -198,6 +198,94 @@ class HttpContractTest(unittest.TestCase):
         response = client.post("/embed", json={"inputs": ["x"], "normalize": True})
         self.assertEqual(response.status_code, 500)
 
+    def test_embed_bypasses_normalize_module_when_normalize_false(self) -> None:
+        class Transformer:
+            def __call__(self, features: dict) -> dict:
+                return {"token_embeddings": features["raw"]}
+
+        class Pooling:
+            def __call__(self, features: dict) -> dict:
+                return {"sentence_embedding": features["token_embeddings"]}
+
+        class Normalize:
+            def __call__(self, features: dict) -> dict:
+                emb = features["sentence_embedding"]
+                normed = torch.nn.functional.normalize(emb, p=2, dim=1)
+                return {**features, "sentence_embedding": normed}
+
+        class FakePipelineEncoder:
+            def __init__(self, dim: int = 1024) -> None:
+                self.dim = dim
+                self._param = torch.nn.Parameter(torch.zeros(1, dtype=torch.float32))
+                self._modules = [Transformer(), Pooling(), Normalize()]
+                self.encode_calls = 0
+
+            def parameters(self):
+                yield self._param
+
+            def children(self):
+                return iter(self._modules)
+
+            def preprocess(self, texts: List[str], prompt=None) -> dict:
+                rows = []
+                for _ in texts:
+                    vec = torch.zeros(self.dim, dtype=torch.float32)
+                    vec[0] = 6.0
+                    vec[1] = 8.0
+                    rows.append(vec)
+                return {"raw": torch.stack(rows, dim=0)}
+
+            def __call__(self, features: dict) -> dict:
+                for module in self._modules:
+                    features = module(features)
+                return features
+
+            def encode(self, texts, **kwargs):
+                # Deliberately mimic SentenceTransformer executing 2_Normalize even when normalize_embeddings=False.
+                self.encode_calls += 1
+                features = self.preprocess(list(texts))
+                return self(features)["sentence_embedding"].detach().cpu().numpy()
+
+        pipeline = FakePipelineEncoder()
+        client = TestClient(self.server.create_app(pipeline, "cpu", "BAAI/bge-m3"))
+
+        resp_true = client.post("/embed", json={"inputs": ["hola"], "normalize": True})
+        self.assertEqual(resp_true.status_code, 200)
+        vec_true = resp_true.json()[0]
+        l2_true = sum(v * v for v in vec_true) ** 0.5
+        self.assertAlmostEqual(l2_true, 1.0, delta=1e-5)
+
+        resp_false = client.post("/embed", json={"inputs": ["hola"], "normalize": False})
+        self.assertEqual(resp_false.status_code, 200)
+        vec_false = resp_false.json()[0]
+        l2_false = sum(v * v for v in vec_false) ** 0.5
+        self.assertAlmostEqual(l2_false, 10.0, delta=1e-4)
+        self.assertAlmostEqual(vec_false[0], 6.0, delta=1e-4)
+        self.assertAlmostEqual(vec_false[1], 8.0, delta=1e-4)
+
+        class BrokenNormalizePipeline:
+            def __init__(self) -> None:
+                self._param = torch.nn.Parameter(torch.zeros(1, dtype=torch.float32))
+                self._modules = [Normalize()]
+
+            def parameters(self):
+                yield self._param
+
+            def children(self):
+                return iter(self._modules)
+
+            def encode(self, texts, **kwargs):
+                raise AssertionError("encode() must never run when Normalize cannot be bypassed")
+
+        with self.assertRaises(RuntimeError):
+            self.server._encode(
+                BrokenNormalizePipeline(),
+                ["hola"],
+                "cpu",
+                normalize=False,
+                batch_size=1,
+            )
+
 
 class WarmupTest(unittest.TestCase):
     def test_warmup_compiles_mps_shaders_before_traffic(self) -> None:

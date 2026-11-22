@@ -7,15 +7,8 @@ use sha2::{Digest, Sha256};
 
 use crate::canonical_corpus::canonical_seed_corpus;
 
-const PYTHON_PARAGRAPHS: &str = "\
-A Python service keeps its event loop free by awaiting each socket read before it parses the next frame.\n\
-\n\
-The second paragraph records how a frozen dataclass stores the threshold, the domain name, and the digest without a mutable dictionary.";
-
-const RECETA_PARAGRAPHS: &str = "\
-Sofreír la cebolla despacio y sumar el arroz tostado antes de mojar con el primer cucharón de caldo caliente.\n\
-\n\
-El segundo párrafo deja reposar el guiso tapado para que el almidón espese el fondo sin revolver de más.";
+const PYTHON_CORPUS_JSONL: &str = include_str!("../fixtures/fhv1_corpus_python.jsonl");
+const RECETA_CORPUS_JSONL: &str = include_str!("../fixtures/fhv1_corpus_receta.jsonl");
 
 /// SHA-256 of one document. Used to drop duplicate ingested texts.
 pub fn text_sha256(text: &str) -> [u8; 32] {
@@ -25,23 +18,23 @@ pub fn text_sha256(text: &str) -> [u8; 32] {
     out
 }
 
-/// The 16 canonical sentences plus one two-paragraph document for `python` and `receta`.
+/// Curated offline base documents (`150–300` docs for `python` and `receta`; 16 seeds for other domains).
 pub fn canonical_fhv1_documents(policy_id: &str) -> Result<Vec<String>, String> {
-    let domain = canonical_seed_corpus()
-        .iter()
-        .find(|item| item.domain_id == policy_id)
-        .ok_or_else(|| format!("unknown fhv1 policy '{policy_id}'"))?;
-    let mut documents: Vec<String> = domain
-        .sentences
-        .iter()
-        .map(|line| (*line).to_string())
-        .collect();
     match policy_id {
-        "python" => documents.push(PYTHON_PARAGRAPHS.to_string()),
-        "receta" => documents.push(RECETA_PARAGRAPHS.to_string()),
-        _ => {}
+        "python" => parse_jsonl(PYTHON_CORPUS_JSONL).map(dedupe_documents),
+        "receta" => parse_jsonl(RECETA_CORPUS_JSONL).map(dedupe_documents),
+        _ => {
+            let domain = canonical_seed_corpus()
+                .iter()
+                .find(|item| item.domain_id == policy_id)
+                .ok_or_else(|| format!("unknown fhv1 policy '{policy_id}'"))?;
+            Ok(domain
+                .sentences
+                .iter()
+                .map(|line| (*line).to_string())
+                .collect())
+        }
     }
-    Ok(documents)
 }
 
 /// Read `.txt`, `.md`, and `.jsonl` documents. A directory is walked in sorted order.
@@ -139,18 +132,142 @@ fn dedupe_documents(documents: Vec<String>) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{canonical_fhv1_documents, read_corpus_path};
+    use std::collections::BTreeSet;
+
+    use serde_json::Value;
+    use unicode_normalization::UnicodeNormalization;
+
+    use super::{canonical_fhv1_documents, read_corpus_path, text_sha256};
+
+    fn nfkc_lower(text: &str) -> String {
+        text.trim().nfkc().collect::<String>().to_lowercase()
+    }
+
+    fn collect_bank_strings(value: &Value, out: &mut Vec<String>) {
+        match value {
+            Value::String(s) => {
+                let trimmed = s.trim();
+                if !trimmed.is_empty() {
+                    out.push(trimmed.to_string());
+                }
+            }
+            Value::Array(items) => {
+                for item in items {
+                    collect_bank_strings(item, out);
+                }
+            }
+            Value::Object(map) => {
+                if let Some(text) = map.get("text").and_then(Value::as_str) {
+                    let trimmed = text.trim();
+                    if !trimmed.is_empty() {
+                        out.push(trimmed.to_string());
+                    }
+                    return;
+                }
+                for item in map.values() {
+                    collect_bank_strings(item, out);
+                }
+            }
+            _ => {}
+        }
+    }
 
     #[test]
-    fn python_and_receta_keep_the_sixteen_seeds_and_a_second_paragraph() {
-        let python = canonical_fhv1_documents("python").expect("python");
-        let receta = canonical_fhv1_documents("receta").expect("receta");
-        assert_eq!(python.len(), 17);
-        assert_eq!(receta.len(), 17);
-        assert!(python[0].contains("quicksort"));
-        assert!(receta[0].contains("cebolla"));
-        assert!(python.last().expect("doc").contains("\n\n"));
-        assert!(receta.last().expect("doc").contains("\n\n"));
+    fn python_and_receta_curated_corpus_meets_diversity_dedup_and_holdout_gates() {
+        let suite2: Value = serde_json::from_str(include_str!("suite2_prompts.json"))
+            .expect("parse suite2_prompts.json");
+        let banks: Value =
+            serde_json::from_str(include_str!("../../../tools/fhv1_benchmark_banks.json"))
+                .expect("parse fhv1_benchmark_banks.json");
+
+        let mut holdout_raw = BTreeSet::new();
+        let mut holdout_folded = BTreeSet::new();
+        let mut holdout_strings = Vec::new();
+        for key in [
+            "clean",
+            "clinc_oos",
+            "deepset_english",
+            "es_injections",
+            "es_oos",
+        ] {
+            if let Some(section) = suite2.get(key) {
+                collect_bank_strings(section, &mut holdout_strings);
+            }
+        }
+        collect_bank_strings(&banks, &mut holdout_strings);
+        for item in holdout_strings {
+            holdout_folded.insert(nfkc_lower(&item));
+            holdout_raw.insert(item);
+        }
+
+        for (policy_id, expected_first_substr) in [("python", "quicksort"), ("receta", "cebolla")] {
+            let docs = canonical_fhv1_documents(policy_id).expect(policy_id);
+            assert!(
+                (150..=300).contains(&docs.len()),
+                "{policy_id} expected 150..=300 docs, got {}",
+                docs.len()
+            );
+            assert!(
+                docs[0].contains(expected_first_substr),
+                "{policy_id}[0] missing '{expected_first_substr}'"
+            );
+
+            let mut seen_sha = BTreeSet::new();
+            let mut seen_folded = BTreeSet::new();
+            let mut short_count = 0usize;
+            let mut medium_count = 0usize;
+            let mut multi_para_count = 0usize;
+            let mut long_count = 0usize;
+
+            for doc in &docs {
+                let trimmed = doc.trim();
+                assert!(!trimmed.is_empty(), "{policy_id} has empty doc");
+                assert!(
+                    seen_sha.insert(text_sha256(trimmed)),
+                    "{policy_id} duplicate sha256 for {trimmed}"
+                );
+                let folded = nfkc_lower(trimmed);
+                assert!(
+                    seen_folded.insert(folded.clone()),
+                    "{policy_id} duplicate nfkc_lower for {trimmed}"
+                );
+                assert!(
+                    !holdout_raw.contains(trimmed) && !holdout_folded.contains(&folded),
+                    "{policy_id} overlaps holdout bank: {trimmed}"
+                );
+                let words = trimmed.split_whitespace().count();
+                if words <= 15 {
+                    short_count += 1;
+                } else if words <= 65 {
+                    medium_count += 1;
+                } else {
+                    long_count += 1;
+                }
+                if trimmed.contains("\n\n") {
+                    multi_para_count += 1;
+                }
+            }
+
+            assert!(
+                short_count >= 20,
+                "{policy_id} needs >=20 short docs, got {short_count}"
+            );
+            assert!(
+                medium_count >= 60,
+                "{policy_id} needs >=60 medium docs, got {medium_count}"
+            );
+            assert!(
+                long_count >= 20,
+                "{policy_id} needs >=20 long docs, got {long_count}"
+            );
+            assert!(
+                multi_para_count >= 20,
+                "{policy_id} needs >=20 multi-paragraph docs, got {multi_para_count}"
+            );
+        }
+
+        let legal = canonical_fhv1_documents("legal").expect("legal fallback");
+        assert_eq!(legal.len(), 16);
         assert!(canonical_fhv1_documents("missing").is_err());
     }
 

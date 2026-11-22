@@ -12,8 +12,9 @@ pub use fhv1_corpus::{canonical_fhv1_documents, read_corpus_path, text_sha256};
 pub use fhv1_eval::{
     attach_comparison, confusion_from_flags, confusion_json, forbid_surface, forbidden_digests,
     granularity_name, metrics_for, nfkc_lower, overlap_ids, parse_granularity,
-    persist_benchmark_run, prepare_prompts, score_view, select_view, ConfusionCounts, Fhv1Prompt,
-    PersistRequest, PreparedPrompt, PreparedView, RunMetrics, ScoredView, CATEGORIES,
+    persist_benchmark_run, prepare_prompts, prepare_prompts_for, score_view, select_view,
+    ConfusionCounts, Fhv1Prompt, PersistRequest, PreparedPrompt, PreparedView, RunMetrics,
+    ScoredView, ALL_GRANULARITIES, CATEGORIES,
 };
 pub use oos_benchmark::{
     format_suite2_metrics, run_oos_benchmark, suite2_embed_jsonl, suite2_locks, OosBenchmarkResult,

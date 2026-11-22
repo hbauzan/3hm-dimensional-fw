@@ -49,6 +49,8 @@ struct DatasetRow {
     category: String,
     expected_pass: bool,
     text: String,
+    #[serde(default)]
+    subtype: Option<String>,
 }
 
 #[tokio::main]
@@ -177,6 +179,7 @@ fn read_dataset(path: &std::path::Path) -> Result<Vec<Fhv1Prompt>, String> {
             category: row.category,
             expected_pass: row.expected_pass,
             text: row.text,
+            subtype: row.subtype,
         });
     }
     Ok(prompts)
@@ -233,4 +236,34 @@ fn hex_prefix(bytes: &[u8; 32]) -> String {
         .take(4)
         .map(|byte| format!("{byte:02x}"))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::read_dataset;
+
+    #[test]
+    fn read_dataset_supports_optional_subtype() {
+        let dir = std::env::temp_dir().join(format!(
+            "fhv1-bench-ds-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let file = dir.join("dataset.jsonl");
+        std::fs::write(
+            &file,
+            "{\"input_id\":\"a\",\"category\":\"IN_DOMAIN_VALID\",\"expected_pass\":true,\"text\":\"alpha\"}\n\
+             {\"input_id\":\"b\",\"category\":\"HYBRID_BOUNDARY\",\"expected_pass\":false,\"text\":\"beta\",\"subtype\":\"dilution_50_50\"}\n",
+        )
+        .expect("write dataset");
+        let prompts = read_dataset(&file).expect("read_dataset");
+        assert_eq!(prompts.len(), 2);
+        assert_eq!(prompts[0].subtype, None);
+        assert_eq!(prompts[1].subtype.as_deref(), Some("dilution_50_50"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
