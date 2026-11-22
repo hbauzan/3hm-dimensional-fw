@@ -11,6 +11,13 @@ import {
 
 export const FHV1_ROGUE_INDICES = [292, 297, 308, 329, 386, 404, 577, 616, 780] as const
 
+export const FHV1_QUADRANTS = [
+  'IN_DOMAIN_VALID',
+  'OUT_OF_DOMAIN_BENIGN',
+  'HYBRID_BOUNDARY',
+  'ADVERSARIAL_FUZZING',
+] as const
+
 export const FHV1_TIER_NAMES = [
   'ZeroSpan',
   'LowAnchor',
@@ -121,6 +128,8 @@ export interface Fhv1GranularityComparison {
 export interface Fhv1BenchmarkDetail extends Fhv1BenchmarkSummary {
   confusion: Fhv1Confusion | null
   per_category: Record<string, Fhv1Confusion>
+  failed_dims_count_histogram: Record<string, number> | null
+  failed_dims_count_histogram_by_category: Record<string, Record<string, number>> | null
   in_domain_fail_counts: number[] | null
   oob_catch_counts: number[] | null
   granularity_comparison: Fhv1GranularityComparison[] | null
@@ -131,8 +140,11 @@ export interface Fhv1DimView {
   observed_bits_hex: string
   min: number
   max: number
+  mean: number
   status: string
   violation_delta: number
+  delta_vs_mean: number
+  norm_pos: number | null
 }
 
 export interface Fhv1DrillChunk {
@@ -158,6 +170,17 @@ export interface Fhv1TracePage {
 
 export function formatLosslessF64(value: number): string {
   return String(value)
+}
+
+/** Formats violation_delta losslessly with direction encoded by status. */
+export function formatViolationMagnitudeDirection(dim: Fhv1DimView): string {
+  if (dim.status === 'underflow') {
+    return `underflow min-x=${formatLosslessF64(dim.violation_delta)}`
+  }
+  if (dim.status === 'overflow') {
+    return `overflow x-max=${formatLosslessF64(dim.violation_delta)}`
+  }
+  return dim.violation_delta === 0 ? '0' : formatLosslessF64(dim.violation_delta)
 }
 
 export function writeExactText(text: string): Promise<void> {
@@ -440,6 +463,18 @@ export function parseFhv1BenchmarkDetail(value: unknown): ParseResult<Fhv1Benchm
   }
   const attribution = metrics && isRecord(metrics.attribution) ? metrics.attribution : null
   const counts = attribution ? readNumberArray(attribution, 'in_domain_fail_counts') : undefined
+  let failedDimsHistogram: Record<string, number> | null = null
+  if (metrics && Object.hasOwn(metrics, 'failed_dims_count_histogram')) {
+    const parsed = parseHistogram(metrics.failed_dims_count_histogram)
+    if (!parsed.ok) return parsed
+    failedDimsHistogram = parsed.value
+  }
+  let failedDimsHistogramByCategory: Record<string, Record<string, number>> | null = null
+  if (metrics && Object.hasOwn(metrics, 'failed_dims_count_histogram_by_category')) {
+    const parsed = parseHistogramByCategory(metrics.failed_dims_count_histogram_by_category)
+    if (!parsed.ok) return parsed
+    failedDimsHistogramByCategory = parsed.value
+  }
   let comparison: Fhv1GranularityComparison[] | null = null
   if (metrics && Object.hasOwn(metrics, 'granularity_comparison')) {
     const parsed = parseGranularityComparison(metrics.granularity_comparison)
@@ -456,6 +491,8 @@ export function parseFhv1BenchmarkDetail(value: unknown): ParseResult<Fhv1Benchm
     ...summary.value,
     confusion,
     per_category: perCategory,
+    failed_dims_count_histogram: failedDimsHistogram,
+    failed_dims_count_histogram_by_category: failedDimsHistogramByCategory,
     in_domain_fail_counts: counts ?? null,
     oob_catch_counts: oob,
     granularity_comparison: comparison,
@@ -487,16 +524,22 @@ export function parseFhv1Drilldown(value: unknown): ParseResult<Fhv1Drilldown> {
       const bits = readString(dim, 'observed_bits_hex')
       const min = readNumber(dim, 'min')
       const max = readNumber(dim, 'max')
+      const mean = readNumber(dim, 'mean')
       const status = readString(dim, 'status')
       const delta = readNumber(dim, 'violation_delta')
+      const deltaVsMean = readNumber(dim, 'delta_vs_mean')
+      const normPos = readStrictNullableNumber(dim, 'norm_pos')
       if (
         observed === undefined ||
         bits === undefined ||
         !/^0x[0-9a-f]{16}$/.test(bits) ||
         min === undefined ||
         max === undefined ||
+        mean === undefined ||
         status === undefined ||
-        delta === undefined
+        delta === undefined ||
+        deltaVsMean === undefined ||
+        !normPos.present
       ) {
         return fail('fhv1 dimension is incomplete')
       }
@@ -505,8 +548,11 @@ export function parseFhv1Drilldown(value: unknown): ParseResult<Fhv1Drilldown> {
         observed_bits_hex: bits,
         min,
         max,
+        mean,
         status,
         violation_delta: delta,
+        delta_vs_mean: deltaVsMean,
+        norm_pos: normPos.value,
       })
     }
     chunks.push({
@@ -607,6 +653,46 @@ function readNullableNumber(record: Record<string, unknown>, key: string): numbe
   if (!Object.hasOwn(record, key) || record[key] === null) return null
   const value = readNumber(record, key)
   return value === undefined ? null : value
+}
+
+function readStrictNullableNumber(
+  record: Record<string, unknown>,
+  key: string,
+): { present: true; value: number | null } | { present: false } {
+  if (!Object.hasOwn(record, key)) return { present: false }
+  const value = record[key]
+  if (value === null) return { present: true, value: null }
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return { present: true, value }
+  }
+  return { present: false }
+}
+
+function parseHistogram(value: unknown): ParseResult<Record<string, number>> {
+  if (!isRecord(value)) return fail('fhv1 histogram is not an object')
+  const histogram: Record<string, number> = {}
+  for (const [key, count] of Object.entries(value)) {
+    if (!/^(0|[1-9]\d*)$/.test(key)) return fail('fhv1 histogram key is not a non-negative integer')
+    if (typeof count !== 'number' || !Number.isInteger(count) || count < 0) {
+      return fail('fhv1 histogram count is not a non-negative integer')
+    }
+    histogram[key] = count
+  }
+  return ok(histogram)
+}
+
+function parseHistogramByCategory(
+  value: unknown,
+): ParseResult<Record<string, Record<string, number>>> {
+  if (!isRecord(value)) return fail('fhv1 category histogram is not an object')
+  const byCategory: Record<string, Record<string, number>> = {}
+  for (const [category, entry] of Object.entries(value)) {
+    if (!category) return fail('fhv1 category histogram key is empty')
+    const parsed = parseHistogram(entry)
+    if (!parsed.ok) return parsed
+    byCategory[category] = parsed.value
+  }
+  return ok(byCategory)
 }
 
 function parseChunks(value: unknown): ParseResult<Fhv1LabChunk[]> {

@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
+  FHV1_QUADRANTS,
   formatLosslessF64,
+  formatViolationMagnitudeDirection,
   type Fhv1BenchmarkDetail,
   type Fhv1BenchmarkSummary,
   type Fhv1Confusion,
@@ -16,17 +18,17 @@ import {
   listFhv1Benchmarks,
   listFhv1Traces,
 } from '../gateway/fhv1Client.ts'
-import { attributionOption } from './fhv1Charts.ts'
+import {
+  attributionOption,
+  drilldownVectorOption,
+  failedDimsHistogramOption,
+  type Fhv1HistogramMode,
+} from './fhv1Charts.ts'
 import { Fhv1EChartsCanvas } from './Fhv1EChartsCanvas.tsx'
 
 const browserStore = browserSessionStore()
 
-const QUADRANTS = [
-  'IN_DOMAIN_VALID',
-  'OUT_OF_DOMAIN_BENIGN',
-  'HYBRID_BOUNDARY',
-  'ADVERSARIAL_FUZZING',
-] as const
+type VerdictFilter = 'ALL' | 'PASS' | 'FAIL'
 
 export function Fhv1BenchmarkExplorer({
   fetchImpl,
@@ -43,10 +45,17 @@ export function Fhv1BenchmarkExplorer({
   const [runs, setRuns] = useState<Fhv1BenchmarkSummary[]>([])
   const [runId, setRunId] = useState('')
   const [detail, setDetail] = useState<Fhv1BenchmarkDetail | null>(null)
+  const [histogramMode, setHistogramMode] = useState<Fhv1HistogramMode>('global')
+  const [categoryFilter, setCategoryFilter] = useState('ALL')
+  const [verdictFilter, setVerdictFilter] = useState<VerdictFilter>('ALL')
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
   const [rows, setRows] = useState<Fhv1TraceSummary[]>([])
   const [drill, setDrill] = useState<Fhv1Drilldown | null>(null)
+  const [chunkSelection, setChunkSelection] = useState<{ traceId: string | null; chunkIndex: number }>({
+    traceId: null,
+    chunkIndex: 0,
+  })
   const [showAll, setShowAll] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
 
@@ -87,7 +96,9 @@ export function Fhv1BenchmarkExplorer({
   useEffect(() => {
     if (!runId) return
     let cancelled = false
-    void listFhv1Traces(gatewayBase, { runId, page, pageSize: 20 }, fetchImpl).then((parsed) => {
+    const category = categoryFilter === 'ALL' ? undefined : categoryFilter
+    const passed = verdictFilter === 'ALL' ? undefined : verdictFilter === 'PASS'
+    void listFhv1Traces(gatewayBase, { runId, category, passed, page, pageSize: 20 }, fetchImpl).then((parsed) => {
       if (cancelled) return
       if (!parsed.ok) {
         setRows([])
@@ -100,7 +111,7 @@ export function Fhv1BenchmarkExplorer({
     return () => {
       cancelled = true
     }
-  }, [gatewayBase, runId, page, fetchImpl])
+  }, [gatewayBase, runId, categoryFilter, verdictFilter, page, fetchImpl])
 
   useEffect(() => {
     if (!traceId) return
@@ -120,10 +131,34 @@ export function Fhv1BenchmarkExplorer({
   }, [gatewayBase, traceId, fetchImpl])
 
   const visibleDrill = drill && drill.trace_id === traceId ? drill : null
+  const activeChunkIndex =
+    visibleDrill && chunkSelection.traceId === visibleDrill.trace_id ? chunkSelection.chunkIndex : 0
+  const activeChunk = useMemo(() => {
+    if (!visibleDrill || visibleDrill.chunks.length === 0) return null
+    return (
+      visibleDrill.chunks.find((chunk) => chunk.chunk_index === activeChunkIndex) ??
+      visibleDrill.chunks[0] ??
+      null
+    )
+  }, [visibleDrill, activeChunkIndex])
+  const histogram = useMemo(() => {
+    if (!detail?.failed_dims_count_histogram && !detail?.failed_dims_count_histogram_by_category) {
+      return null
+    }
+    return failedDimsHistogramOption(
+      detail.failed_dims_count_histogram,
+      detail.failed_dims_count_histogram_by_category,
+      histogramMode,
+    )
+  }, [detail, histogramMode])
   const overlay = useMemo(() => {
     if (!detail?.in_domain_fail_counts && !detail?.oob_catch_counts) return null
     return attributionOption(detail.in_domain_fail_counts ?? [], detail.oob_catch_counts)
   }, [detail])
+  const vectorOverlay = useMemo(() => {
+    if (!activeChunk || activeChunk.dimensions.length === 0) return null
+    return drilldownVectorOption(activeChunk.dimensions)
+  }, [activeChunk])
   const pageCount = Math.max(1, Math.ceil(total / 20))
 
   return (
@@ -150,7 +185,7 @@ export function Fhv1BenchmarkExplorer({
       {message ? <p className="text-studio-warn">{message}</p> : null}
       {detail?.confusion ? <ConfusionGrid confusion={detail.confusion} title="Confusion" /> : null}
       <div className="grid gap-2 md:grid-cols-4">
-        {QUADRANTS.map((name) => {
+        {FHV1_QUADRANTS.map((name) => {
           const confusion = detail?.per_category[name]
           return (
             <article key={name} aria-label={name} className="border border-studio-line bg-studio-card p-2">
@@ -163,7 +198,71 @@ export function Fhv1BenchmarkExplorer({
       {detail?.granularity_comparison && detail.granularity_comparison.length > 0 ? (
         <ComparisonTable rows={detail.granularity_comparison} />
       ) : null}
+      {histogram ? (
+        <section aria-label="Failed dimensions distribution" className="flex flex-col gap-2 border border-studio-line p-2">
+          <div className="flex items-center gap-2 text-[10px] uppercase tracking-wide text-studio-muted">
+            <span>Failed dims histogram</span>
+            <button
+              type="button"
+              aria-pressed={histogramMode === 'global'}
+              className="border border-studio-line px-2 py-0.5 text-studio-text"
+              onClick={() => setHistogramMode('global')}
+            >
+              Global
+            </button>
+            <button
+              type="button"
+              aria-pressed={histogramMode === 'per_category'}
+              className="border border-studio-line px-2 py-0.5 text-studio-text"
+              onClick={() => setHistogramMode('per_category')}
+            >
+              Per-category overlay
+            </button>
+          </div>
+          <Fhv1EChartsCanvas option={histogram} label="fhv1 failed dimensions histogram" />
+        </section>
+      ) : null}
       {overlay ? <Fhv1EChartsCanvas option={overlay} label="fhv1 attribution" /> : null}
+      <div className="flex flex-wrap items-end gap-2">
+        <label className="flex flex-col gap-1 text-[10px] uppercase tracking-wide text-studio-muted">
+          Category
+          <select
+            aria-label="Filter category"
+            className="border border-studio-line bg-studio-bg px-1.5 py-0.5"
+            value={categoryFilter}
+            onChange={(event) => {
+              setCategoryFilter(event.target.value)
+              setPage(1)
+            }}
+          >
+            <option value="ALL">ALL</option>
+            {FHV1_QUADRANTS.map((quadrant) => (
+              <option key={quadrant} value={quadrant}>
+                {quadrant}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="flex flex-col gap-1 text-[10px] uppercase tracking-wide text-studio-muted">
+          Verdict
+          <select
+            aria-label="Filter verdict"
+            className="border border-studio-line bg-studio-bg px-1.5 py-0.5"
+            value={verdictFilter}
+            onChange={(event) => {
+              const value = event.target.value
+              if (value === 'ALL' || value === 'PASS' || value === 'FAIL') {
+                setVerdictFilter(value)
+                setPage(1)
+              }
+            }}
+          >
+            <option value="ALL">ALL</option>
+            <option value="PASS">PASS</option>
+            <option value="FAIL">FAIL</option>
+          </select>
+        </label>
+      </div>
       <div className="overflow-auto border border-studio-line">
         <table aria-label="fhv1 audit traces" className="w-full border-collapse font-mono text-[10px]">
           <thead>
@@ -209,23 +308,51 @@ export function Fhv1BenchmarkExplorer({
           <p>
             {visibleDrill.trace_id} · {visibleDrill.profile_id}
           </p>
-          <label className="mt-1 flex items-center gap-1 uppercase text-studio-muted">
-            <input type="checkbox" checked={showAll} onChange={(event) => setShowAll(event.target.checked)} />
-            Show all dimensions
-          </label>
-          {visibleDrill.chunks.map((chunk) => (
-            <div key={chunk.chunk_index} className="mt-2">
+          <div className="mt-1 flex flex-wrap items-center gap-3">
+            <label className="flex items-center gap-1 uppercase text-studio-muted">
+              <input type="checkbox" checked={showAll} onChange={(event) => setShowAll(event.target.checked)} />
+              Show all dimensions
+            </label>
+            {visibleDrill.chunks.length > 1 ? (
+              <label className="flex items-center gap-1 uppercase text-studio-muted">
+                Chunk
+                <select
+                  aria-label="Drill-down chunk"
+                  className="border border-studio-line bg-studio-bg px-1.5 py-0.5 text-studio-text"
+                  value={activeChunk?.chunk_index ?? 0}
+                  onChange={(event) =>
+                    setChunkSelection({
+                      traceId: visibleDrill.trace_id,
+                      chunkIndex: Number(event.target.value),
+                    })
+                  }
+                >
+                  {visibleDrill.chunks.map((chunk) => (
+                    <option key={chunk.chunk_index} value={chunk.chunk_index}>
+                      chunk {chunk.chunk_index} ({chunk.chunk_strategy})
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+          </div>
+          {vectorOverlay ? <Fhv1EChartsCanvas option={vectorOverlay} label="fhv1 input vector overlay" /> : null}
+          {activeChunk ? (
+            <div className="mt-2">
               <p>
-                chunk {chunk.chunk_index} {chunk.chunk_strategy} {chunk.chunk_passed ? 'PASS' : 'BREACH'}
+                chunk {activeChunk.chunk_index} {activeChunk.chunk_strategy}{' '}
+                {activeChunk.chunk_passed ? 'PASS' : 'BREACH'}
               </p>
-              {visibleDims(chunk.dimensions, showAll).map((dim) => (
+              {visibleDims(activeChunk.dimensions, showAll).map((dim) => (
                 <p key={dim.index}>
-                  dim {dim.index} {dim.status} {formatLosslessF64(dim.observed)} {dim.observed_bits_hex} delta{' '}
-                  {formatLosslessF64(dim.violation_delta)}
+                  dim {dim.index} {dim.status} {formatLosslessF64(dim.observed)} {dim.observed_bits_hex} mean{' '}
+                  {formatLosslessF64(dim.mean)} delta {formatViolationMagnitudeDirection(dim)} delta_vs_mean{' '}
+                  {formatLosslessF64(dim.delta_vs_mean)} norm_pos{' '}
+                  {dim.norm_pos === null ? 'null' : formatLosslessF64(dim.norm_pos)}
                 </p>
               ))}
             </div>
-          ))}
+          ) : null}
         </section>
       ) : null}
     </section>

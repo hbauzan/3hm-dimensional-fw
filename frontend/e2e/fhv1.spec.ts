@@ -40,9 +40,9 @@ test('direct lab persists a trace and the explorer drills the raw bits', async (
   await page.getByRole('combobox', { name: 'Eval granularity' }).selectOption('full_only')
   await page.getByRole('textbox', { name: 'Direct lab sentence' }).fill('ping')
   await page.getByRole('button', { name: 'Evaluate sentence' }).click()
-  const result = page.getByText(/FHV1 (PASS|BREACH) lab-\d+/)
+  const result = page.getByText(/FHV1 (PASS|BREACH) lab-\d+-\d+/)
   await expect(result).toBeVisible()
-  const traceId = (await result.innerText()).match(/lab-\d+/)?.[0]
+  const traceId = (await result.innerText()).match(/lab-\d+-\d+/)?.[0]
   expect(traceId).toBeTruthy()
 
   await page.getByRole('button', { name: 'Live audit' }).click()
@@ -50,7 +50,9 @@ test('direct lab persists a trace and the explorer drills the raw bits', async (
   await expect(page.getByRole('region', { name: 'Benchmark explorer' })).toBeVisible()
   const drill = page.getByRole('region', { name: 'fhv1 drill-down' })
   await expect(drill).toBeVisible()
+  await expect(drill.getByRole('img', { name: 'fhv1 input vector overlay' })).toBeVisible()
   await expect(drill.getByText(/0x[0-9a-f]{16}/).first()).toBeVisible()
+  await expect(drill.getByText(/mean \S+ delta .+ delta_vs_mean \S+ norm_pos \S+/).first()).toBeVisible()
 })
 
 const OOD_PROMPT = 'Dame la receta para cocinar un risotto de hongos'
@@ -127,6 +129,7 @@ test('variance studio refreshes the variance quantile and downloads csv and xlsx
   const profile = await firstOptionValue(page, 'Studio profile')
   expect(profile).toMatch(/^python-v1-/)
   await page.getByRole('combobox', { name: 'Studio profile' }).selectOption(profile)
+  await expect(page.getByRole('combobox', { name: 'Movement metric' })).toHaveValue('variance')
   await page.getByRole('combobox', { name: 'Movement metric' }).selectOption('variance')
   const refresh = page.waitForResponse(
     (response) =>
@@ -181,10 +184,75 @@ test('benchmark explorer pages a python run and drills raw bits', async ({ page 
   for (const name of QUADRANTS) {
     await expect(page.getByRole('article', { name })).toBeVisible()
   }
+
+  const histogram = page.getByRole('img', { name: 'fhv1 failed dimensions histogram' })
+  await expect(histogram).toBeVisible()
+  const globalToggle = page.getByRole('button', { name: 'Global' })
+  const perCategoryToggle = page.getByRole('button', { name: 'Per-category overlay' })
+  await expect(globalToggle).toHaveAttribute('aria-pressed', 'true')
+  await perCategoryToggle.click()
+  await expect(perCategoryToggle).toHaveAttribute('aria-pressed', 'true')
+  await expect(histogram).toBeVisible()
+  await globalToggle.click()
+  await expect(globalToggle).toHaveAttribute('aria-pressed', 'true')
+
   await page.getByRole('button', { name: 'Next page' }).click()
   await expect(page.getByText(/page 2 \//)).toBeVisible()
+
+  const categorySelect = page.getByRole('combobox', { name: 'Filter category' })
+  const verdictSelect = page.getByRole('combobox', { name: 'Filter verdict' })
+  const traceRows = page.getByRole('table', { name: 'fhv1 audit traces' }).locator('tbody tr')
+
+  const categoryResponse = page.waitForResponse(
+    (response) =>
+      response.url().includes('/api/v1/fhv1/traces?') &&
+      response.url().includes('category=IN_DOMAIN_VALID') &&
+      response.url().includes('page=1') &&
+      response.ok(),
+  )
+  await categorySelect.selectOption('IN_DOMAIN_VALID')
+  await categoryResponse
+  await expect(page.getByText(/page 1 \//)).toBeVisible()
+  await expect(traceRows.first()).toContainText('IN_DOMAIN_VALID')
+
+  const resetCategoryResponse = page.waitForResponse(
+    (response) =>
+      response.url().includes('/api/v1/fhv1/traces?') &&
+      !response.url().includes('category=') &&
+      response.url().includes('page=1') &&
+      response.ok(),
+  )
+  await categorySelect.selectOption('ALL')
+  await resetCategoryResponse
+
+  const verdictResponse = page.waitForResponse(
+    (response) =>
+      response.url().includes('/api/v1/fhv1/traces?') &&
+      response.url().includes('passed=false') &&
+      response.url().includes('page=1') &&
+      response.ok(),
+  )
+  await verdictSelect.selectOption('FAIL')
+  const verdictPayload = (await (await verdictResponse).json()) as TracePage
+  await expect(page.getByText(/page 1 \//)).toBeVisible()
+  if (verdictPayload.total > 0) {
+    await expect(traceRows.first()).toContainText('BREACH')
+  }
+
+  const resetVerdictResponse = page.waitForResponse(
+    (response) =>
+      response.url().includes('/api/v1/fhv1/traces?') &&
+      !response.url().includes('passed=') &&
+      response.url().includes('page=1') &&
+      response.ok(),
+  )
+  await verdictSelect.selectOption('ALL')
+  await resetVerdictResponse
+
   await page.getByRole('table', { name: 'fhv1 audit traces' }).getByRole('button').first().click()
   const drill = page.getByRole('region', { name: 'fhv1 drill-down' })
   await expect(drill).toBeVisible()
+  await expect(drill.getByRole('img', { name: 'fhv1 input vector overlay' })).toBeVisible()
   await expect(drill.getByText(/0x[0-9a-f]{16}/).first()).toBeVisible()
+  await expect(drill.getByText(/mean \S+ delta .+ delta_vs_mean \S+ norm_pos \S+/).first()).toBeVisible()
 })

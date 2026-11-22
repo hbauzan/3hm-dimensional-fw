@@ -47,7 +47,7 @@ export function Fhv1VarianceStudio({
   const [gatewayBase] = useState(() => loadSession(store).gatewayBase)
   const [profiles, setProfiles] = useState<Fhv1ProfileSummary[]>([])
   const [profileId, setProfileId] = useState('')
-  const [metric, setMetric] = useState<Fhv1Metric>('span')
+  const [metric, setMetric] = useState<Fhv1Metric>('variance')
   const [p25, setP25] = useState('0.25')
   const [p75, setP75] = useState('0.75')
   const [p90, setP90] = useState('0.90')

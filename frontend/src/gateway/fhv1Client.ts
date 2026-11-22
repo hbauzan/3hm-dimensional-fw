@@ -32,6 +32,8 @@ export interface Fhv1TraceListQuery {
   runId?: string
   profileId?: string
   sourceKind?: string
+  category?: string
+  passed?: boolean
   page?: number
   pageSize?: number
 }
@@ -196,6 +198,8 @@ export async function listFhv1Traces(
   if (query.runId) params.set('run_id', query.runId)
   if (query.profileId) params.set('profile_id', query.profileId)
   if (query.sourceKind) params.set('source_kind', query.sourceKind)
+  if (query.category) params.set('category', query.category)
+  if (query.passed !== undefined) params.set('passed', query.passed ? 'true' : 'false')
   const loaded = await getJson(gatewayBase, `/api/v1/fhv1/traces?${params.toString()}`, fetchImpl)
   if (!loaded.ok) return loaded
   return parseFhv1TracePage(loaded.value)
