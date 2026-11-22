@@ -2,11 +2,13 @@
 
 use async_trait::async_trait;
 use sf_bench::{
-    confusion_from_flags, forbidden_digests, metrics_for, overlap_ids, persist_benchmark_run,
-    prepare_prompts, score_view, select_view, Fhv1Prompt, PersistRequest,
+    canonical_fhv1_documents, confusion_from_flags, forbidden_digests, metrics_for, overlap_ids,
+    persist_benchmark_run, prepare_prompts, score_view, select_view, Fhv1Prompt, PersistRequest,
 };
 use sf_kernels::{AlignedVec1024, Fhv1EvalGranularity, Fhv1Quantiles, MovementMetric, DIM};
-use sf_proxy::{calibrate_fhv1_corpus, BatchEmbedderClient, Fhv1CalibrateSpec};
+use sf_proxy::{
+    calibrate_fhv1_corpus, expand_for_granularity, BatchEmbedderClient, Fhv1CalibrateSpec,
+};
 use sf_storage::{Fhv1Store, Fhv1TraceQuery};
 
 const INSIDE: &str = "Inside document stays within the calibrated envelope.";
@@ -252,4 +254,57 @@ async fn granularity_mask_and_lance_persistence_diverge() {
     assert!(page.rows.iter().all(|row| row.source_kind == "BENCHMARK"));
     assert!(!path.join("domain_hypercubes.lance").exists());
     let _ = std::fs::remove_dir_all(&path);
+}
+
+#[test]
+fn curated_corpus_and_benchmark_banks_have_zero_rust_overlap_and_nonempty_chunks() {
+    let banks: serde_json::Value =
+        serde_json::from_str(include_str!("../../../tools/fhv1_benchmark_banks.json"))
+            .expect("parse fhv1_benchmark_banks.json");
+
+    for policy_id in ["python", "receta"] {
+        let corpus = canonical_fhv1_documents(policy_id).expect("corpus");
+        let forbidden = forbidden_digests(&corpus);
+        let domain_bank = banks
+            .get(policy_id)
+            .and_then(|v| v.as_object())
+            .expect("domain bank");
+        let mut prompts = Vec::new();
+        for (quadrant, entries) in domain_bank {
+            for (idx, item) in entries.as_array().expect("entries").iter().enumerate() {
+                let text = item
+                    .get("text")
+                    .and_then(|v| v.as_str())
+                    .expect("text")
+                    .to_string();
+                prompts.push(prompt_with_subtype(
+                    &format!("{policy_id}-{quadrant}-{idx}"),
+                    quadrant,
+                    quadrant == "in_domain_valid",
+                    &text,
+                    item.get("subtype").and_then(|v| v.as_str()),
+                ));
+            }
+        }
+        let hits = overlap_ids(&forbidden, &prompts);
+        assert!(
+            hits.is_empty(),
+            "{policy_id} Rust forbidden_digests overlap with benchmark banks: {hits:?}"
+        );
+        for item in &prompts {
+            for gran in [
+                Fhv1EvalGranularity::FullOnly,
+                Fhv1EvalGranularity::Clauses,
+                Fhv1EvalGranularity::FullMirror,
+            ] {
+                let chunks = expand_for_granularity(&item.text, gran);
+                assert!(
+                    !chunks.is_empty(),
+                    "{policy_id} prompt {} expanded to zero chunks for {gran:?}: {:?}",
+                    item.input_id,
+                    item.text
+                );
+            }
+        }
+    }
 }
