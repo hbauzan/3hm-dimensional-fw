@@ -8,23 +8,97 @@
 #     "pyarrow>=18.0.0",
 # ]
 # ///
-"""Phase 0 1A read-only 1,024D X-ray analyzer for fhv1_1 (RFC-003 IEEE 754 float64)."""
+"""Phase 0 1A/1B read-only 1,024D X-ray analyzer and background embedder for fhv1_1 (RFC-003 IEEE 754 float64)."""
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import sys
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
+import httpx
 import lancedb
 import numpy as np
 import pyarrow as pa
+import pyarrow.parquet as pq
 
 DIM = 1024
 EPS = 1e-12
 ROGUE_DIMS: tuple[int, ...] = (292, 297, 308, 329, 386, 404, 577, 616, 780)
+TOPK_SWEEP: tuple[int, ...] = (32, 64, 128, 256)
+
+SUB_WINDOW = 10
+SUB_STRIDE = 5
+MAX_UNWINDOWED_WORDS = 14
+CLAUSE_CONNECTORS: tuple[str, ...] = (
+    " y de paso ",
+    " außerdem ",
+    " también ",
+    " además ",
+    " also ",
+    " plus ",
+    " pero ",
+    " aber ",
+    " and ",
+    " but ",
+    " und ",
+    " or ",
+    " y ",
+    " o ",
+)
+_ASCII_WHITESPACE: frozenset[str] = frozenset((" ", "\t", "\n", "\r", "\x0c"))
+_INVISIBLE_CONTROLS: frozenset[str] = frozenset(
+    ("\u200b", "\u200c", "\u200d", "\u2060", "\ufeff", "\u00ad")
+)
+_HOMOGLYPH_MAP: dict[str, str] = {
+    "\u0430": "a",
+    "\u0441": "c",
+    "\u0435": "e",
+    "\u0456": "i",
+    "\u0458": "j",
+    "\u043e": "o",
+    "\u0440": "p",
+    "\u0455": "s",
+    "\u0443": "y",
+    "\u0445": "x",
+    "\u0410": "A",
+    "\u0412": "B",
+    "\u0421": "C",
+    "\u0415": "E",
+    "\u041d": "H",
+    "\u0406": "I",
+    "\u0408": "J",
+    "\u041a": "K",
+    "\u041c": "M",
+    "\u041e": "O",
+    "\u0420": "P",
+    "\u0405": "S",
+    "\u0422": "T",
+    "\u0425": "X",
+    "\u03bf": "o",
+    "\u03bd": "v",
+    "\u03ba": "k",
+    "\u03c1": "p",
+    "\u0391": "A",
+    "\u0392": "B",
+    "\u0395": "E",
+    "\u0396": "Z",
+    "\u0397": "H",
+    "\u0399": "I",
+    "\u039a": "K",
+    "\u039c": "M",
+    "\u039d": "N",
+    "\u039f": "O",
+    "\u03a1": "P",
+    "\u03a4": "T",
+    "\u03a5": "Y",
+    "\u03a7": "X",
+}
 
 V1_PROFILES: dict[str, str] = {
     "python": "python-v1-42270ed8870d",
@@ -783,11 +857,894 @@ def format_stdout_summary(report: Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def normalize_input_text(raw_text: str) -> str:
+    """Mirror crates/sf-proxy/src/normalizer.rs text cleaning and NFKC normalization."""
+    cleaned = "".join(
+        _HOMOGLYPH_MAP.get(ch, ch) for ch in raw_text if ch not in _INVISIBLE_CONTROLS
+    )
+    nfkc = unicodedata.normalize("NFKC", cleaned)
+    return "".join(ch for ch in nfkc if ch not in _INVISIBLE_CONTROLS)
+
+
+def _eq_ignore_case_char(left: str, right: str) -> bool:
+    if left == right:
+        return True
+    if left.isascii() and right.isascii():
+        return left.lower() == right.lower()
+    left_low = left.lower()
+    right_low = right.lower()
+    return len(left_low) == 1 and len(right_low) == 1 and left_low == right_low
+
+
+def _connector_len(prompt: str, index: int) -> int | None:
+    remaining = len(prompt) - index
+    for needle in CLAUSE_CONNECTORS:
+        nlen = len(needle)
+        if remaining < nlen:
+            continue
+        if all(_eq_ignore_case_char(prompt[index + k], needle[k]) for k in range(nlen)):
+            return nlen
+    return None
+
+
+def _push_trimmed(out: list[str], prompt: str, start: int, end: int) -> None:
+    if start >= end or end > len(prompt):
+        return
+    piece = prompt[start:end].strip()
+    if piece:
+        out.append(piece)
+
+
+def _word_spans(text: str) -> list[tuple[int, int]]:
+    spans: list[tuple[int, int]] = []
+    in_word = False
+    word_start = 0
+    for idx, ch in enumerate(text):
+        if ch.isspace():
+            if in_word:
+                spans.append((word_start, idx))
+                in_word = False
+        elif not in_word:
+            word_start = idx
+            in_word = True
+    if in_word:
+        spans.append((word_start, len(text)))
+    return spans
+
+
+def _window_clause(clause: str, out: list[str]) -> None:
+    spans = _word_spans(clause)
+    if len(spans) <= MAX_UNWINDOWED_WORDS:
+        out.append(clause)
+        return
+    start_idx = 0
+    while start_idx < len(spans):
+        end = min(start_idx + SUB_WINDOW, len(spans))
+        out.append(clause[spans[start_idx][0] : spans[end - 1][1]])
+        if end == len(spans):
+            break
+        start_idx += SUB_STRIDE
+
+
+def segment_clauses_opt2c(text: str) -> list[str]:
+    """Segment NFKC-normalized text identically to crates/sf-proxy/src/segmenter.rs."""
+    prompt = normalize_input_text(text)
+    raw: list[str] = []
+    start = 0
+    i = 0
+    n = len(prompt)
+    while i < n:
+        if prompt.startswith('"""', i) or prompt.startswith("'''", i):
+            _push_trimmed(raw, prompt, start, i)
+            i += 3
+            start = i
+            continue
+        if prompt.startswith("/*", i) or prompt.startswith("*/", i) or prompt.startswith("//", i):
+            _push_trimmed(raw, prompt, start, i)
+            i += 2
+            start = i
+            continue
+        if prompt[i] == " ":
+            clen = _connector_len(prompt, i)
+            if clen is not None:
+                _push_trimmed(raw, prompt, start, i)
+                i += clen
+                start = i
+                continue
+        ch = prompt[i]
+        punct = (
+            ch in ("\n", "\r", ";", ",", "#")
+            or (
+                ch in (".", "!", "?")
+                and (i + 1 == n or prompt[i + 1] in _ASCII_WHITESPACE)
+            )
+        )
+        if punct:
+            _push_trimmed(raw, prompt, start, i)
+            start = i + 1
+        i += 1
+    _push_trimmed(raw, prompt, start, n)
+
+    clauses: list[str] = []
+    for clause in raw:
+        _window_clause(clause, clauses)
+    if not clauses:
+        trimmed = prompt.strip()
+        if trimmed:
+            clauses.append(trimmed)
+    return clauses
+
+
+def _text_sha256_hex(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def load_background_corpus(corpus_path: Path) -> list[dict[str, Any]]:
+    """Read background JSONL rows preserving order and validating required keys."""
+    if not corpus_path.is_file():
+        raise FileNotFoundError(f"missing background corpus jsonl: {corpus_path}")
+    rows: list[dict[str, Any]] = []
+    for line in corpus_path.read_text(encoding="utf-8").splitlines():
+        trimmed = line.strip()
+        if not trimmed:
+            continue
+        obj = json.loads(trimmed)
+        rows.append(
+            {
+                "id": str(obj["id"]),
+                "lang": str(obj["lang"]),
+                "topic": str(obj["topic"]),
+                "text": str(obj["text"]),
+            }
+        )
+    if not rows:
+        raise ValueError(f"empty background corpus: {corpus_path}")
+    return rows
+
+
+def build_background_embedding_rows(corpus_rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Build normalized full_doc (norm=T/F) and per-(lang, sha256) deduplicated clause_opt2c rows."""
+    full_doc_entries: list[dict[str, Any]] = []
+    clause_entries: list[dict[str, Any]] = []
+    seen_clauses: set[tuple[str, str]] = set()
+
+    for doc in corpus_rows:
+        doc_id = str(doc["id"])
+        lang = str(doc["lang"])
+        topic = str(doc["topic"])
+        norm_text = normalize_input_text(str(doc["text"])).strip()
+        if not norm_text:
+            raise ValueError(f"empty normalized text for {doc_id}")
+        full_doc_entries.append(
+            {
+                "doc_id": doc_id,
+                "lang": lang,
+                "topic": topic,
+                "granularity": "full_doc",
+                "chunk_index": 0,
+                "normalize": True,
+                "text": norm_text,
+                "text_sha256": _text_sha256_hex(norm_text),
+            }
+        )
+        for chunk_idx, clause in enumerate(segment_clauses_opt2c(norm_text)):
+            c_trimmed = clause.strip()
+            if not c_trimmed:
+                continue
+            digest = _text_sha256_hex(c_trimmed)
+            if (lang, digest) in seen_clauses:
+                continue
+            seen_clauses.add((lang, digest))
+            clause_entries.append(
+                {
+                    "doc_id": doc_id,
+                    "lang": lang,
+                    "topic": topic,
+                    "granularity": "clause_opt2c",
+                    "chunk_index": chunk_idx,
+                    "normalize": True,
+                    "text": c_trimmed,
+                    "text_sha256": digest,
+                }
+            )
+
+    unnorm_full_entries = [{**row, "normalize": False} for row in full_doc_entries]
+    return [*full_doc_entries, *clause_entries, *unnorm_full_entries]
+
+
+def _embed_batches_loopback(
+    client: httpx.Client,
+    embed_url: str,
+    texts: Sequence[str],
+    *,
+    normalize: bool,
+    batch_size: int,
+    expected_dim: int = DIM,
+) -> np.ndarray:
+    if not texts:
+        return np.empty((0, expected_dim), dtype=np.float64)
+    chunks: list[np.ndarray] = []
+    endpoint = embed_url.rstrip("/") + "/embed"
+    for start in range(0, len(texts), batch_size):
+        batch = list(texts[start : start + batch_size])
+        resp = client.post(
+            endpoint,
+            json={"inputs": batch, "truncate": True, "normalize": normalize},
+        )
+        resp.raise_for_status()
+        arr = np.asarray(resp.json(), dtype=np.float64)
+        if arr.shape != (len(batch), expected_dim):
+            raise RuntimeError(
+                f"embedder returned shape {arr.shape}, expected {(len(batch), expected_dim)}"
+            )
+        if not np.all(np.isfinite(arr)):
+            raise RuntimeError("embedder returned non-finite coordinate")
+        norms = np.linalg.norm(arr, axis=1)
+        if normalize and np.max(np.abs(norms - 1.0)) > 1e-3:
+            raise RuntimeError(f"normalize=true violated unit L2: max diff={np.max(np.abs(norms - 1.0))}")
+        if not normalize and np.min(norms) <= 1.5:
+            raise RuntimeError(f"normalize=false unexpectedly near unit norm: min={np.min(norms)}")
+        chunks.append(arr)
+    return np.vstack(chunks)
+
+
+def write_background_embeddings_parquet(
+    rows: Sequence[Mapping[str, Any]],
+    vectors: np.ndarray,
+    out_path: Path,
+    *,
+    expected_dim: int = DIM,
+) -> None:
+    """Persist background embeddings as FixedSizeList[float64, 1024] Parquet."""
+    vec_arr = np.asarray(vectors, dtype=np.float64)
+    if vec_arr.ndim != 2 or vec_arr.shape != (len(rows), expected_dim):
+        raise ValueError(f"vector matrix shape {vec_arr.shape} != {(len(rows), expected_dim)}")
+    schema = pa.schema(
+        [
+            pa.field("doc_id", pa.string(), nullable=False),
+            pa.field("lang", pa.string(), nullable=False),
+            pa.field("topic", pa.string(), nullable=False),
+            pa.field("granularity", pa.string(), nullable=False),
+            pa.field("chunk_index", pa.int64(), nullable=False),
+            pa.field("normalize", pa.bool_(), nullable=False),
+            pa.field("text", pa.string(), nullable=False),
+            pa.field("text_sha256", pa.string(), nullable=False),
+            pa.field("vector", pa.list_(pa.float64(), expected_dim), nullable=False),
+        ]
+    )
+    vec_list = pa.FixedSizeListArray.from_arrays(
+        pa.array(np.ascontiguousarray(vec_arr).reshape(-1), type=pa.float64()),
+        expected_dim,
+    )
+    table = pa.table(
+        {
+            "doc_id": pa.array([str(r["doc_id"]) for r in rows], type=pa.string()),
+            "lang": pa.array([str(r["lang"]) for r in rows], type=pa.string()),
+            "topic": pa.array([str(r["topic"]) for r in rows], type=pa.string()),
+            "granularity": pa.array([str(r["granularity"]) for r in rows], type=pa.string()),
+            "chunk_index": pa.array([int(r["chunk_index"]) for r in rows], type=pa.int64()),
+            "normalize": pa.array([bool(r["normalize"]) for r in rows], type=pa.bool_()),
+            "text": pa.array([str(r["text"]) for r in rows], type=pa.string()),
+            "text_sha256": pa.array([str(r["text_sha256"]) for r in rows], type=pa.string()),
+            "vector": vec_list,
+        },
+        schema=schema,
+    )
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(table, str(out_path))
+
+
+def run_mode_embed_bg(
+    bg_corpus_path: Path,
+    bg_out_path: Path,
+    embed_url: str,
+    *,
+    batch_size: int = 32,
+) -> dict[str, Any]:
+    """Embed background corpus (full_doc norm=T/F and deduplicated clause_opt2c) on local BGE-M3."""
+    corpus_rows = load_background_corpus(bg_corpus_path)
+    all_rows = build_background_embedding_rows(corpus_rows)
+
+    norm_rows = [r for r in all_rows if r["normalize"] is True]
+    unnorm_rows = [r for r in all_rows if r["normalize"] is False]
+
+    with httpx.Client(timeout=120.0, trust_env=False) as client:
+        health_resp = client.get(embed_url.rstrip("/") + "/health")
+        health_resp.raise_for_status()
+        health = health_resp.json()
+        if health.get("status") != "ok" or int(health.get("dim", 0)) != DIM:
+            raise RuntimeError(f"unexpected embedder health response: {health}")
+
+        vecs_norm = _embed_batches_loopback(
+            client,
+            embed_url,
+            [r["text"] for r in norm_rows],
+            normalize=True,
+            batch_size=batch_size,
+        )
+        vecs_unnorm = _embed_batches_loopback(
+            client,
+            embed_url,
+            [r["text"] for r in unnorm_rows],
+            normalize=False,
+            batch_size=batch_size,
+        )
+
+    ordered_rows = [*norm_rows, *unnorm_rows]
+    all_vectors = np.vstack([vecs_norm, vecs_unnorm])
+    write_background_embeddings_parquet(ordered_rows, all_vectors, bg_out_path)
+
+    counts_by_slice: dict[str, int] = {}
+    for row in ordered_rows:
+        key = f"{row['lang']}:{row['granularity']}:norm={row['normalize']}"
+        counts_by_slice[key] = counts_by_slice.get(key, 0) + 1
+
+    unnorm_norms = np.linalg.norm(vecs_unnorm, axis=1)
+    langs_unnorm = np.array([r["lang"] for r in unnorm_rows], dtype=object)
+    return {
+        "mode": "embed-bg",
+        "embed_url": embed_url,
+        "health": health,
+        "corpus_docs": len(corpus_rows),
+        "total_rows_written": len(ordered_rows),
+        "counts_by_slice": counts_by_slice,
+        "pre_l2_norms": {
+            lang: summarize_distribution(
+                unnorm_norms[langs_unnorm == lang], NORM_QUANTILES, include_mean_std=True
+            )
+            for lang in ("en", "es")
+            if np.any(langs_unnorm == lang)
+        },
+        "out_path": str(bg_out_path),
+    }
+
+
+def moments_from_dict(data: Mapping[str, Any], expected_dim: int = DIM) -> CoordinateMoments:
+    """Reconstruct exact float64 CoordinateMoments from serialized xray_1a granularity_stats."""
+    def _vec(key: str) -> np.ndarray:
+        arr = np.asarray(data[key], dtype=np.float64)
+        if arr.shape != (expected_dim,):
+            raise ValueError(f"{key} shape {arr.shape} != ({expected_dim},)")
+        if not np.all(np.isfinite(arr)):
+            raise ValueError(f"non-finite value in serialized {key}")
+        return arr
+
+    return CoordinateMoments(
+        sample_count=int(data["sample_count"]),
+        min=_vec("min"),
+        max=_vec("max"),
+        mean=_vec("mean"),
+        span=_vec("span"),
+        variance_sample=_vec("variance_sample"),
+        variance_pop=_vec("variance_pop"),
+        std_dev_sample=_vec("std_dev_sample"),
+        std_dev_pop=_vec("std_dev_pop"),
+    )
+
+
+def load_background_embeddings(
+    bg_path: Path,
+    *,
+    expected_dim: int = DIM,
+) -> dict[tuple[str, str, bool], dict[str, Any]]:
+    """Read background_embeddings.parquet partitioned by (lang, granularity, normalize)."""
+    if not bg_path.is_file():
+        raise FileNotFoundError(f"missing background embeddings parquet: {bg_path}")
+    table = pq.read_table(str(bg_path))
+    vectors = _arrow_fixed_list_to_float64(table["vector"], expected_dim=expected_dim)
+    langs = [str(v) for v in table["lang"].to_pylist()]
+    topics = [str(v) for v in table["topic"].to_pylist()]
+    granularities = [str(v) for v in table["granularity"].to_pylist()]
+    normalizes = [bool(v) for v in table["normalize"].to_pylist()]
+
+    grouped_idx: dict[tuple[str, str, bool], list[int]] = {}
+    for idx in range(table.num_rows):
+        key = (langs[idx], granularities[idx], normalizes[idx])
+        grouped_idx.setdefault(key, []).append(idx)
+
+    out: dict[tuple[str, str, bool], dict[str, Any]] = {}
+    for key, indices in grouped_idx.items():
+        out[key] = {
+            "vectors": vectors[indices],
+            "topics": [topics[i] for i in indices],
+            "count": len(indices),
+        }
+    return out
+
+
+def rank_non_backbone_directional_dims(classification: Mapping[str, Any]) -> list[int]:
+    """Rank all non-backbone dims with |mu_T| > |mu_C| or snr_T >= snr_C by sep desc."""
+    candidates = [
+        row
+        for row in classification["dimensions"]
+        if row["bucket"] != "BACKBONE_ENGINE"
+        and (abs(float(row["mean_T"])) > abs(float(row["mean_C"])) or float(row["snr_T"]) >= float(row["snr_C"]))
+    ]
+    candidates.sort(key=lambda row: (-float(row["sep"]), int(row["dim"])))
+    return [int(row["dim"]) for row in candidates]
+
+
+def _topk_overlap_metrics(list_1a: Sequence[int], list_1b: Sequence[int], k: int) -> dict[str, Any]:
+    top_a = list(list_1a[:k])
+    top_b = list(list_1b[:k])
+    set_a = set(top_a)
+    set_b = set(top_b)
+    inter = sorted(set_a & set_b)
+    union_n = len(set_a | set_b)
+    return {
+        "k": int(k),
+        "count_1a": len(top_a),
+        "count_1b": len(top_b),
+        "overlap_count": len(inter),
+        "jaccard": float(len(inter) / union_n) if union_n > 0 else 0.0,
+        "overlap_over_k": float(len(inter) / k),
+        "saturated": len(top_a) < k or len(top_b) < k,
+    }
+
+
+def _dim_delta_entry(
+    dim: int,
+    dims_1a: Mapping[int, Mapping[str, Any]],
+    dims_1b: Mapping[int, Mapping[str, Any]],
+    rank_1a: Mapping[int, int],
+    rank_1b: Mapping[int, int],
+) -> dict[str, Any]:
+    r1a = dims_1a[dim]
+    r1b = dims_1b[dim]
+    return {
+        "dim": int(dim),
+        "rank_1a": rank_1a.get(dim),
+        "rank_1b": rank_1b.get(dim),
+        "bucket_1a": r1a["bucket"],
+        "bucket_1b": r1b["bucket"],
+        "sep_1a": float(r1a["sep"]),
+        "sep_1b": float(r1b["sep"]),
+        "sep_delta": float(r1b["sep"] - r1a["sep"]),
+        "mean_T": float(r1b["mean_T"]),
+        "std_T": float(r1b["std_T"]),
+        "snr_T": float(r1b["snr_T"]),
+        "mean_C_1a": float(r1a["mean_C"]),
+        "std_C_1a": float(r1a["std_C"]),
+        "snr_C_1a": float(r1a["snr_C"]),
+        "mean_C_1b": float(r1b["mean_C"]),
+        "std_C_1b": float(r1b["std_C"]),
+        "snr_C_1b": float(r1b["snr_C"]),
+    }
+
+
+def compute_1a_vs_1b_domain_delta(
+    cls_1a: Mapping[str, Any],
+    cls_1b: Mapping[str, Any],
+    *,
+    ks: Sequence[int] = TOPK_SWEEP,
+) -> dict[str, Any]:
+    """Compare 1A cross-language vs 1B same-language rankings, dropouts, and risers."""
+    anchors_1a = [int(d) for d in cls_1a["bucket_dims"]["FIRM_DOMAIN_ANCHOR"]]
+    anchors_1b = [int(d) for d in cls_1b["bucket_dims"]["FIRM_DOMAIN_ANCHOR"]]
+    dir_1a = rank_non_backbone_directional_dims(cls_1a)
+    dir_1b = rank_non_backbone_directional_dims(cls_1b)
+
+    dims_1a_map = {int(r["dim"]): r for r in cls_1a["dimensions"]}
+    dims_1b_map = {int(r["dim"]): r for r in cls_1b["dimensions"]}
+    anchor_rank_1a = {d: idx + 1 for idx, d in enumerate(anchors_1a)}
+    anchor_rank_1b = {d: idx + 1 for idx, d in enumerate(anchors_1b)}
+    dir_rank_1a = {d: idx + 1 for idx, d in enumerate(dir_1a)}
+    dir_rank_1b = {d: idx + 1 for idx, d in enumerate(dir_1b)}
+
+    anchor_overlap = {str(k): _topk_overlap_metrics(anchors_1a, anchors_1b, int(k)) for k in ks}
+    dir_overlap = {str(k): _topk_overlap_metrics(dir_1a, dir_1b, int(k)) for k in ks}
+
+    a64_1a = anchors_1a[:64]
+    a64_1b = anchors_1b[:64]
+    a64_1a_set = set(a64_1a)
+    a64_1b_set = set(a64_1b)
+    anchor_set_1b = set(anchors_1b)
+
+    anchor_top64_dropouts = [
+        _dim_delta_entry(d, dims_1a_map, dims_1b_map, anchor_rank_1a, anchor_rank_1b)
+        for d in a64_1a
+        if d not in a64_1b_set
+    ]
+    anchor_dropped_from_bucket = [
+        _dim_delta_entry(d, dims_1a_map, dims_1b_map, anchor_rank_1a, anchor_rank_1b)
+        for d in anchors_1a
+        if d not in anchor_set_1b
+    ]
+    anchor_top64_risers = [
+        {
+            **_dim_delta_entry(d, dims_1a_map, dims_1b_map, anchor_rank_1a, anchor_rank_1b),
+            "masked_non_anchor_in_1a": dims_1a_map[d]["bucket"] != "FIRM_DOMAIN_ANCHOR",
+        }
+        for d in a64_1b
+        if d not in a64_1a_set
+    ]
+
+    d64_1a = dir_1a[:64]
+    d64_1b = dir_1b[:64]
+    d64_1a_set = set(d64_1a)
+    d64_1b_set = set(d64_1b)
+    dir_top64_dropouts = [
+        _dim_delta_entry(d, dims_1a_map, dims_1b_map, dir_rank_1a, dir_rank_1b)
+        for d in d64_1a
+        if d not in d64_1b_set
+    ]
+    dir_top64_risers = [
+        {
+            **_dim_delta_entry(d, dims_1a_map, dims_1b_map, dir_rank_1a, dir_rank_1b),
+            "masked_non_anchor_in_1a": dims_1a_map[d]["bucket"] != "FIRM_DOMAIN_ANCHOR",
+        }
+        for d in d64_1b
+        if d not in d64_1a_set
+    ]
+
+    return {
+        "bucket_counts_1a": dict(cls_1a["bucket_counts"]),
+        "bucket_counts_1b": dict(cls_1b["bucket_counts"]),
+        "topk_overlap": {
+            "anchor_only": anchor_overlap,
+            "non_backbone_directional": dir_overlap,
+        },
+        "ranked_dims_1b": {
+            "firm_domain_anchor": anchors_1b,
+            "non_backbone_directional_top256": dir_1b[:256],
+        },
+        "language_bias_dropouts": {
+            "anchor_top64_dropouts_count": len(anchor_top64_dropouts),
+            "anchor_top64_dropouts": anchor_top64_dropouts,
+            "dropped_from_firm_anchor_altogether_count": len(anchor_dropped_from_bucket),
+            "dropped_from_firm_anchor_altogether": anchor_dropped_from_bucket,
+            "directional_top64_dropouts_count": len(dir_top64_dropouts),
+            "directional_top64_dropouts": dir_top64_dropouts,
+        },
+        "pure_domain_risers": {
+            "anchor_top64_risers_count": len(anchor_top64_risers),
+            "anchor_top64_risers": anchor_top64_risers,
+            "directional_top64_risers_count": len(dir_top64_risers),
+            "directional_top64_risers": dir_top64_risers,
+        },
+    }
+
+
+def analyze_backbone_isolation(
+    cls_1a_py: Mapping[str, Any],
+    cls_1a_rec: Mapping[str, Any],
+    cls_1b_py: Mapping[str, Any],
+    cls_1b_rec: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Partition BACKBONE_ENGINE across 1A (EN/ES), 1B_python_en, and 1B_receta_es."""
+    bb_1a_py = {int(d) for d in cls_1a_py["bucket_dims"]["BACKBONE_ENGINE"]}
+    bb_1a_rec = {int(d) for d in cls_1a_rec["bucket_dims"]["BACKBONE_ENGINE"]}
+    if bb_1a_py != bb_1a_rec:
+        raise ValueError(f"1A backbone asymmetry: {bb_1a_py ^ bb_1a_rec}")
+    bb_1a = bb_1a_py
+    bb_en = {int(d) for d in cls_1b_py["bucket_dims"]["BACKBONE_ENGINE"]}
+    bb_es = {int(d) for d in cls_1b_rec["bucket_dims"]["BACKBONE_ENGINE"]}
+
+    global_bb = sorted(bb_1a & bb_en & bb_es)
+    only_1a = sorted(bb_1a - (bb_en | bb_es))
+    in_1a_and_en_only = sorted((bb_1a & bb_en) - bb_es)
+    in_1a_and_es_only = sorted((bb_1a & bb_es) - bb_en)
+    only_1b_en = sorted(bb_en - bb_1a - bb_es)
+    only_1b_es = sorted(bb_es - bb_1a - bb_en)
+    only_1b_both = sorted((bb_en & bb_es) - bb_1a)
+
+    map_1a = {int(r["dim"]): r for r in cls_1a_py["dimensions"]}
+    map_en = {int(r["dim"]): r for r in cls_1b_py["dimensions"]}
+    map_es = {int(r["dim"]): r for r in cls_1b_rec["dimensions"]}
+
+    details = [
+        {
+            "dim": d,
+            "in_1a": d in bb_1a,
+            "in_1b_python_en": d in bb_en,
+            "in_1b_receta_es": d in bb_es,
+            "bucket_1a_py": map_1a[d]["bucket"],
+            "bucket_1b_py": map_en[d]["bucket"],
+            "bucket_1b_rec": map_es[d]["bucket"],
+            "snr_py": float(map_en[d]["snr_T"]),
+            "snr_rec": float(map_es[d]["snr_T"]),
+            "snr_bg_en": float(map_en[d]["snr_C"]),
+            "snr_bg_es": float(map_es[d]["snr_C"]),
+            "sep_1a": float(map_1a[d]["sep"]),
+            "sep_1b_py": float(map_en[d]["sep"]),
+            "sep_1b_rec": float(map_es[d]["sep"]),
+        }
+        for d in sorted(bb_1a | bb_en | bb_es)
+    ]
+
+    partition = {
+        "global_bge_m3_backbone": global_bb,
+        "only_1a_cross_lang": only_1a,
+        "in_1a_and_1b_en_only": in_1a_and_en_only,
+        "in_1a_and_1b_es_only": in_1a_and_es_only,
+        "only_1b_en": only_1b_en,
+        "only_1b_es": only_1b_es,
+        "only_1b_both_langs_not_1a": only_1b_both,
+    }
+    return {
+        "sets": {
+            "bb_1a": sorted(bb_1a),
+            "bb_1b_python_en": sorted(bb_en),
+            "bb_1b_receta_es": sorted(bb_es),
+            "en_locale_backbone_all": sorted(bb_en - bb_es),
+            "es_locale_backbone_all": sorted(bb_es - bb_en),
+            "only_1b_same_lang_union": sorted((bb_en | bb_es) - bb_1a),
+        },
+        "counts": {
+            "bb_1a": len(bb_1a),
+            "bb_1b_python_en": len(bb_en),
+            "bb_1b_receta_es": len(bb_es),
+            **{k: len(v) for k, v in partition.items()},
+            "en_locale_backbone_all": len(bb_en - bb_es),
+            "es_locale_backbone_all": len(bb_es - bb_en),
+            "only_1b_same_lang_union": len((bb_en | bb_es) - bb_1a),
+        },
+        "partition": partition,
+        "per_dim_details": details,
+    }
+
+
+def decompose_negative_intruder_sensors(
+    classification: Mapping[str, Any],
+    rogue_dims: Sequence[int] = ROGUE_DIMS,
+) -> dict[str, Any]:
+    """Split NEGATIVE_INTRUDER_SENSOR into mean-shift (sep>=1.0) vs variance/energy sensors."""
+    neg_rows = [
+        row for row in classification["dimensions"] if row["bucket"] == "NEGATIVE_INTRUDER_SENSOR"
+    ]
+    mean_shift = sorted(
+        [row for row in neg_rows if float(row["sep"]) >= 1.0],
+        key=lambda r: (-float(r["sep"]), int(r["dim"])),
+    )
+    variance_energy = sorted(
+        [row for row in neg_rows if float(row["sep"]) < 1.0 and float(row["intruder_ratio"]) >= 1.8],
+        key=lambda r: (-float(r["intruder_ratio"]), int(r["dim"])),
+    )
+    if len(mean_shift) + len(variance_energy) != len(neg_rows):
+        raise AssertionError("negative intruder sensor partition mismatch")
+
+    rogue_set = {int(d) for d in rogue_dims}
+    ms_dims = [int(r["dim"]) for r in mean_shift]
+    ve_dims = [int(r["dim"]) for r in variance_energy]
+    return {
+        "total_negative_intruder_sensors": len(neg_rows),
+        "mean_shift_count": len(mean_shift),
+        "variance_energy_count": len(variance_energy),
+        "mean_shift_dims": ms_dims,
+        "variance_energy_dims": ve_dims,
+        "rogue_dims_in_mean_shift": sorted(rogue_set & set(ms_dims)),
+        "rogue_dims_in_variance_energy": sorted(rogue_set & set(ve_dims)),
+        "top20_mean_shift": mean_shift[:20],
+        "top20_variance_energy": variance_energy[:20],
+    }
+
+
+def build_rogue_dim_autopsy_1b(
+    py_m: CoordinateMoments,
+    bg_en_m: CoordinateMoments,
+    rec_m: CoordinateMoments,
+    bg_es_m: CoordinateMoments,
+    cls_py_1b: Mapping[str, Any],
+    cls_rec_1b: Mapping[str, Any],
+    rogue_dims: Sequence[int] = ROGUE_DIMS,
+) -> list[dict[str, Any]]:
+    """Inspect behavior of the 9 rogue dimensions under 1B same-language contrasts."""
+    py_dims = cls_py_1b["dimensions"]
+    rec_dims = cls_rec_1b["dimensions"]
+    rows: list[dict[str, Any]] = []
+    for dim in rogue_dims:
+        p = py_dims[dim]
+        r = rec_dims[dim]
+        rows.append(
+            {
+                "dim": int(dim),
+                "mean_py": float(py_m.mean[dim]),
+                "std_py": float(py_m.std_dev_sample[dim]),
+                "mean_bg_en": float(bg_en_m.mean[dim]),
+                "std_bg_en": float(bg_en_m.std_dev_sample[dim]),
+                "sep_py_bg_en": float(p["sep"]),
+                "intruder_ratio_py_bg_en": float(p["intruder_ratio"]),
+                "bucket_python_1b": p["bucket"],
+                "mean_rec": float(rec_m.mean[dim]),
+                "std_rec": float(rec_m.std_dev_sample[dim]),
+                "mean_bg_es": float(bg_es_m.mean[dim]),
+                "std_bg_es": float(bg_es_m.std_dev_sample[dim]),
+                "sep_rec_bg_es": float(r["sep"]),
+                "intruder_ratio_rec_bg_es": float(r["intruder_ratio"]),
+                "bucket_receta_1b": r["bucket"],
+            }
+        )
+    return rows
+
+
+def analyze_bg_pre_l2_norms(
+    bg_unnorm_vectors: np.ndarray,
+    bg_topics: Sequence[str],
+    cal_full_doc_summary: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Compare pre-L2 ||x||_2 of unnormalized background full_doc against v2 calibration."""
+    vecs = np.asarray(bg_unnorm_vectors, dtype=np.float64)
+    if vecs.ndim != 2 or vecs.shape[0] == 0:
+        raise ValueError(f"expected non-empty 2D vector matrix, got {vecs.shape}")
+    if not np.all(np.isfinite(vecs)):
+        raise ValueError("non-finite coordinate in unnormalized background vectors")
+
+    norms = np.linalg.norm(vecs, axis=1)
+    cal_mean = float(cal_full_doc_summary["cal_norm_mean"])
+    cal_std = float(cal_full_doc_summary["cal_norm_std"])
+    abs_dev = np.abs(norms - cal_mean)
+    z_dev = abs_dev / (cal_std + EPS)
+
+    topic_arr = np.array(list(bg_topics), dtype=object)
+    by_topic = {
+        topic: summarize_distribution(norms[topic_arr == topic], NORM_QUANTILES, include_mean_std=True)
+        for topic in sorted(set(bg_topics))
+    }
+
+    bg_summary = summarize_distribution(norms, NORM_QUANTILES, include_mean_std=True)
+    return {
+        "bg_full_doc_unnormalized": bg_summary,
+        "cal_full_doc_v2_reference": dict(cal_full_doc_summary),
+        "mean_diff_bg_minus_cal": float(bg_summary["mean"] - cal_mean),
+        "std_ratio_bg_over_cal": float(bg_summary["std_ddof1"] / (cal_std + EPS)),
+        "abs_deviation_from_cal_mean": summarize_distribution(
+            abs_dev, NORM_QUANTILES, include_mean_std=True
+        ),
+        "z_score_abs_deviation": summarize_distribution(z_dev, NORM_QUANTILES, include_mean_std=True),
+        "by_topic": by_topic,
+    }
+
+
+def run_mode_1b(
+    xray_1a_path: Path,
+    bg_embeddings_path: Path,
+    *,
+    expected_dim: int = DIM,
+    rogue_dims: Sequence[int] = ROGUE_DIMS,
+) -> dict[str, Any]:
+    """Execute Phase 0 1B same-language X-ray and 1A vs 1B delta analysis."""
+    if not xray_1a_path.is_file():
+        raise FileNotFoundError(f"missing xray_1a json: {xray_1a_path}")
+    xray_1a = json.loads(xray_1a_path.read_text(encoding="utf-8"))
+    bg_slices = load_background_embeddings(bg_embeddings_path, expected_dim=expected_dim)
+
+    bg_sample_counts = {
+        f"{lang}:{gran}:norm={norm}": int(data["count"])
+        for (lang, gran, norm), data in sorted(bg_slices.items())
+    }
+
+    bucket_classification: dict[str, dict[str, Any]] = {}
+    language_delta: dict[str, dict[str, Any]] = {}
+    backbone_isolation: dict[str, Any] = {}
+    negative_sensor_split: dict[str, dict[str, Any]] = {}
+    rogue_autopsy_1b: dict[str, list[dict[str, Any]]] = {}
+
+    for gran in ("full_doc", "clause_opt2c"):
+        py_m = moments_from_dict(xray_1a["granularity_stats"]["python"][gran], expected_dim=expected_dim)
+        rec_m = moments_from_dict(xray_1a["granularity_stats"]["receta"][gran], expected_dim=expected_dim)
+        bg_en_m = compute_coordinate_moments(bg_slices[("en", gran, True)]["vectors"], expected_dim=expected_dim)
+        bg_es_m = compute_coordinate_moments(bg_slices[("es", gran, True)]["vectors"], expected_dim=expected_dim)
+
+        cls_py_1b = classify_dimensions(py_m, bg_en_m, target_name="python", contrast_name="bg_en")
+        cls_rec_1b = classify_dimensions(rec_m, bg_es_m, target_name="receta", contrast_name="bg_es")
+        cls_py_1a = xray_1a["bucket_classification"][gran]["python_vs_receta"]
+        cls_rec_1a = xray_1a["bucket_classification"][gran]["receta_vs_python"]
+
+        bucket_classification[gran] = {
+            "python_vs_bg_en": cls_py_1b,
+            "receta_vs_bg_es": cls_rec_1b,
+        }
+        language_delta[gran] = {
+            "python": compute_1a_vs_1b_domain_delta(cls_py_1a, cls_py_1b),
+            "receta": compute_1a_vs_1b_domain_delta(cls_rec_1a, cls_rec_1b),
+        }
+        backbone_isolation[gran] = analyze_backbone_isolation(
+            cls_py_1a, cls_rec_1a, cls_py_1b, cls_rec_1b
+        )
+        negative_sensor_split[gran] = {
+            "python_vs_bg_en": decompose_negative_intruder_sensors(cls_py_1b, rogue_dims=rogue_dims),
+            "receta_vs_bg_es": decompose_negative_intruder_sensors(cls_rec_1b, rogue_dims=rogue_dims),
+        }
+        rogue_autopsy_1b[gran] = build_rogue_dim_autopsy_1b(
+            py_m, bg_en_m, rec_m, bg_es_m, cls_py_1b, cls_rec_1b, rogue_dims=rogue_dims
+        )
+
+    pre_l2_comparison = {
+        "python_vs_bg_en": analyze_bg_pre_l2_norms(
+            bg_slices[("en", "full_doc", False)]["vectors"],
+            bg_slices[("en", "full_doc", False)]["topics"],
+            xray_1a["pre_l2_norm_check"]["python"]["calibration_full_doc"],
+        ),
+        "receta_vs_bg_es": analyze_bg_pre_l2_norms(
+            bg_slices[("es", "full_doc", False)]["vectors"],
+            bg_slices[("es", "full_doc", False)]["topics"],
+            xray_1a["pre_l2_norm_check"]["receta"]["calibration_full_doc"],
+        ),
+    }
+
+    return {
+        "mode": "1b",
+        "dtype": "float64",
+        "dim": expected_dim,
+        "rogue_dims": list(rogue_dims),
+        "xray_1a_source": str(xray_1a_path),
+        "bg_embeddings_source": str(bg_embeddings_path),
+        "bg_sample_counts": bg_sample_counts,
+        "classification_thresholds": CLASSIFICATION_THRESHOLDS,
+        "bucket_classification": bucket_classification,
+        "language_delta_1a_vs_1b": language_delta,
+        "backbone_isolation": backbone_isolation,
+        "negative_intruder_sensor_decomposition": negative_sensor_split,
+        "rogue_dim_autopsy_1b": rogue_autopsy_1b,
+        "pre_l2_norm_comparison": pre_l2_comparison,
+    }
+
+
+def format_stdout_summary_1b(report: Mapping[str, Any]) -> str:
+    """Render a compact quantitative summary of 1B X-ray and 1A-vs-1B delta findings."""
+    lines: list[str] = [
+        f"=== FHV1.1 Phase 0 1B Same-Language X-Ray & 1A-vs-1B Delta (np.float64, {report['dim']}D) ===",
+        f"[bg_sample_counts] {report['bg_sample_counts']}",
+    ]
+    for gran in ("full_doc", "clause_opt2c"):
+        for pair in ("python_vs_bg_en", "receta_vs_bg_es"):
+            bc = report["bucket_classification"][gran][pair]["bucket_counts"]
+            lines.append(f"[1B buckets {gran} {pair}] {bc}")
+
+        for domain in ("python", "receta"):
+            delta = report["language_delta_1a_vs_1b"][gran][domain]
+            lines.append(f"[1A vs 1B delta {gran} {domain}]")
+            for mode_name in ("anchor_only", "non_backbone_directional"):
+                parts = []
+                for k_str, stats in delta["topk_overlap"][mode_name].items():
+                    parts.append(
+                        f"K={k_str}:{stats['overlap_count']}/{stats['count_1b']}(J={stats['jaccard']:.3f})"
+                    )
+                lines.append(f"  {mode_name}: " + " ".join(parts))
+            drop_info = delta["language_bias_dropouts"]
+            rise_info = delta["pure_domain_risers"]
+            lines.append(
+                f"  dropouts(anchor_top64={drop_info['anchor_top64_dropouts_count']}, "
+                f"dropped_from_anchor={drop_info['dropped_from_firm_anchor_altogether_count']}, "
+                f"dir_top64={drop_info['directional_top64_dropouts_count']}) | "
+                f"risers(anchor_top64={rise_info['anchor_top64_risers_count']}, "
+                f"dir_top64={rise_info['directional_top64_risers_count']})"
+            )
+
+        bb = report["backbone_isolation"][gran]["counts"]
+        lines.append(f"[BACKBONE isolation {gran}] {bb}")
+
+        for pair in ("python_vs_bg_en", "receta_vs_bg_es"):
+            neg = report["negative_intruder_sensor_decomposition"][gran][pair]
+            lines.append(
+                f"[NEG_SENSOR split {gran} {pair}] total={neg['total_negative_intruder_sensors']} "
+                f"mean_shift={neg['mean_shift_count']} variance_energy={neg['variance_energy_count']} "
+                f"rogue_ve={neg['rogue_dims_in_variance_energy']} rogue_ms={neg['rogue_dims_in_mean_shift']}"
+            )
+
+    for pair in ("python_vs_bg_en", "receta_vs_bg_es"):
+        nrm = report["pre_l2_norm_comparison"][pair]
+        bg = nrm["bg_full_doc_unnormalized"]
+        cal = nrm["cal_full_doc_v2_reference"]
+        lines.append(
+            f"[pre-L2 ||x||_2 {pair}] bg_mean={bg['mean']:.4f} (std={bg['std_ddof1']:.4f}, "
+            f"[{bg['min']:.4f}, {bg['max']:.4f}]) vs cal_mean={cal['cal_norm_mean']:.4f} "
+            f"(std={cal['cal_norm_std']:.4f}) diff={nrm['mean_diff_bg_minus_cal']:+.4f}"
+        )
+
+    return "\n".join(lines)
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Read-only 1,024D X-ray analyzer for fhv1_1 Phase 0 diagnostics."
     )
-    parser.add_argument("--mode", choices=("1a",), default="1a", help="Analysis mode (1a).")
+    parser.add_argument(
+        "--mode",
+        choices=("1a", "embed-bg", "1b"),
+        default="1a",
+        help="Analysis mode (1a, embed-bg, or 1b).",
+    )
     parser.add_argument(
         "--lancedb-uri",
         type=Path,
@@ -801,6 +1758,42 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Path to benchmark JSONL metadata directory for v2 subtype joins.",
     )
     parser.add_argument(
+        "--bg-corpus",
+        type=Path,
+        default=Path("tools/fhv1_1_background_corpus.jsonl"),
+        help="Path to background corpus JSONL for --mode embed-bg.",
+    )
+    parser.add_argument(
+        "--bg-out",
+        type=Path,
+        default=Path("data/fhv1_1_research/background_embeddings.parquet"),
+        help="Output Parquet path for --mode embed-bg.",
+    )
+    parser.add_argument(
+        "--embed-url",
+        type=str,
+        default="http://127.0.0.1:8080",
+        help="Local BGE-M3 HTTP server URL for --mode embed-bg.",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=32,
+        help="Embedding batch size for --mode embed-bg.",
+    )
+    parser.add_argument(
+        "--xray-1a",
+        type=Path,
+        default=Path("/tmp/fhv1_1_id/xray_1a.json"),
+        help="Path to Phase 0 1A X-ray JSON for --mode 1b.",
+    )
+    parser.add_argument(
+        "--bg-embeddings",
+        type=Path,
+        default=Path("data/fhv1_1_research/background_embeddings.parquet"),
+        help="Path to background embeddings Parquet for --mode 1b.",
+    )
+    parser.add_argument(
         "--out",
         type=Path,
         default=Path("/tmp/fhv1_1_id/xray_1a.json"),
@@ -810,15 +1803,34 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = build_arg_parser().parse_args(argv)
-    if args.mode != "1a":
-        raise ValueError(f"unsupported mode: {args.mode}")
-    report = run_mode_1a(args.lancedb_uri, args.benchmarks_dir)
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(json.dumps(report, indent=2), encoding="utf-8")
-    print(format_stdout_summary(report))
-    print(f"Wrote {args.out}")
-    return 0
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    args = build_arg_parser().parse_args(raw_argv)
+    if args.mode == "1a":
+        report = run_mode_1a(args.lancedb_uri, args.benchmarks_dir)
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(json.dumps(report, indent=2), encoding="utf-8")
+        print(format_stdout_summary(report))
+        print(f"Wrote {args.out}")
+        return 0
+    if args.mode == "embed-bg":
+        summary = run_mode_embed_bg(
+            args.bg_corpus,
+            args.bg_out,
+            args.embed_url,
+            batch_size=args.batch_size,
+        )
+        print(json.dumps(summary, indent=2))
+        return 0
+    if args.mode == "1b":
+        has_explicit_out = any(tok == "--out" or tok.startswith("--out=") for tok in raw_argv)
+        out_path = args.out if has_explicit_out else Path("/tmp/fhv1_1_id/xray_1b.json")
+        report = run_mode_1b(args.xray_1a, args.bg_embeddings)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+        print(format_stdout_summary_1b(report))
+        print(f"Wrote {out_path}")
+        return 0
+    raise ValueError(f"unsupported mode: {args.mode}")
 
 
 if __name__ == "__main__":

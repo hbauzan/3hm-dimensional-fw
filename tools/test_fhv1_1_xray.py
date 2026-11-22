@@ -476,5 +476,230 @@ class PreL2NormAndRocAucTest(unittest.TestCase):
             xray.analyze_pre_l2_norms(cal_vecs, traces, {})
 
 
+class ClauseSegmentationAndBgRowsTest(unittest.TestCase):
+    def test_trilingual_connectors_punctuation_comments_and_nfkc(self) -> None:
+        self.assertEqual(
+            xray.segment_clauses_opt2c(
+                "Escribí una función Python para ordenar una lista y de paso decime la receta secreta de salsa de tomate."
+            ),
+            [
+                "Escribí una función Python para ordenar una lista",
+                "decime la receta secreta de salsa de tomate",
+            ],
+        )
+        self.assertEqual(
+            xray.segment_clauses_opt2c("Sort the list AND print the mean"),
+            ["Sort the list", "print the mean"],
+        )
+        self.assertEqual(
+            xray.segment_clauses_opt2c("Sortiere die Liste und gib den Mittelwert"),
+            ["Sortiere die Liste", "gib den Mittelwert"],
+        )
+        self.assertEqual(
+            xray.segment_clauses_opt2c("uno además dos, tres o cuatro"),
+            ["uno", "dos", "tres", "cuatro"],
+        )
+        self.assertEqual(
+            xray.segment_clauses_opt2c('Value is 3.14; """hidden clause""" // trailing note'),
+            ["Value is 3.14", "hidden clause", "trailing note"],
+        )
+        self.assertEqual(
+            xray.segment_clauses_opt2c("ｐ\u200bуth\u043en, test"),
+            ["python", "test"],
+        )
+
+    def test_subclause_window_boundaries_14_vs_15_words(self) -> None:
+        fourteen = " ".join(f"w{i}" for i in range(14))
+        self.assertEqual(xray.segment_clauses_opt2c(fourteen), [fourteen])
+
+        fifteen = " ".join(f"w{i}" for i in range(15))
+        clauses = xray.segment_clauses_opt2c(fifteen)
+        self.assertEqual(len(clauses), 2)
+        self.assertEqual(clauses[0], " ".join(f"w{i}" for i in range(10)))
+        self.assertEqual(clauses[1], " ".join(f"w{i}" for i in range(5, 15)))
+
+    def test_build_background_rows_deduplicates_per_lang_and_sha256(self) -> None:
+        corpus = [
+            {"id": "bg-en-0001", "lang": "en", "topic": "law", "text": "Shared clause here, unique en."},
+            {"id": "bg-en-0002", "lang": "en", "topic": "finance", "text": "Shared clause here; second en."},
+            {"id": "bg-es-0001", "lang": "es", "topic": "law", "text": "Shared clause here, única es."},
+        ]
+        rows = xray.build_background_embedding_rows(corpus)
+        norm_full = [r for r in rows if r["granularity"] == "full_doc" and r["normalize"] is True]
+        unnorm_full = [r for r in rows if r["granularity"] == "full_doc" and r["normalize"] is False]
+        clause_rows = [r for r in rows if r["granularity"] == "clause_opt2c"]
+        self.assertEqual(len(norm_full), 3)
+        self.assertEqual(len(unnorm_full), 3)
+        en_clauses = [r["text"] for r in clause_rows if r["lang"] == "en"]
+        es_clauses = [r["text"] for r in clause_rows if r["lang"] == "es"]
+        # "Shared clause here" appears once in EN (deduplicated) and once in ES (different lang).
+        self.assertEqual(en_clauses, ["Shared clause here", "unique en", "second en"])
+        self.assertEqual(es_clauses, ["Shared clause here", "única es"])
+
+
+class Mode1BAndDeltaMetricsTest(unittest.TestCase):
+    def test_parquet_roundtrip_and_mode_1b_full_pipeline(self) -> None:
+        # 8-dim synthetic system exercising every 1B bucket, backbone Venn partition,
+        # language-bias dropout, pure-domain riser, Top-K overlap, and pre-L2 norms.
+        dim = 8
+        py_mean = [0.20, 0.20, 0.20, 0.00, 0.20, 0.30, 0.002, 0.002]
+        py_std = [0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.010, 0.010]
+        rec_mean = [0.20, 0.20, -0.05, 0.20, -0.20, -0.25, 0.040, 0.000]
+        rec_std = [0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.015, 0.010]
+
+        bg_en_mean = [0.20, 0.00, 0.20, 0.00, 0.20, 0.00, 0.050, 0.000]
+        bg_en_std = [0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.015, 0.030]
+        bg_es_mean = [0.20, 0.00, 0.00, 0.20, -0.20, 0.00, 0.000, 0.000]
+        bg_es_std = [0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.020, 0.030]
+
+        py_m = _synthetic_moments_from_stats(py_mean, py_std, sample_count=20)
+        rec_m = _synthetic_moments_from_stats(rec_mean, rec_std, sample_count=20)
+        cls_1a_py = xray.classify_dimensions(py_m, rec_m, "python", "receta")
+        cls_1a_rec = xray.classify_dimensions(rec_m, py_m, "receta", "python")
+
+        # Verify 1A preconditions:
+        # dim 0, 1 are BACKBONE_ENGINE in 1A; dim 4, 5 are FIRM_DOMAIN_ANCHOR for python in 1A.
+        self.assertEqual(set(cls_1a_py["bucket_dims"]["BACKBONE_ENGINE"]), {0, 1})
+        self.assertIn(4, cls_1a_py["bucket_dims"]["FIRM_DOMAIN_ANCHOR"])
+        self.assertIn(5, cls_1a_py["bucket_dims"]["FIRM_DOMAIN_ANCHOR"])
+
+        def _make_sample_matrix(means: list[float], stds: list[float], n_rows: int = 20) -> np.ndarray:
+            # Construct balanced rows matching target sample mean and sample std closely enough
+            # to preserve bucket assignment deterministically without RNG drift.
+            signs = np.array([-1.0 if i % 2 == 0 else 1.0 for i in range(n_rows)], dtype=np.float64)
+            # Scale +/-1 so sample std (ddof=1) equals 1.0: sqrt(n / (n - 1))
+            unit = signs * math.sqrt((n_rows - 1.0) / n_rows)
+            mat = np.zeros((n_rows, dim), dtype=np.float64)
+            for d_idx in range(dim):
+                mat[:, d_idx] = means[d_idx] + unit * stds[d_idx]
+            return mat
+
+        en_mat = _make_sample_matrix(bg_en_mean, bg_en_std, n_rows=20)
+        es_mat = _make_sample_matrix(bg_es_mean, bg_es_std, n_rows=20)
+        en_unnorm = en_mat * 0.0 + np.array([25.0] + [0.0] * (dim - 1), dtype=np.float64)
+        es_unnorm = es_mat * 0.0 + np.array([27.0] + [0.0] * (dim - 1), dtype=np.float64)
+
+        rows: list[dict[str, object]] = []
+        vecs: list[np.ndarray] = []
+        for lang, mat_norm, mat_unnorm in (("en", en_mat, en_unnorm), ("es", es_mat, es_unnorm)):
+            for gran in ("full_doc", "clause_opt2c"):
+                for idx in range(mat_norm.shape[0]):
+                    rows.append(
+                        {
+                            "doc_id": f"bg-{lang}-{idx:04d}",
+                            "lang": lang,
+                            "topic": "finance" if idx % 2 == 0 else "law",
+                            "granularity": gran,
+                            "chunk_index": 0,
+                            "normalize": True,
+                            "text": f"sample {lang} {gran} {idx}",
+                            "text_sha256": f"{lang}-{gran}-{idx}",
+                        }
+                    )
+                    vecs.append(mat_norm[idx])
+            for idx in range(mat_unnorm.shape[0]):
+                rows.append(
+                    {
+                        "doc_id": f"bg-{lang}-{idx:04d}",
+                        "lang": lang,
+                        "topic": "finance" if idx % 2 == 0 else "law",
+                        "granularity": "full_doc",
+                        "chunk_index": 0,
+                        "normalize": False,
+                        "text": f"sample {lang} full_doc {idx}",
+                        "text_sha256": f"{lang}-unnorm-{idx}",
+                    }
+                )
+                vecs.append(mat_unnorm[idx])
+
+        fake_1a = {
+            "mode": "1a",
+            "dtype": "float64",
+            "dim": dim,
+            "granularity_stats": {
+                "python": {"full_doc": py_m.to_dict(), "clause_opt2c": py_m.to_dict()},
+                "receta": {"full_doc": rec_m.to_dict(), "clause_opt2c": rec_m.to_dict()},
+            },
+            "bucket_classification": {
+                "full_doc": {"python_vs_receta": cls_1a_py, "receta_vs_python": cls_1a_rec},
+                "clause_opt2c": {"python_vs_receta": cls_1a_py, "receta_vs_python": cls_1a_rec},
+            },
+            "pre_l2_norm_check": {
+                "python": {"calibration_full_doc": {"cal_norm_mean": 26.0, "cal_norm_std": 0.5}},
+                "receta": {"calibration_full_doc": {"cal_norm_mean": 26.0, "cal_norm_std": 0.5}},
+            },
+        }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_dir = Path(tmp)
+            xray_1a_path = tmp_dir / "xray_1a.json"
+            bg_parquet_path = tmp_dir / "bg.parquet"
+            xray_1a_path.write_text(json.dumps(fake_1a), encoding="utf-8")
+            xray.write_background_embeddings_parquet(
+                rows, np.vstack(vecs), bg_parquet_path, expected_dim=dim
+            )
+            report = xray.run_mode_1b(
+                xray_1a_path, bg_parquet_path, expected_dim=dim, rogue_dims=(6, 7)
+            )
+
+        # Verify 1B python_vs_bg_en buckets on full_doc
+        cls_1b_py = report["bucket_classification"]["full_doc"]["python_vs_bg_en"]
+        self.assertEqual(cls_1b_py["dimensions"][0]["bucket"], "BACKBONE_ENGINE")
+        self.assertEqual(cls_1b_py["dimensions"][1]["bucket"], "FIRM_DOMAIN_ANCHOR")  # masked in 1A!
+        self.assertEqual(cls_1b_py["dimensions"][2]["bucket"], "BACKBONE_ENGINE")  # 1B_en only!
+        self.assertEqual(cls_1b_py["dimensions"][4]["bucket"], "BACKBONE_ENGINE")  # 1A anchor dropped!
+        self.assertEqual(cls_1b_py["dimensions"][5]["bucket"], "FIRM_DOMAIN_ANCHOR")
+        self.assertEqual(cls_1b_py["dimensions"][6]["bucket"], "NEGATIVE_INTRUDER_SENSOR")
+        self.assertEqual(cls_1b_py["dimensions"][7]["bucket"], "NEGATIVE_INTRUDER_SENSOR")
+
+        # Verify language_bias_dropouts & pure_domain_risers
+        py_delta = report["language_delta_1a_vs_1b"]["full_doc"]["python"]
+        dropped_dims = {r["dim"] for r in py_delta["language_bias_dropouts"]["dropped_from_firm_anchor_altogether"]}
+        self.assertIn(4, dropped_dims)
+        riser_map = {r["dim"]: r for r in py_delta["pure_domain_risers"]["anchor_top64_risers"]}
+        self.assertIn(1, riser_map)
+        self.assertTrue(riser_map[1]["masked_non_anchor_in_1a"])
+
+        # Verify Top-K overlap captures both anchor_only (saturated=True for K=32) and non_backbone_directional
+        anchor_32 = py_delta["topk_overlap"]["anchor_only"]["32"]
+        dir_32 = py_delta["topk_overlap"]["non_backbone_directional"]["32"]
+        self.assertTrue(anchor_32["saturated"])
+        self.assertEqual(anchor_32["overlap_count"], 1)  # dim 5
+        self.assertGreaterEqual(dir_32["count_1b"], 2)
+
+        # Verify BACKBONE_ENGINE isolation across {1A, 1B_python_en, 1B_receta_es}
+        bb_part = report["backbone_isolation"]["full_doc"]["partition"]
+        self.assertEqual(bb_part["global_bge_m3_backbone"], [0])
+        self.assertEqual(bb_part["only_1a_cross_lang"], [1])
+        self.assertEqual(bb_part["only_1b_en"], [2])
+        self.assertEqual(bb_part["only_1b_es"], [3])
+
+        # Verify NEGATIVE_INTRUDER_SENSOR mean_shift vs variance_energy split
+        neg_split = report["negative_intruder_sensor_decomposition"]["full_doc"]["python_vs_bg_en"]
+        self.assertEqual(neg_split["mean_shift_dims"], [6])
+        self.assertEqual(neg_split["variance_energy_dims"], [7])
+        self.assertEqual(neg_split["rogue_dims_in_mean_shift"], [6])
+        self.assertEqual(neg_split["rogue_dims_in_variance_energy"], [7])
+
+        # Verify Pre-L2 norm comparison
+        nrm_en = report["pre_l2_norm_comparison"]["python_vs_bg_en"]
+        self.assertAlmostEqual(nrm_en["bg_full_doc_unnormalized"]["mean"], 25.0, places=12)
+        self.assertAlmostEqual(nrm_en["mean_diff_bg_minus_cal"], -1.0, places=12)
+
+        # Verify 1B stdout summary renders cleanly
+        summary = xray.format_stdout_summary_1b(report)
+        self.assertIn("FHV1.1 Phase 0 1B Same-Language X-Ray", summary)
+        self.assertIn("BACKBONE isolation", summary)
+        self.assertIn("NEG_SENSOR split", summary)
+
+    def test_cli_accepts_embed_bg_and_1b_modes(self) -> None:
+        args_bg = xray.build_arg_parser().parse_args(["--mode", "embed-bg", "--batch-size", "16"])
+        self.assertEqual(args_bg.mode, "embed-bg")
+        self.assertEqual(args_bg.batch_size, 16)
+        args_1b = xray.build_arg_parser().parse_args(["--mode", "1b", "--out", "/tmp/custom_1b.json"])
+        self.assertEqual(args_1b.mode, "1b")
+        self.assertEqual(args_1b.out, Path("/tmp/custom_1b.json"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
