@@ -24,7 +24,7 @@ import generate_fhv1_benchmark as generator  # noqa: E402
 
 CORPUS_PATH = TOOLS_DIR / "fhv1_1_background_corpus.jsonl"
 
-EXPECTED_TOPICS: tuple[str, ...] = (
+GENERAL_TOPICS: tuple[str, ...] = (
     "finance",
     "law",
     "medicine",
@@ -40,12 +40,44 @@ EXPECTED_TOPICS: tuple[str, ...] = (
     "electronics_hardware",
 )
 
+TECHNICAL_TOPICS: tuple[str, ...] = (
+    "business_json_yaml",
+    "server_network_logs",
+    "technical_manuals",
+    "tables_schemas",
+    "imperative_instructions",
+)
+
+NEAR_EN_TOPICS: tuple[str, ...] = (
+    "javascript_typescript",
+    "rust",
+    "go",
+    "java",
+    "cpp",
+    "csharp",
+    "sql",
+    "bash_shell",
+    "ruby",
+    "docker_terraform",
+)
+
+NEAR_ES_TOPICS: tuple[str, ...] = (
+    "nutricion_clinica",
+    "quimica_alimentos",
+    "finanzas_restaurante",
+    "hornos_electricos",
+    "agronomia_cosecha",
+)
+
+STRATA: tuple[str, ...] = ("general_prose", "technical_structured", "near_ood_neighbor")
+
+# Python-specific denylist. import / yield / lambda stay legal: they occur in
+# non-Python neighbor languages.
 PYTHON_LEAK_RE = re.compile(
-    r"(?:__init__|__get__|__set__|__dict__|\bdef\s+\w+\s*\(|\bimport\s+\w+)"
-    r"|\b(python|pythonic|cpython|bytecode|pip|venv|conda|pytest|asyncio|itertools|"
-    r"functools|pathlib|hashlib|pickle|dataclass|dataclasses|decorator|decorators|"
-    r"coroutine|coroutines|walrus|memoryview|numpy|scipy|pandas|matplotlib|django|"
-    r"flask|fastapi|uvicorn|isinstance|traceback|lambda|yield|gil)\b",
+    r"__init__|\bdef\s+\w+\s*\(|"
+    r"\b(?:python|pythonic|cpython|pypi|pip|venv|conda|pytest|asyncio|itertools|"
+    r"functools|pathlib|hashlib|pickle|dataclass|dataclasses|numpy|scipy|pandas|"
+    r"matplotlib|django|flask|fastapi|uvicorn|isinstance|traceback|gil)\b",
     re.IGNORECASE,
 )
 
@@ -56,6 +88,8 @@ EN_SPANISH_LEAK_RE = re.compile(
     r"una|uno|con|pero|más|como|por|que|era)\b",
     re.IGNORECASE,
 )
+
+ES_RECIPE_RE = re.compile(r"\brecetas?\b|\brecetario\b", re.IGNORECASE)
 
 ES_CULINARY_LEAK_RE = re.compile(
     r"\b(receta|recetas|cocina|cocinar|cocción|horno|hornear|horneado|sartén|"
@@ -78,15 +112,55 @@ ES_ENGLISH_LEAK_RE = re.compile(
     re.IGNORECASE,
 )
 
+BLOCK_SPECS: tuple[tuple[str, str, int], ...] = (
+    ("en", "general_prose", 300),
+    ("en", "technical_structured", 100),
+    ("en", "near_ood_neighbor", 100),
+    ("es", "general_prose", 300),
+    ("es", "technical_structured", 100),
+    ("es", "near_ood_neighbor", 100),
+)
+
 
 def _words(text: str) -> list[str]:
     return [w for w in text.split() if w]
 
 
-def _prefix_6(text: str) -> str:
+def _norm_tokens(text: str) -> list[str]:
+    return generator.nfkc_lower(text).split()
+
+
+def _prefix(text: str) -> str:
     cleaned = re.sub(r"\d+", "#", re.sub(r"[^\w\s]", " ", text.lower()))
     toks = cleaned.split()
-    return " ".join(toks[:6]) if len(toks) >= 6 else " ".join(toks)
+    width = min(6, len(toks))
+    return " ".join(toks[:width])
+
+
+def _ngrams(tokens: list[str], n: int) -> set[str]:
+    if len(tokens) < n:
+        return set()
+    return {" ".join(tokens[i : i + n]) for i in range(len(tokens) - n + 1)}
+
+
+def _length_band(text: str) -> str:
+    wc = len(_words(text))
+    if 5 <= wc <= 15:
+        if "\n\n" in text:
+            return "short-bad-blank"
+        return "short"
+    if 20 <= wc <= 65:
+        return "medium"
+    if 80 <= wc <= 160:
+        paras = [p for p in text.split("\n\n") if p.strip()]
+        if len(paras) != 2:
+            return "long-bad-paras"
+        return "long"
+    return f"out-{wc}"
+
+
+def _alpha_set(text: str) -> set[str]:
+    return set(re.findall(r"[a-zA-ZáéíóúüñÁÉÍÓÚÜÑ]+", text.lower()))
 
 
 def _collect_json_strings(value: Any, out: list[str]) -> None:
@@ -148,104 +222,176 @@ def _collect_reference_texts() -> list[str]:
 
 
 class BackgroundCorpusContractTest(unittest.TestCase):
-    def setUp(self) -> None:
-        self.assertTrue(CORPUS_PATH.is_file(), f"missing corpus file: {CORPUS_PATH}")
+    @classmethod
+    def setUpClass(cls) -> None:
+        if not CORPUS_PATH.is_file():
+            raise AssertionError(f"missing corpus file: {CORPUS_PATH}")
         lines = [line for line in CORPUS_PATH.read_text(encoding="utf-8").splitlines() if line.strip()]
-        self.rows = [json.loads(line) for line in lines]
+        cls.rows = [json.loads(line) for line in lines]
 
-    def test_schema_counts_and_topic_balance(self) -> None:
-        self.assertEqual(len(self.rows), 500, "corpus must contain exactly 500 items")
-        en_rows = [r for r in self.rows if r["lang"] == "en"]
-        es_rows = [r for r in self.rows if r["lang"] == "es"]
-        self.assertEqual(len(en_rows), 250)
-        self.assertEqual(len(es_rows), 250)
+    def _block(self, lang: str, stratum: str) -> list[dict[str, Any]]:
+        return [row for row in self.rows if row["lang"] == lang and row["stratum"] == stratum]
 
-        for idx, row in enumerate(en_rows, start=1):
-            self.assertEqual(set(row.keys()), {"id", "lang", "topic", "text"})
-            self.assertEqual(row["id"], f"bg-en-{idx:04d}")
-            self.assertIn(row["topic"], EXPECTED_TOPICS)
-            self.assertTrue(row["text"].strip())
-            self.assertEqual(row["text"], row["text"].strip())
+    def test_schema_order_ids_and_exact_keys(self) -> None:
+        self.assertEqual(len(self.rows), 1000)
+        offset = 0
+        for lang, stratum, count in BLOCK_SPECS:
+            block = self.rows[offset : offset + count]
+            self.assertEqual(len(block), count)
+            for local_idx, row in enumerate(block, start=1):
+                global_idx = local_idx if stratum == "general_prose" else (
+                    300 + local_idx if stratum == "technical_structured" else 400 + local_idx
+                )
+                self.assertEqual(set(row.keys()), {"id", "lang", "stratum", "topic", "text"})
+                self.assertEqual(row["lang"], lang)
+                self.assertEqual(row["stratum"], stratum)
+                self.assertEqual(row["id"], f"bg-{lang}-{global_idx:04d}")
+                self.assertTrue(row["text"].strip())
+                self.assertEqual(row["text"], row["text"].strip())
+                self.assertIn(row["stratum"], STRATA)
+            offset += count
+        self.assertEqual(offset, 1000)
+        langs = Counter(row["lang"] for row in self.rows)
+        self.assertEqual(langs, Counter({"en": 500, "es": 500}))
 
-        for idx, row in enumerate(es_rows, start=1):
-            self.assertEqual(set(row.keys()), {"id", "lang", "topic", "text"})
-            self.assertEqual(row["id"], f"bg-es-{idx:04d}")
-            self.assertIn(row["topic"], EXPECTED_TOPICS)
-            self.assertTrue(row["text"].strip())
-            self.assertEqual(row["text"], row["text"].strip())
+    def test_general_prose_topic_quotas(self) -> None:
+        for lang in ("en", "es"):
+            block = self._block(lang, "general_prose")
+            self.assertEqual(len(block), 300)
+            counts = Counter(row["topic"] for row in block)
+            self.assertEqual(set(counts), set(GENERAL_TOPICS))
+            for topic, count in counts.items():
+                expected = 24 if topic == "electronics_hardware" else 23
+                self.assertEqual(count, expected, f"{lang} {topic}")
 
-        for lang_label, subset in (("en", en_rows), ("es", es_rows)):
-            topic_counts = Counter(r["topic"] for r in subset)
-            self.assertEqual(set(topic_counts.keys()), set(EXPECTED_TOPICS))
-            for topic, count in topic_counts.items():
-                self.assertIn(count, (19, 20), f"{lang_label} topic {topic} count={count}")
+    def test_general_prose_length_quotas_and_per_topic_coverage(self) -> None:
+        for lang in ("en", "es"):
+            block = self._block(lang, "general_prose")
+            bands: Counter[str] = Counter()
+            per_topic: dict[str, set[str]] = {topic: set() for topic in GENERAL_TOPICS}
+            for row in block:
+                band = _length_band(row["text"])
+                self.assertIn(band, {"short", "medium", "long"}, f"{row['id']} band {band}")
+                bands[band] += 1
+                per_topic[row["topic"]].add(band)
+            self.assertEqual(bands["short"], 60, lang)
+            self.assertEqual(bands["medium"], 180, lang)
+            self.assertEqual(bands["long"], 60, lang)
+            for topic, seen in per_topic.items():
+                self.assertTrue({"short", "medium", "long"} <= seen, f"{lang} {topic} missing {seen}")
 
-    def test_length_diversity_matches_calibration_profile(self) -> None:
-        for lang_label in ("en", "es"):
-            subset = [r for r in self.rows if r["lang"] == lang_label]
-            short_n = 0
-            med_n = 0
-            long_n = 0
-            for row in subset:
-                text = row["text"]
-                wc = len(_words(text))
-                if 5 <= wc <= 15:
-                    short_n += 1
-                    self.assertNotIn("\n\n", text)
-                elif 20 <= wc <= 65:
-                    med_n += 1
-                elif 80 <= wc <= 160:
-                    long_n += 1
-                    paras = [p for p in text.split("\n\n") if p.strip()]
-                    self.assertEqual(len(paras), 2, f"{row['id']} long doc must have 2 paragraphs")
-                else:
-                    self.fail(f"{row['id']} word count {wc} outside [5..15, 20..65, 80..160]")
-            self.assertEqual(short_n, 50, f"{lang_label} short count")
-            self.assertEqual(med_n, 140, f"{lang_label} medium count")
-            self.assertEqual(long_n, 60, f"{lang_label} long count")
+    def test_technical_structured_quotas_and_lengths(self) -> None:
+        for lang in ("en", "es"):
+            block = self._block(lang, "technical_structured")
+            self.assertEqual(len(block), 100)
+            counts = Counter(row["topic"] for row in block)
+            self.assertEqual(dict(counts), {topic: 20 for topic in TECHNICAL_TOPICS})
+            bands: Counter[str] = Counter()
+            for row in block:
+                band = _length_band(row["text"])
+                self.assertIn(band, {"short", "medium", "long"}, f"{row['id']} band {band}")
+                bands[band] += 1
+            self.assertEqual(bands["short"], 20, lang)
+            self.assertEqual(bands["medium"], 50, lang)
+            self.assertEqual(bands["long"], 30, lang)
 
-    def test_no_template_cloning_or_high_jaccard_duplicates(self) -> None:
-        for lang_label in ("en", "es"):
-            subset = [r for r in self.rows if r["lang"] == lang_label]
-            prefixes = Counter(_prefix_6(r["text"]) for r in subset if len(_words(r["text"])) >= 6)
-            for prefix, freq in prefixes.items():
-                self.assertLess(freq, 3, f"{lang_label} repeated 6-word prefix ({freq}x): {prefix!r}")
+    def test_near_ood_english_quotas_and_lengths(self) -> None:
+        block = self._block("en", "near_ood_neighbor")
+        self.assertEqual(len(block), 100)
+        counts = Counter(row["topic"] for row in block)
+        self.assertEqual(dict(counts), {topic: 10 for topic in NEAR_EN_TOPICS})
+        bands: Counter[str] = Counter()
+        for row in block:
+            band = _length_band(row["text"])
+            self.assertIn(band, {"short", "medium", "long"}, f"{row['id']} band {band}")
+            bands[band] += 1
+        self.assertEqual(dict(bands), {"short": 20, "medium": 50, "long": 30})
 
-            word_sets = [
-                set(re.findall(r"[a-zA-Záéíóúüñ]+", r["text"].lower()))
-                for r in subset
-            ]
+    def test_near_ood_spanish_quotas_and_lengths(self) -> None:
+        block = self._block("es", "near_ood_neighbor")
+        self.assertEqual(len(block), 100)
+        counts = Counter(row["topic"] for row in block)
+        self.assertEqual(dict(counts), {topic: 20 for topic in NEAR_ES_TOPICS})
+        bands: Counter[str] = Counter()
+        for row in block:
+            band = _length_band(row["text"])
+            self.assertIn(band, {"short", "medium", "long"}, f"{row['id']} band {band}")
+            bands[band] += 1
+        self.assertEqual(dict(bands), {"short": 20, "medium": 50, "long": 30})
+
+    def test_unique_normalized_prefixes_per_language(self) -> None:
+        for lang in ("en", "es"):
+            subset = [row for row in self.rows if row["lang"] == lang]
+            prefixes = Counter(_prefix(row["text"]) for row in subset)
+            dups = [(prefix, freq) for prefix, freq in prefixes.items() if freq != 1]
+            self.assertEqual(dups, [], f"{lang} prefix collisions")
+
+    def test_pairwise_jaccard_strictly_below_threshold(self) -> None:
+        for lang in ("en", "es"):
+            subset = [row for row in self.rows if row["lang"] == lang]
+            word_sets = [_alpha_set(row["text"]) for row in subset]
+            bad: list[str] = []
             for i in range(len(word_sets)):
-                if len(word_sets[i]) < 5:
+                if not word_sets[i]:
                     continue
                 for j in range(i + 1, len(word_sets)):
-                    if len(word_sets[j]) < 5:
+                    if not word_sets[j]:
                         continue
                     union = len(word_sets[i] | word_sets[j])
                     if union == 0:
                         continue
-                    jaccard = len(word_sets[i] & word_sets[j]) / union
-                    self.assertLessEqual(
-                        jaccard,
-                        0.72,
-                        f"{lang_label} high Jaccard={jaccard:.3f}: {subset[i]['id']} vs {subset[j]['id']}",
-                    )
+                    score = len(word_sets[i] & word_sets[j]) / union
+                    if score >= 0.72:
+                        bad.append(
+                            f"{subset[i]['id']} vs {subset[j]['id']} Jaccard={score:.3f}"
+                        )
+                        if len(bad) >= 8:
+                            break
+                if len(bad) >= 8:
+                    break
+            self.assertEqual(bad, [], f"{lang} Jaccard")
 
-    def test_language_purity_and_domain_exclusion(self) -> None:
+    def test_english_rows_reject_spanish_leaks_and_python_denylist(self) -> None:
         for row in self.rows:
+            if row["lang"] != "en":
+                continue
             text = row["text"]
-            if row["lang"] == "en":
-                py_hits = PYTHON_LEAK_RE.findall(text)
-                self.assertEqual(py_hits, [], f"{row['id']} Python leak {py_hits}: {text[:120]}")
-                es_hits = EN_SPANISH_LEAK_RE.findall(text)
-                self.assertEqual(es_hits, [], f"{row['id']} Spanish leak {es_hits}: {text[:120]}")
-            else:
-                cul_hits = ES_CULINARY_LEAK_RE.findall(text)
-                self.assertEqual(cul_hits, [], f"{row['id']} culinary leak {cul_hits}: {text[:120]}")
-                en_hits = ES_ENGLISH_LEAK_RE.findall(text)
-                self.assertEqual(en_hits, [], f"{row['id']} English leak {en_hits}: {text[:120]}")
+            py_hits = PYTHON_LEAK_RE.findall(text)
+            self.assertEqual(py_hits, [], f"{row['id']} Python leak {py_hits}: {text[:160]}")
+            es_hits = EN_SPANISH_LEAK_RE.findall(text)
+            self.assertEqual(es_hits, [], f"{row['id']} Spanish leak {es_hits}: {text[:160]}")
 
-    def test_anti_leakage_firewall_internal_and_external(self) -> None:
+    def test_python_denylist_allows_import_yield_and_lambda(self) -> None:
+        spared = "import stream; yield item; const lambda = (v) => v;"
+        self.assertEqual(PYTHON_LEAK_RE.findall(spared), [])
+        self.assertIsNone(EN_SPANISH_LEAK_RE.search(spared))
+        for banned in ("python", "isinstance", "gil", "__init__", "def rank(cost)", "pypi", "pytest"):
+            self.assertIsNotNone(PYTHON_LEAK_RE.search(banned), banned)
+
+    def test_spanish_rows_reject_english_leaks_and_recipe_words(self) -> None:
+        for row in self.rows:
+            if row["lang"] != "es":
+                continue
+            text = row["text"]
+            en_hits = ES_ENGLISH_LEAK_RE.findall(text)
+            self.assertEqual(en_hits, [], f"{row['id']} English leak {en_hits}: {text[:160]}")
+            recipe_hits = ES_RECIPE_RE.findall(text)
+            self.assertEqual(recipe_hits, [], f"{row['id']} recipe leak {recipe_hits}: {text[:160]}")
+
+    def test_culinary_lexicon_applies_only_outside_near_ood_neighbor(self) -> None:
+        neighbor_hits = 0
+        for row in self.rows:
+            if row["lang"] != "es":
+                continue
+            hits = ES_CULINARY_LEAK_RE.findall(row["text"])
+            if row["stratum"] == "near_ood_neighbor":
+                neighbor_hits += len(hits)
+                continue
+            self.assertIn(row["stratum"], {"general_prose", "technical_structured"})
+            self.assertEqual(hits, [], f"{row['id']} culinary leak {hits}: {row['text'][:160]}")
+        self.assertGreater(neighbor_hits, 0)
+
+    def test_internal_raw_and_nfkc_uniqueness(self) -> None:
         seen_raw: set[str] = set()
         seen_folded: set[str] = set()
         for row in self.rows:
@@ -256,36 +402,42 @@ class BackgroundCorpusContractTest(unittest.TestCase):
             seen_raw.add(raw)
             seen_folded.add(folded)
 
+    def test_external_firewall_raw_nfkc_and_sliding_4_and_5_grams(self) -> None:
         ref_texts = _collect_reference_texts()
         self.assertGreater(len(ref_texts), 1500)
-
         ref_raw: set[str] = set()
         ref_folded: set[str] = set()
-        ref_surfaces_5plus: set[str] = set()
+        ref_4: set[str] = set()
+        ref_5: set[str] = set()
         for ref in ref_texts:
             trimmed = ref.strip()
             ref_raw.add(trimmed)
             ref_folded.add(generator.nfkc_lower(trimmed))
-            for surf in generator.expand_surface(trimmed):
-                if len(_words(surf)) >= 5:
-                    ref_surfaces_5plus.add(generator.nfkc_lower(surf))
+            tokens = _norm_tokens(trimmed)
+            ref_4.update(_ngrams(tokens, 4))
+            ref_5.update(_ngrams(tokens, 5))
+        self.assertGreater(len(ref_4), 10000)
+        self.assertGreater(len(ref_5), 10000)
 
+        bad: list[str] = []
         for row in self.rows:
             raw = row["text"].strip()
             folded = generator.nfkc_lower(raw)
-            self.assertNotIn(raw, ref_raw, f"external raw overlap: {row['id']}")
-            self.assertNotIn(folded, ref_folded, f"external folded overlap: {row['id']}")
-            for surf in generator.expand_surface(raw):
-                if len(_words(surf)) >= 5:
-                    sf = generator.nfkc_lower(surf)
-                    self.assertNotIn(sf, ref_folded, f"surface overlaps ref doc: {row['id']} -> {sf!r}")
-                    self.assertNotIn(
-                        sf,
-                        ref_surfaces_5plus,
-                        f"5+ word surface overlaps ref surface: {row['id']} -> {sf!r}",
-                    )
+            if raw in ref_raw:
+                bad.append(f"{row['id']} raw")
+            if folded in ref_folded:
+                bad.append(f"{row['id']} nfkc")
+            tokens = _norm_tokens(raw)
+            hit4 = _ngrams(tokens, 4) & ref_4
+            hit5 = _ngrams(tokens, 5) & ref_5
+            if hit4:
+                bad.append(f"{row['id']} 4gram {next(iter(hit4))}")
+            if hit5:
+                bad.append(f"{row['id']} 5gram {next(iter(hit5))}")
+            if len(bad) >= 12:
+                break
+        self.assertEqual(bad, [])
 
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
-

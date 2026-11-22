@@ -989,14 +989,15 @@ def load_background_corpus(corpus_path: Path) -> list[dict[str, Any]]:
         if not trimmed:
             continue
         obj = json.loads(trimmed)
-        rows.append(
-            {
-                "id": str(obj["id"]),
-                "lang": str(obj["lang"]),
-                "topic": str(obj["topic"]),
-                "text": str(obj["text"]),
-            }
-        )
+        row = {
+            "id": str(obj["id"]),
+            "lang": str(obj["lang"]),
+            "topic": str(obj["topic"]),
+            "text": str(obj["text"]),
+        }
+        if obj.get("stratum") is not None:
+            row["stratum"] = str(obj["stratum"])
+        rows.append(row)
     if not rows:
         raise ValueError(f"empty background corpus: {corpus_path}")
     return rows
@@ -1012,6 +1013,7 @@ def build_background_embedding_rows(corpus_rows: Sequence[Mapping[str, Any]]) ->
         doc_id = str(doc["id"])
         lang = str(doc["lang"])
         topic = str(doc["topic"])
+        stratum = str(doc.get("stratum", ""))
         norm_text = normalize_input_text(str(doc["text"])).strip()
         if not norm_text:
             raise ValueError(f"empty normalized text for {doc_id}")
@@ -1020,6 +1022,7 @@ def build_background_embedding_rows(corpus_rows: Sequence[Mapping[str, Any]]) ->
                 "doc_id": doc_id,
                 "lang": lang,
                 "topic": topic,
+                "stratum": stratum,
                 "granularity": "full_doc",
                 "chunk_index": 0,
                 "normalize": True,
@@ -1040,6 +1043,7 @@ def build_background_embedding_rows(corpus_rows: Sequence[Mapping[str, Any]]) ->
                     "doc_id": doc_id,
                     "lang": lang,
                     "topic": topic,
+                    "stratum": stratum,
                     "granularity": "clause_opt2c",
                     "chunk_index": chunk_idx,
                     "normalize": True,
@@ -1104,6 +1108,7 @@ def write_background_embeddings_parquet(
             pa.field("doc_id", pa.string(), nullable=False),
             pa.field("lang", pa.string(), nullable=False),
             pa.field("topic", pa.string(), nullable=False),
+            pa.field("stratum", pa.string(), nullable=False),
             pa.field("granularity", pa.string(), nullable=False),
             pa.field("chunk_index", pa.int64(), nullable=False),
             pa.field("normalize", pa.bool_(), nullable=False),
@@ -1121,6 +1126,7 @@ def write_background_embeddings_parquet(
             "doc_id": pa.array([str(r["doc_id"]) for r in rows], type=pa.string()),
             "lang": pa.array([str(r["lang"]) for r in rows], type=pa.string()),
             "topic": pa.array([str(r["topic"]) for r in rows], type=pa.string()),
+            "stratum": pa.array([str(r.get("stratum", "")) for r in rows], type=pa.string()),
             "granularity": pa.array([str(r["granularity"]) for r in rows], type=pa.string()),
             "chunk_index": pa.array([int(r["chunk_index"]) for r in rows], type=pa.int64()),
             "normalize": pa.array([bool(r["normalize"]) for r in rows], type=pa.bool_()),
@@ -1140,13 +1146,25 @@ def run_mode_embed_bg(
     embed_url: str,
     *,
     batch_size: int = 32,
+    unnorm_out_path: Path | None = None,
 ) -> dict[str, Any]:
-    """Embed background corpus (full_doc norm=T/F and deduplicated clause_opt2c) on local BGE-M3."""
+    """Embed background corpus on local BGE-M3.
+
+    The primary parquet stores normalize=true rows only (full_doc plus deduped
+    clause_opt2c). normalize=false is persisted only for general_prose full_doc
+    rows, and only when unnorm_out_path is set.
+    """
     corpus_rows = load_background_corpus(bg_corpus_path)
     all_rows = build_background_embedding_rows(corpus_rows)
 
     norm_rows = [r for r in all_rows if r["normalize"] is True]
-    unnorm_rows = [r for r in all_rows if r["normalize"] is False]
+    unnorm_rows = [
+        r
+        for r in all_rows
+        if r["normalize"] is False
+        and r["granularity"] == "full_doc"
+        and str(r.get("stratum", "")) == "general_prose"
+    ]
 
     with httpx.Client(timeout=120.0, trust_env=False) as client:
         health_resp = client.get(embed_url.rstrip("/") + "/health")
@@ -1170,23 +1188,28 @@ def run_mode_embed_bg(
             batch_size=batch_size,
         )
 
-    ordered_rows = [*norm_rows, *unnorm_rows]
-    all_vectors = np.vstack([vecs_norm, vecs_unnorm])
-    write_background_embeddings_parquet(ordered_rows, all_vectors, bg_out_path)
+    write_background_embeddings_parquet(norm_rows, vecs_norm, bg_out_path)
+    if unnorm_out_path is not None:
+        write_background_embeddings_parquet(unnorm_rows, vecs_unnorm, unnorm_out_path)
 
     counts_by_slice: dict[str, int] = {}
-    for row in ordered_rows:
+    for row in norm_rows:
         key = f"{row['lang']}:{row['granularity']}:norm={row['normalize']}"
         counts_by_slice[key] = counts_by_slice.get(key, 0) + 1
 
-    unnorm_norms = np.linalg.norm(vecs_unnorm, axis=1)
+    unnorm_counts: dict[str, int] = {}
+    for row in unnorm_rows:
+        key = f"{row['lang']}:{row['granularity']}:norm={row['normalize']}"
+        unnorm_counts[key] = unnorm_counts.get(key, 0) + 1
+
+    unnorm_norms = np.linalg.norm(vecs_unnorm, axis=1) if len(unnorm_rows) else np.empty((0,), dtype=np.float64)
     langs_unnorm = np.array([r["lang"] for r in unnorm_rows], dtype=object)
-    return {
+    summary: dict[str, Any] = {
         "mode": "embed-bg",
         "embed_url": embed_url,
         "health": health,
         "corpus_docs": len(corpus_rows),
-        "total_rows_written": len(ordered_rows),
+        "total_rows_written": len(norm_rows),
         "counts_by_slice": counts_by_slice,
         "pre_l2_norms": {
             lang: summarize_distribution(
@@ -1196,7 +1219,12 @@ def run_mode_embed_bg(
             if np.any(langs_unnorm == lang)
         },
         "out_path": str(bg_out_path),
+        "unnorm_rows_written": len(unnorm_rows),
+        "unnorm_counts_by_slice": unnorm_counts,
     }
+    if unnorm_out_path is not None:
+        summary["unnorm_out_path"] = str(unnorm_out_path)
+    return summary
 
 
 def moments_from_dict(data: Mapping[str, Any], expected_dim: int = DIM) -> CoordinateMoments:
@@ -1767,7 +1795,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--bg-out",
         type=Path,
         default=Path("data/fhv1_1_research/background_embeddings.parquet"),
-        help="Output Parquet path for --mode embed-bg.",
+        help="Output Parquet path for normalize=true rows in --mode embed-bg.",
+    )
+    parser.add_argument(
+        "--bg-unnorm-out",
+        type=Path,
+        default=Path("/tmp/fhv1_1_id_v2/bg_general_unnorm.parquet"),
+        help="Output Parquet path for normalize=false general_prose full_doc rows.",
     )
     parser.add_argument(
         "--embed-url",
@@ -1818,6 +1852,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.bg_out,
             args.embed_url,
             batch_size=args.batch_size,
+            unnorm_out_path=args.bg_unnorm_out,
         )
         print(json.dumps(summary, indent=2))
         return 0
