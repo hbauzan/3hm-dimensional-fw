@@ -112,6 +112,52 @@ ES_ENGLISH_LEAK_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Function words kept in the opening skeleton. Any other token longer than two
+# characters collapses to X. Skeletons with none of these words are exempt.
+SKELETON_STOPS: frozenset[str] = frozenset(
+    {
+        "a",
+        "al",
+        "an",
+        "and",
+        "as",
+        "at",
+        "be",
+        "but",
+        "by",
+        "de",
+        "del",
+        "el",
+        "en",
+        "for",
+        "from",
+        "in",
+        "la",
+        "las",
+        "lo",
+        "los",
+        "of",
+        "on",
+        "or",
+        "para",
+        "por",
+        "que",
+        "the",
+        "to",
+        "un",
+        "una",
+        "y",
+        "o",
+        "con",
+        "sin",
+        "sobre",
+    }
+)
+
+SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+
+TEMPLATED_STRATA: frozenset[str] = frozenset({"technical_structured", "near_ood_neighbor"})
+
 BLOCK_SPECS: tuple[tuple[str, str, int], ...] = (
     ("en", "general_prose", 300),
     ("en", "technical_structured", 100),
@@ -161,6 +207,21 @@ def _length_band(text: str) -> str:
 
 def _alpha_set(text: str) -> set[str]:
     return set(re.findall(r"[a-zA-ZáéíóúüñÁÉÍÓÚÜÑ]+", text.lower()))
+
+
+def _opening_skeleton(text: str) -> str:
+    pieces: list[str] = []
+    for token in _words(text)[:12]:
+        folded = token.casefold()
+        if folded in SKELETON_STOPS or len(token) <= 2:
+            pieces.append(folded)
+        else:
+            pieces.append("X")
+    return " ".join(pieces)
+
+
+def _skeleton_has_stopword(skeleton: str) -> bool:
+    return any(part in SKELETON_STOPS for part in skeleton.split())
 
 
 def _collect_json_strings(value: Any, out: list[str]) -> None:
@@ -436,6 +497,43 @@ class BackgroundCorpusContractTest(unittest.TestCase):
                 bad.append(f"{row['id']} 5gram {next(iter(hit5))}")
             if len(bad) >= 12:
                 break
+        self.assertEqual(bad, [])
+
+    def test_sentences_are_unique_inside_technical_and_near_documents(self) -> None:
+        bad: list[str] = []
+        for row in self.rows:
+            if row["stratum"] not in TEMPLATED_STRATA:
+                continue
+            sentences = [
+                piece.strip().casefold()
+                for piece in SENTENCE_SPLIT_RE.split(row["text"])
+                if piece.strip()
+            ]
+            counts = Counter(sentences)
+            repeated = [sentence for sentence, count in counts.items() if count > 1]
+            if repeated:
+                bad.append(f"{row['id']} repeats {repeated[0][:80]}")
+                if len(bad) >= 8:
+                    break
+        self.assertEqual(bad, [])
+
+    def test_stopword_skeletons_repeat_at_most_three_times(self) -> None:
+        grouped: dict[tuple[str, str], Counter[str]] = {}
+        for row in self.rows:
+            if row["stratum"] not in TEMPLATED_STRATA:
+                continue
+            skeleton = _opening_skeleton(row["text"])
+            if not _skeleton_has_stopword(skeleton):
+                continue
+            grouped.setdefault((row["lang"], row["stratum"]), Counter())[skeleton] += 1
+        bad: list[str] = []
+        for (lang, stratum), counts in sorted(grouped.items()):
+            for skeleton, count in counts.most_common():
+                if count < 4:
+                    continue
+                bad.append(f"{lang}/{stratum} x{count} {skeleton}")
+                if len(bad) >= 8:
+                    break
         self.assertEqual(bad, [])
 
 
