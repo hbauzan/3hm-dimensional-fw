@@ -11,8 +11,13 @@ use axum::http::{HeaderMap, Request, StatusCode};
 use http_body_util::BodyExt;
 use serde_json::Value;
 use sf_kernels::{AlignedVec1024, DomainHypercubeLock, LockSpec, NoiseBitmask1024, DIM, MAX_TOPK};
-use sf_proxy::{router, BatchEmbedderClient, MockUpstreamForwarder, ProxyAppState};
+use sf_proxy::{
+    router, validate_and_normalize_f32_slice, BatchEmbedderClient, DualEmbedBatch,
+    MockUpstreamForwarder, ProxyAppState, TeiHttpEmbedder,
+};
 use sf_storage::{Fhv1Store, HotRegistry};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpListener;
 use tower::ServiceExt;
 use zip::ZipArchive;
 
@@ -86,13 +91,9 @@ impl GateEmbedder {
             self.f64_calls.load(Ordering::Relaxed),
         )
     }
-}
 
-#[async_trait]
-impl BatchEmbedderClient for GateEmbedder {
-    async fn embed_batch_f32(&self, texts: &[&str]) -> Result<Vec<AlignedVec1024>, String> {
-        self.f32_calls.fetch_add(1, Ordering::Relaxed);
-        Ok(texts
+    fn f32_rows(&self, texts: &[&str]) -> Vec<AlignedVec1024> {
+        texts
             .iter()
             .map(|text| {
                 if *text == "BREACH" {
@@ -101,7 +102,30 @@ impl BatchEmbedderClient for GateEmbedder {
                     self.centroid
                 }
             })
-            .collect())
+            .collect()
+    }
+
+    fn raw_f64_rows(texts: &[&str]) -> Vec<[f64; DIM]> {
+        texts
+            .iter()
+            .map(|text| {
+                let mut row = [0.0; DIM];
+                row[0] = if *text == "hello from the lab" {
+                    1.0
+                } else {
+                    9.0
+                };
+                row
+            })
+            .collect()
+    }
+}
+
+#[async_trait]
+impl BatchEmbedderClient for GateEmbedder {
+    async fn embed_batch_f32(&self, texts: &[&str]) -> Result<Vec<AlignedVec1024>, String> {
+        self.f32_calls.fetch_add(1, Ordering::Relaxed);
+        Ok(self.f32_rows(texts))
     }
 
     fn is_mock(&self) -> bool {
@@ -114,18 +138,19 @@ impl BatchEmbedderClient for GateEmbedder {
         _normalize: bool,
     ) -> Result<Vec<[f64; DIM]>, String> {
         self.f64_calls.fetch_add(1, Ordering::Relaxed);
-        Ok(texts
-            .iter()
-            .map(|text| {
-                let mut row = [0.0; DIM];
-                row[0] = if *text == "hello from the lab" {
-                    1.0
-                } else {
-                    9.0
-                };
-                row
-            })
-            .collect())
+        Ok(Self::raw_f64_rows(texts))
+    }
+
+    async fn embed_batch_dual(
+        &self,
+        _domain_id: Option<&str>,
+        texts: &[&str],
+    ) -> Result<DualEmbedBatch, String> {
+        self.f32_calls.fetch_add(1, Ordering::Relaxed);
+        Ok(DualEmbedBatch {
+            f32_vectors: self.f32_rows(texts),
+            raw_f64_vectors: Some(Self::raw_f64_rows(texts)),
+        })
     }
 }
 
@@ -195,19 +220,23 @@ async fn body_json(
     (status, headers, value)
 }
 
-async fn calibrate_text(app: &axum::Router, text: &str, normalize: bool) -> String {
-    let (status, _, value) = body_json(
-        app.clone(),
-        "POST",
-        "/api/v1/fhv1/calibrate",
-        &format!(r#"{{"policy_id":"python","texts":["{text}"],"normalize":{normalize}}}"#),
-    )
-    .await;
+async fn calibrate_texts(app: &axum::Router, texts: &[&str], normalize: bool) -> String {
+    let body = serde_json::json!({
+        "policy_id": "python",
+        "texts": texts,
+        "normalize": normalize,
+    })
+    .to_string();
+    let (status, _, value) = body_json(app.clone(), "POST", "/api/v1/fhv1/calibrate", &body).await;
     assert_eq!(status, StatusCode::OK, "{value}");
     value["profile_id"]
         .as_str()
         .expect("profile id")
         .to_string()
+}
+
+async fn calibrate_text(app: &axum::Router, text: &str, normalize: bool) -> String {
+    calibrate_texts(app, &[text], normalize).await
 }
 
 fn lock() -> DomainHypercubeLock {
@@ -531,7 +560,49 @@ async fn profile_detail_reclassifies_quantiles_and_rejects_bad_ids() {
     let dir = TempDir::new("fhv1-profile");
     let store = Arc::new(Fhv1Store::new(dir.uri()));
     let app = router_for(Some(store), Arc::new(GateEmbedder::new(lock().centroid)));
-    let profile_id = calibrate_text(&app, "hello from the lab", true).await;
+    let profile_id = calibrate_texts(&app, &["hello from the lab", "other words here"], true).await;
+    let (status, _, default_detail) = body_json(
+        app.clone(),
+        "GET",
+        &format!("/api/v1/fhv1/profiles/{profile_id}"),
+        "",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{default_detail}");
+    let (status, _, variance_default) = body_json(
+        app.clone(),
+        "GET",
+        &format!("/api/v1/fhv1/profiles/{profile_id}?metric=variance"),
+        "",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{variance_default}");
+    let (status, _, span_detail) = body_json(
+        app.clone(),
+        "GET",
+        &format!("/api/v1/fhv1/profiles/{profile_id}?metric=span"),
+        "",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{span_detail}");
+    assert_eq!(
+        default_detail["quantile_cutoffs"], variance_default["quantile_cutoffs"],
+        "omitted metric must default to variance"
+    );
+    assert_eq!(
+        default_detail["movement_tier_codes"],
+        variance_default["movement_tier_codes"]
+    );
+    assert_ne!(
+        default_detail["quantile_cutoffs"]["p25"]
+            .as_f64()
+            .expect("default p25")
+            .to_bits(),
+        span_detail["quantile_cutoffs"]["p25"]
+            .as_f64()
+            .expect("span p25")
+            .to_bits()
+    );
     let (status, _, detail) = body_json(
         app.clone(),
         "GET",
@@ -982,4 +1053,287 @@ async fn trace_filters_page_and_burst_ids_stay_distinct() {
     unique.sort();
     unique.dedup();
     assert_eq!(unique.len(), burst.len());
+}
+
+fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+fn header_content_length(header: &str) -> usize {
+    header
+        .lines()
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            if name.eq_ignore_ascii_case("content-length") {
+                value.trim().parse().ok()
+            } else {
+                None
+            }
+        })
+        .unwrap_or(0)
+}
+
+struct MockTeiServer {
+    addr: std::net::SocketAddr,
+    requests: Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+impl MockTeiServer {
+    fn take_requests(&self) -> Vec<String> {
+        std::mem::take(&mut *self.requests.lock().expect("requests"))
+    }
+}
+
+fn ulp_row(dim0: f64, dim2: f64) -> [f64; DIM] {
+    let mut row = [0.0f64; DIM];
+    row[0] = dim0;
+    row[1] = (1.0f64 - dim0 * dim0 - dim2 * dim2).sqrt();
+    row[2] = dim2;
+    row
+}
+
+async fn spawn_mock_tei_server() -> MockTeiServer {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let requests_bg = Arc::clone(&requests);
+    let base0 = 0.1f64;
+    let hi0 = f64::from_bits(base0.to_bits() + 2);
+    let pass0 = f64::from_bits(base0.to_bits() + 1);
+    let breach0 = f64::from_bits(base0.to_bits() + 3);
+    let low2 = 0.699f64;
+    let hi2 = 0.7f64;
+    let breach2 = f64::from_bits(hi2.to_bits() + 1);
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                break;
+            };
+            let requests_ref = Arc::clone(&requests_bg);
+            tokio::spawn(async move {
+                let mut buf = Vec::new();
+                let mut tmp = [0u8; 4096];
+                let header_end = loop {
+                    let n = socket.read(&mut tmp).await.unwrap_or(0);
+                    if n == 0 {
+                        break None;
+                    }
+                    buf.extend_from_slice(&tmp[..n]);
+                    if let Some(pos) = find_subsequence(&buf, b"\r\n\r\n") {
+                        let header = String::from_utf8_lossy(&buf[..pos]);
+                        let len = header_content_length(&header);
+                        if buf.len() >= pos + 4 + len {
+                            break Some((pos, len));
+                        }
+                    }
+                };
+                let Some((pos, len)) = header_end else {
+                    return;
+                };
+                let body_bytes = &buf[pos + 4..pos + 4 + len];
+                let raw_req = String::from_utf8_lossy(body_bytes).into_owned();
+                let parsed: Value = serde_json::from_str(&raw_req).expect("tei json req");
+                requests_ref.lock().expect("lock").push(raw_req);
+                let inputs = parsed["inputs"].as_array().expect("inputs array");
+                let mut out_rows = Vec::with_capacity(inputs.len());
+                for item in inputs {
+                    let text = item.as_str().expect("input str");
+                    let row = match text {
+                        "calibration lower alpha" => ulp_row(base0, low2),
+                        "calibration upper beta" => ulp_row(hi0, hi2),
+                        "inside one ulp" => ulp_row(pass0, hi2),
+                        "outside one ulp" => ulp_row(breach0, breach2),
+                        _ => ulp_row(hi0, hi2),
+                    };
+                    out_rows.push(row.to_vec());
+                }
+                let resp_body = serde_json::to_string(&out_rows).expect("json resp");
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                    resp_body.len(),
+                    resp_body
+                );
+                let _ = socket.write_all(response.as_bytes()).await;
+            });
+        }
+    });
+    MockTeiServer { addr, requests }
+}
+
+fn ulp_router(store: Arc<Fhv1Store>, tei_url: &str) -> axum::Router {
+    let base_vec = ulp_row(0.1f64, 0.7f64);
+    let mut centroid = AlignedVec1024::zeros();
+    for (idx, val) in base_vec.iter().enumerate() {
+        centroid.data[idx] = *val as f32;
+    }
+    let mut lo = AlignedVec1024::zeros();
+    let mut hi = AlignedVec1024::zeros();
+    lo.data.fill(-0.1);
+    hi.data.fill(1.1);
+    let mut top_k = [0u16; MAX_TOPK];
+    for (idx, slot) in top_k.iter_mut().enumerate().take(4) {
+        *slot = u16::try_from(idx).unwrap();
+    }
+    let domain_lock = DomainHypercubeLock::from_spec(LockSpec {
+        domain_id: "python".to_string(),
+        centroid,
+        lo,
+        hi,
+        epsilon: 0.0,
+        noise_mask: NoiseBitmask1024::new_bge_m3_default(),
+        top_k_indices: top_k,
+        top_k_len: 4,
+        quorum_k: 103,
+        l1_cosine_threshold: 0.5,
+        l2_clause_threshold: 0.5,
+        polarity: 0,
+        domain_version: 1,
+    });
+    let registry = HotRegistry::from_locks([domain_lock]);
+    router(Arc::new(ProxyAppState {
+        registry: Arc::new(registry),
+        embedder: Arc::new(TeiHttpEmbedder::new(tei_url)),
+        upstream: Arc::new(MockUpstreamForwarder),
+        mock_upstream: Arc::new(MockUpstreamForwarder),
+        default_domain: "python".to_string(),
+        max_telemetry_coords: 4,
+        fhv1_store: Some(store),
+    }))
+}
+
+#[tokio::test]
+async fn three_hm_plus_fhv1_single_http_call_keeps_zero_ulp_parity() {
+    let dir = TempDir::new("fhv1-1ulp-http");
+    let store = Arc::new(Fhv1Store::new(dir.uri()));
+    let server = spawn_mock_tei_server().await;
+    let app = ulp_router(store, &format!("http://{}", server.addr));
+
+    let base0 = 0.1f64;
+    let hi0 = f64::from_bits(base0.to_bits() + 2);
+    let pass0 = f64::from_bits(base0.to_bits() + 1);
+    let breach2 = f64::from_bits(0.7f64.to_bits() + 1);
+    assert_ne!((pass0 as f32) as f64, pass0);
+    assert_ne!((breach2 as f32) as f64, breach2);
+
+    // Show why promote_f32 would have flipped verdicts on these exact vectors:
+    let pass_f32_src = ulp_row(pass0, 0.7f64).map(|v| v as f32);
+    let pass_promoted = validate_and_normalize_f32_slice(&pass_f32_src).expect("f32 norm");
+    assert!(
+        f64::from(pass_promoted.data[0]) > hi0,
+        "lossy f32 promotion drifts above hi0 and would falsely breach"
+    );
+    let breach_f32_src = ulp_row(f64::from_bits(base0.to_bits() + 3), breach2).map(|v| v as f32);
+    let breach_promoted = validate_and_normalize_f32_slice(&breach_f32_src).expect("f32 norm");
+    assert!(
+        f64::from(breach_promoted.data[2]) <= 0.7f64,
+        "lossy f32 promotion on dim 2 drifts <= 0.7 and would hide dim 2 breach"
+    );
+
+    let norm_profile = calibrate_texts(
+        &app,
+        &["calibration lower alpha", "calibration upper beta"],
+        true,
+    )
+    .await;
+    let raw_profile = calibrate_texts(
+        &app,
+        &["calibration lower alpha", "calibration upper beta"],
+        false,
+    )
+    .await;
+    let _ = server.take_requests();
+
+    for (prompt, expected_status) in [
+        ("inside one ulp", StatusCode::OK),
+        ("outside one ulp", StatusCode::FORBIDDEN),
+    ] {
+        let (status_standalone, headers_standalone, body_standalone) = body_json(
+            app.clone(),
+            "POST",
+            "/api/v1/chat",
+            &format!(
+                r#"{{"messages":[{{"role":"user","content":"{prompt}"}}],"filter_mode":"fhv1","fhv1_profile_id":"{norm_profile}","fhv1_granularity":"clauses"}}"#
+            ),
+        )
+        .await;
+        assert_eq!(status_standalone, expected_status, "{body_standalone}");
+        let trace_standalone = header(&headers_standalone, "x-sf-trace-id").to_string();
+        assert!(!trace_standalone.is_empty());
+        let standalone_reqs = server.take_requests();
+        assert_eq!(standalone_reqs.len(), 1, "{standalone_reqs:?}");
+
+        let (status_plus, headers_plus, body_plus) = body_json(
+            app.clone(),
+            "POST",
+            "/api/v1/chat",
+            &format!(
+                r#"{{"messages":[{{"role":"user","content":"{prompt}"}}],"filter_mode":"3hm_plus_fhv1","fhv1_profile_id":"{norm_profile}","fhv1_granularity":"clauses"}}"#
+            ),
+        )
+        .await;
+        assert_eq!(status_plus, expected_status, "{body_plus}");
+        let trace_plus = header(&headers_plus, "x-sf-trace-id").to_string();
+        assert!(!trace_plus.is_empty());
+        let plus_reqs = server.take_requests();
+        assert_eq!(
+            plus_reqs.len(),
+            1,
+            "3hm_plus_fhv1 normalize=true clauses must issue exactly 1 HTTP POST /embed: {plus_reqs:?}"
+        );
+        assert!(plus_reqs[0].contains("\"normalize\":true"));
+
+        let (s1, _, drill_standalone) = body_json(
+            app.clone(),
+            "GET",
+            &format!("/api/v1/fhv1/traces/{trace_standalone}"),
+            "",
+        )
+        .await;
+        assert_eq!(s1, StatusCode::OK, "{drill_standalone}");
+        let (s2, _, drill_plus) = body_json(
+            app.clone(),
+            "GET",
+            &format!("/api/v1/fhv1/traces/{trace_plus}"),
+            "",
+        )
+        .await;
+        assert_eq!(s2, StatusCode::OK, "{drill_plus}");
+        let vec_standalone: Vec<u64> = drill_standalone["chunks"][0]["input_vector"]
+            .as_array()
+            .expect("vec")
+            .iter()
+            .map(|v| v.as_f64().expect("f64").to_bits())
+            .collect();
+        let vec_plus: Vec<u64> = drill_plus["chunks"][0]["input_vector"]
+            .as_array()
+            .expect("vec")
+            .iter()
+            .map(|v| v.as_f64().expect("f64").to_bits())
+            .collect();
+        assert_eq!(
+            vec_standalone, vec_plus,
+            "input_vector bits must match 0-ULP between standalone fhv1 and 3hm_plus_fhv1"
+        );
+    }
+
+    let (status_raw, _, body_raw) = body_json(
+        app.clone(),
+        "POST",
+        "/api/v1/chat",
+        &format!(
+            r#"{{"messages":[{{"role":"user","content":"inside one ulp"}}],"filter_mode":"3hm_plus_fhv1","fhv1_profile_id":"{raw_profile}","fhv1_granularity":"clauses"}}"#
+        ),
+    )
+    .await;
+    assert_eq!(status_raw, StatusCode::OK, "{body_raw}");
+    let raw_reqs = server.take_requests();
+    assert_eq!(
+        raw_reqs.len(),
+        2,
+        "3hm_plus_fhv1 with normalize=false profile must issue 2 HTTP POST /embed calls: {raw_reqs:?}"
+    );
+    assert!(raw_reqs[0].contains("\"normalize\":true"), "{raw_reqs:?}");
+    assert!(raw_reqs[1].contains("\"normalize\":false"), "{raw_reqs:?}");
 }

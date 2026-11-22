@@ -3,7 +3,7 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
@@ -13,18 +13,19 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sf_kernels::{
-    classify_movement_tiers, evaluate_fhv1_batch, AlignedVec1024, DimBoundStatus,
-    Fhv1EvalGranularity, Fhv1Quantiles, MovementMetric, DIM,
+    classify_movement_tiers, DimBoundStatus, Fhv1EvalGranularity, Fhv1Quantiles, MovementMetric,
+    DIM,
 };
 use sf_storage::{
-    export_csv, export_parquet, export_xlsx, stats_from_profile, Fhv1AuditTrace, Fhv1BenchmarkRun,
-    Fhv1ProfileRecord, Fhv1Store, Fhv1TraceQuery, Fhv1XlsxPayload, FHV1_XLSX_MAX_ROWS,
+    export_csv, export_parquet, export_xlsx, Fhv1AuditTrace, Fhv1BenchmarkRun, Fhv1ProfileRecord,
+    Fhv1Store, Fhv1TraceQuery, Fhv1XlsxPayload, FHV1_XLSX_MAX_ROWS,
 };
 use sha2::{Digest, Sha256};
 
 use crate::chat_api::ChatRequestDto;
 use crate::fhv1_pipeline::{
-    evaluate_fhv1_input, expand_for_granularity, Fhv1CalibrateSpec, Fhv1EvaluateSpec,
+    box_row, evaluate_fhv1_input, expand_for_granularity, score_expanded_vectors,
+    Fhv1CalibrateSpec, Fhv1EvaluateSpec, Fhv1EvaluatedInput,
 };
 use crate::handler::ProxyAppState;
 
@@ -50,7 +51,7 @@ pub struct RealtimeChatFhv1<'a> {
     pub user_text: &'a str,
     pub preserve_3hm_breach: bool,
     pub reused_texts: &'a [&'a str],
-    pub reused_vectors: &'a [AlignedVec1024],
+    pub reused_raw_f64: Option<&'a [[f64; DIM]]>,
     pub embedding_ms: f64,
 }
 
@@ -98,7 +99,7 @@ pub async fn run_realtime_chat(
         use_rogue_mask,
         ReusedBatch {
             texts: request.reused_texts,
-            vectors: request.reused_vectors,
+            raw_f64_vectors: request.reused_raw_f64,
             embedding_ms: request.embedding_ms,
         },
     )
@@ -123,13 +124,13 @@ pub async fn run_realtime_chat(
         },
         &evaluated.chunks,
         &evaluated.vectors,
-        &evaluated.scored,
+        &evaluated,
     )
     .await?;
     if request.preserve_3hm_breach {
         return Ok(None);
     }
-    if evaluated.scored.batch.overall_passed {
+    if evaluated.batch.overall_passed {
         return Ok(Some(trace_id));
     }
     Err(fhv1_breach_response(
@@ -141,16 +142,9 @@ pub async fn run_realtime_chat(
     ))
 }
 
-struct ScoredRealtime {
-    chunks: Vec<crate::fhv1_pipeline::ExpandedChunk>,
-    vectors: Vec<Box<[f64; DIM]>>,
-    scored: crate::fhv1_pipeline::Fhv1EvaluatedInput,
-    embedding_ms: f64,
-}
-
 struct ReusedBatch<'a> {
     texts: &'a [&'a str],
-    vectors: &'a [AlignedVec1024],
+    raw_f64_vectors: Option<&'a [[f64; DIM]]>,
     embedding_ms: f64,
 }
 
@@ -161,39 +155,33 @@ async fn score_realtime(
     granularity: Fhv1EvalGranularity,
     use_rogue_mask: bool,
     reused: ReusedBatch<'_>,
-) -> Result<ScoredRealtime, Response> {
+) -> Result<Fhv1EvaluatedInput, Response> {
     let chunks = expand_for_granularity(user_text, granularity);
-    let reuse = profile.normalize
-        && granularity != Fhv1EvalGranularity::FullMirror
-        && chunks.len() == reused.texts.len()
-        && chunks.len() == reused.vectors.len()
-        && chunks
-            .iter()
-            .zip(reused.texts)
-            .all(|(chunk, text)| chunk.text == *text);
-    if reuse {
-        let vectors: Vec<Box<[f64; DIM]>> = reused.vectors.iter().map(promote_f32).collect();
-        let rows: Vec<&[f64]> = vectors.iter().map(|row| row.as_slice()).collect();
-        let stats = stats_from_profile(profile);
-        let eval_started = Instant::now();
-        let batch = evaluate_fhv1_batch(&stats, &rows, granularity, use_rogue_mask)
-            .map_err(|err| error_response(StatusCode::BAD_REQUEST, &err.to_string()))?;
-        let eval_latency_ns = u64::try_from(eval_started.elapsed().as_nanos()).unwrap_or(u64::MAX);
-        let scored = crate::fhv1_pipeline::Fhv1EvaluatedInput {
-            chunks: chunks.clone(),
-            vectors: vectors.clone(),
-            batch,
-            embedding_ms: reused.embedding_ms,
-            eval_latency_ns,
-        };
-        return Ok(ScoredRealtime {
+    if let Some(raw_f64) = (profile.normalize && granularity != Fhv1EvalGranularity::FullMirror)
+        .then_some(reused.raw_f64_vectors)
+        .flatten()
+        .filter(|raw_f64| {
+            !chunks.is_empty()
+                && chunks.len() == reused.texts.len()
+                && chunks.len() == raw_f64.len()
+                && chunks
+                    .iter()
+                    .zip(reused.texts)
+                    .all(|(chunk, text)| chunk.text == *text)
+        })
+    {
+        let vectors: Vec<Box<[f64; DIM]>> = raw_f64.iter().map(box_row).collect();
+        return score_expanded_vectors(
+            profile,
             chunks,
             vectors,
-            scored,
-            embedding_ms: reused.embedding_ms,
-        });
+            granularity,
+            use_rogue_mask,
+            reused.embedding_ms,
+        )
+        .map_err(|err| error_response(StatusCode::BAD_REQUEST, &err));
     }
-    let scored = evaluate_fhv1_input(
+    evaluate_fhv1_input(
         state.embedder.as_ref(),
         profile,
         &Fhv1EvaluateSpec {
@@ -204,25 +192,7 @@ async fn score_realtime(
         },
     )
     .await
-    .map_err(|err| error_response(StatusCode::BAD_GATEWAY, &err))?;
-    let chunks = scored.chunks.clone();
-    let vectors = scored.vectors.clone();
-    let embedding_ms = scored.embedding_ms;
-    Ok(ScoredRealtime {
-        chunks,
-        vectors,
-        scored,
-        embedding_ms,
-    })
-}
-
-fn promote_f32(vector: &AlignedVec1024) -> Box<[f64; DIM]> {
-    let mut row = vec![0.0; DIM];
-    for (index, value) in vector.data.iter().enumerate() {
-        row[index] = f64::from(*value);
-    }
-    let boxed: Box<[f64]> = row.into_boxed_slice();
-    boxed.try_into().unwrap_or_else(|_| unreachable!("dim"))
+    .map_err(|err| error_response(StatusCode::BAD_GATEWAY, &err))
 }
 
 fn fhv1_breach_response(
@@ -230,16 +200,15 @@ fn fhv1_breach_response(
     trace_id: &str,
     granularity: Fhv1EvalGranularity,
     use_rogue_mask: bool,
-    evaluated: &ScoredRealtime,
+    evaluated: &Fhv1EvaluatedInput,
 ) -> Response {
     let failing = evaluated
-        .scored
         .batch
         .chunks
         .iter()
         .position(|chunk| !chunk.chunk_passed)
         .unwrap_or(0);
-    let chunk = &evaluated.scored.batch.chunks[failing];
+    let chunk = &evaluated.batch.chunks[failing];
     let body = json!({
         "error": {
             "kind": "fhv1_ingress_breach",
@@ -252,15 +221,15 @@ fn fhv1_breach_response(
                 "failing_tier": "FHV1_AABB_ENVELOPE",
                 "eval_granularity": granularity_name(granularity),
                 "use_rogue_mask": use_rogue_mask,
-                "full_text_passed": evaluated.scored.batch.full_text_passed,
-                "all_chunks_passed": evaluated.scored.batch.all_chunks_passed,
+                "full_text_passed": evaluated.batch.full_text_passed,
+                "all_chunks_passed": evaluated.batch.all_chunks_passed,
                 "failing_chunk_index": failing,
                 "failed_dims_count": chunk.failed_dims_count,
                 "underflow_count": chunk.underflow_count,
                 "overflow_count": chunk.overflow_count,
                 "max_violation_delta": chunk.max_violation_delta,
                 "embedding_ms": evaluated.embedding_ms,
-                "eval_latency_ns": evaluated.scored.eval_latency_ns,
+                "eval_latency_ns": evaluated.eval_latency_ns,
             }
         }
     });
@@ -346,6 +315,10 @@ async fn calibrate(
         Ok(store) => store,
         Err(response) => return response,
     };
+    let metric = match parse_metric(body.metric.as_deref()) {
+        Ok(metric) => metric,
+        Err(response) => return response,
+    };
     let profile = crate::fhv1_pipeline::calibrate_fhv1_corpus(
         store,
         state.embedder.as_ref(),
@@ -356,8 +329,8 @@ async fn calibrate(
             use_rogue_mask_default: body.use_rogue_mask_default.unwrap_or(false),
             polarity: 0,
             model_id: "BAAI/bge-m3",
-            augmented_llm: false,
-            metric: MovementMetric::Span,
+            augmented_llm: body.augmented_llm.unwrap_or(false),
+            metric,
             quantiles: Fhv1Quantiles::standard(),
         },
     )
@@ -758,6 +731,10 @@ struct CalibrateBody {
     texts: Vec<String>,
     normalize: Option<bool>,
     use_rogue_mask_default: Option<bool>,
+    #[serde(default)]
+    augmented_llm: Option<bool>,
+    #[serde(default)]
+    metric: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1033,7 +1010,7 @@ fn granularity_name(granularity: Fhv1EvalGranularity) -> &'static str {
 }
 
 fn parse_metric(text: Option<&str>) -> Result<MovementMetric, Response> {
-    match text.unwrap_or("span") {
+    match text.unwrap_or("variance") {
         "variance" => Ok(MovementMetric::Variance),
         "std_dev" => Ok(MovementMetric::StdDev),
         "span" => Ok(MovementMetric::Span),

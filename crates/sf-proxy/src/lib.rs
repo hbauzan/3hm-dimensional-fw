@@ -28,7 +28,8 @@ pub use chat_api::{
 };
 pub use cors::CorsAllow;
 pub use embedder::{
-    contains_permutation_noise, project_spectral_drift, BatchEmbedderClient, MockBatchEmbedder,
+    contains_permutation_noise, project_spectral_drift, BatchEmbedderClient, DualEmbedBatch,
+    MockBatchEmbedder,
 };
 pub use env_config::{
     find_env_file, get_all_providers_env, get_provider_env, load_dotenv, parse_env_content,
