@@ -1,6 +1,6 @@
 ---
 task_id: "TASK-010"
-status: "IN_PROGRESS"
+status: "DONE"
 assigned_architect: "maximum-architect-agent"
 protocol: "transparent-dev-protocol"
 title: "Hardening, refactor y cobertura completa de tests para Filtro Héctor v1 (fhv1)"
@@ -24,4 +24,4 @@ Cerrar los detalles técnicos detectados en la auditoría post-`TASK-009` y comp
 - [x] **Slice 1** (`feat/fhv1-hector-filter-v1`): deduplicar `sf_storage::stats_from_profile` y bloque `3hm_plus_fhv1` en `chat_api.rs`, medir `eval_latency_ns` en path `reuse`, emitir `x-sf-trace-id` + `x-sf-fhv1-decision: PASS` en chat `fhv1`/`3hm_plus_fhv1`, usar `AtomicU64` en `new_trace_id`, unificar `trace_id` por prompt en benchmarks, y sumar tests faltantes en `fhv1_precision_test.rs` y `fhv1_roundtrip_test.rs`.
 - [x] **Slice 2** (`feat/fhv1-hector-filter-v1`): completar unit tests en `fhv1_corpus.rs` y `fhv1_eval.rs`, y expandir `fhv1_api_e2e_test.rs` cubriendo `fhv1_store: None` (`503`/empty `200`), métricas/cuantiles y `400`/`404`, `/evaluate` 3 granularidades + headers, `/benchmarks/run` + `409` overlap, `.xlsx` simple, `/api/v1/chat` PASS/breach/contador de reuso único de `/embed` en `3hm_plus_fhv1`, filtros de trazas y unicidad en ráfaga.
 - [x] **Slice 3** (`feat/fhv1-hector-filter-v1`): agregar tabla `Granularity comparison` y atribución `oob_catch_counts` en `Fhv1BenchmarkExplorer.tsx` / `fhv1Charts.ts`, alinear validación `0 <= P25 < P75 < P90 <= 1` en `Fhv1VarianceStudio.tsx`, crear `StudioShell.test.tsx` y completar tests en `fhv1.test.ts`, `BreachCard.test.tsx`, `Playground.test.tsx`, `Fhv1VarianceStudio.test.tsx` y `Fhv1BenchmarkExplorer.test.tsx`.
-- [ ] **Slice 4** (`feat/fhv1-hector-filter-v1`): ampliar `frontend/e2e/fhv1.spec.ts` (+3 tests E2E en vivo: chat `fhv1` + `3hm_plus_fhv1` dual-trace, Variance Studio métrica/cuantil + descarga `.csv`/`.xlsx`, Explorer tabla comparativa + paginación + drill-down), actualizar `[Unreleased]` en `CHANGELOG.md`, correr el Full Milestone Verification Gate (11 checks incluyendo `14` Playwright E2E, `agent.sh validate` y `agent.sh notify`) y frenar en el Approval Gate.
+- [x] **Slice 4** (`feat/fhv1-hector-filter-v1`): ampliar `frontend/e2e/fhv1.spec.ts` (+3 tests E2E en vivo: chat `fhv1` + `3hm_plus_fhv1` dual-trace, Variance Studio métrica/cuantil + descarga `.csv`/`.xlsx`, Explorer tabla comparativa + paginación + drill-down), actualizar `[Unreleased]` en `CHANGELOG.md`, correr el Full Milestone Verification Gate (11 checks incluyendo `14` Playwright E2E, `agent.sh validate` y `agent.sh notify`) y frenar en el Approval Gate.

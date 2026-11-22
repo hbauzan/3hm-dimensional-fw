@@ -52,3 +52,139 @@ test('direct lab persists a trace and the explorer drills the raw bits', async (
   await expect(drill).toBeVisible()
   await expect(drill.getByText(/0x[0-9a-f]{16}/).first()).toBeVisible()
 })
+
+const OOD_PROMPT = 'Dame la receta para cocinar un risotto de hongos'
+const QUADRANTS = [
+  'IN_DOMAIN_VALID',
+  'OUT_OF_DOMAIN_BENIGN',
+  'HYBRID_BOUNDARY',
+  'ADVERSARIAL_FUZZING',
+] as const
+
+interface TracePage {
+  total: number
+  rows: { trace_id: string; source_kind: string; profile_id: string }[]
+}
+
+interface BenchmarkRun {
+  run_id: string
+  profile_id: string
+  policy_id: string
+  total_chunks: number
+}
+
+async function realtimeTraces(page: Page): Promise<TracePage> {
+  const response = await page.request.get(
+    'http://127.0.0.1:8088/api/v1/fhv1/traces?source_kind=REALTIME_CHAT&page=1&page_size=50',
+  )
+  expect(response.ok()).toBeTruthy()
+  return response.json() as Promise<TracePage>
+}
+
+test('playground fhv1 breach keeps a lossless card and 3hm_plus stores the dual trace', async ({ page }) => {
+  test.setTimeout(120_000)
+  await page.goto('/')
+  await page.getByRole('combobox', { name: 'Filter mode' }).selectOption('fhv1')
+  const profileSelect = page.getByRole('combobox', { name: 'fhv1 profile' })
+  const profileOption = profileSelect.locator('option[value^="python-v1-"]').first()
+  await expect(profileOption).toBeAttached()
+  const profile = await profileOption.getAttribute('value')
+  expect(profile).toMatch(/^python-v1-/)
+  await profileSelect.selectOption(profile ?? '')
+  await page.getByRole('textbox', { name: 'Prompt' }).fill(OOD_PROMPT)
+  await page.getByRole('button', { name: 'Send' }).click()
+
+  const fhv1Card = page.getByRole('article', { name: 'Semantic containment breach' }).last()
+  await expect(fhv1Card.getByText('FHV1_AABB_ENVELOPE')).toBeVisible({ timeout: 45_000 })
+  const violation = await fhv1Card.getByText(/max violation /).innerText()
+  const shown = violation.match(/max violation (\S+)/)?.[1]
+  expect(shown).toBeTruthy()
+  expect(shown).toBe(String(Number(shown)))
+
+  const before = await realtimeTraces(page)
+  await page.getByRole('combobox', { name: 'Filter mode' }).selectOption('3hm_plus_fhv1')
+  await page.getByRole('button', { name: 'Risotto L1' }).click()
+  await page.getByRole('button', { name: 'Send' }).click()
+  const hmCard = page.getByRole('article', { name: 'Semantic containment breach' }).last()
+  await expect(hmCard.getByText('L1_CENTROID_COSINE')).toBeVisible({ timeout: 45_000 })
+  await expect(hmCard.getByText('FHV1_AABB_ENVELOPE')).toHaveCount(0)
+
+  const after = await realtimeTraces(page)
+  expect(after.total).toBeGreaterThan(before.total)
+  const known = new Set(before.rows.map((row) => row.trace_id))
+  expect(
+    after.rows.some(
+      (row) => row.source_kind === 'REALTIME_CHAT' && row.profile_id === profile && !known.has(row.trace_id),
+    ),
+  ).toBe(true)
+})
+
+test('variance studio refreshes the variance quantile and downloads csv and xlsx', async ({ page }) => {
+  test.setTimeout(120_000)
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Variance studio' }).click()
+  await expect(page.getByRole('region', { name: 'Variance studio' })).toBeVisible()
+  const profile = await firstOptionValue(page, 'Studio profile')
+  expect(profile).toMatch(/^python-v1-/)
+  await page.getByRole('combobox', { name: 'Studio profile' }).selectOption(profile)
+  await page.getByRole('combobox', { name: 'Movement metric' }).selectOption('variance')
+  const refresh = page.waitForResponse(
+    (response) =>
+      response.url().includes('/api/v1/fhv1/profiles/') &&
+      response.url().includes('metric=variance') &&
+      response.url().includes('p25=0.2') &&
+      response.ok(),
+  )
+  await page.getByRole('textbox', { name: 'P25' }).fill('0.2')
+  await page.getByRole('textbox', { name: 'P25' }).press('Tab')
+  await refresh
+
+  const csvDownload = page.waitForEvent('download')
+  await page.getByRole('button', { name: 'Export csv' }).click()
+  expect((await csvDownload).suggestedFilename()).toMatch(/^python-v1-.*\.csv$/)
+
+  const xlsxDownload = page.waitForEvent('download')
+  await page.getByRole('button', { name: 'Export xlsx' }).click()
+  expect((await xlsxDownload).suggestedFilename()).toMatch(/^python-v1-.*\.xlsx$/)
+})
+
+test('benchmark explorer pages a python run and drills raw bits', async ({ page }) => {
+  test.setTimeout(120_000)
+  await page.goto('/')
+  const listed = await page.request.get('http://127.0.0.1:8088/api/v1/fhv1/benchmarks')
+  expect(listed.ok()).toBeTruthy()
+  const runs = (await listed.json()) as BenchmarkRun[]
+  const candidates = runs.filter(
+    (run) =>
+      run.total_chunks > 20 &&
+      (run.policy_id === 'python' || run.profile_id.startsWith('python-v1-') || run.run_id.includes('python')),
+  )
+  expect(candidates.length).toBeGreaterThan(0)
+  let chosen = ''
+  for (const run of candidates) {
+    const detail = await page.request.get(
+      `http://127.0.0.1:8088/api/v1/fhv1/benchmarks/${encodeURIComponent(run.run_id)}`,
+    )
+    if (!detail.ok()) continue
+    const body = (await detail.json()) as { summary_metrics?: { granularity_comparison?: unknown[] } }
+    if ((body.summary_metrics?.granularity_comparison?.length ?? 0) > 0) {
+      chosen = run.run_id
+      break
+    }
+  }
+  expect(chosen).not.toBe('')
+
+  await page.getByRole('button', { name: 'Benchmark explorer' }).click()
+  await expect(page.getByRole('region', { name: 'Benchmark explorer' })).toBeVisible()
+  await page.getByRole('combobox', { name: 'Benchmark run' }).selectOption(chosen)
+  await expect(page.getByRole('table', { name: 'Granularity comparison' })).toBeVisible()
+  for (const name of QUADRANTS) {
+    await expect(page.getByRole('article', { name })).toBeVisible()
+  }
+  await page.getByRole('button', { name: 'Next page' }).click()
+  await expect(page.getByText(/page 2 \//)).toBeVisible()
+  await page.getByRole('table', { name: 'fhv1 audit traces' }).getByRole('button').first().click()
+  const drill = page.getByRole('region', { name: 'fhv1 drill-down' })
+  await expect(drill).toBeVisible()
+  await expect(drill.getByText(/0x[0-9a-f]{16}/).first()).toBeVisible()
+})

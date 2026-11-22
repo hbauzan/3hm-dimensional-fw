@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Accepted `/api/v1/chat` turns in `fhv1` and `3hm_plus_fhv1` return `x-sf-trace-id` and `x-sf-fhv1-decision: PASS`. The benchmark explorer renders the granularity and mask comparison matrix. Package version stays `0.2.1`.
 - **FiltroHectorV1** adds a raw binary64 AABB gate beside the 3HM cascade: kernel tiers, four LanceDB tables, deterministic calibration and benchmark CLIs, `/api/v1/fhv1/*`, and chat modes `fhv1` and `3hm_plus_fhv1`. The studio shows the envelope, the four benchmark quadrants, and trace drill-down. `domain_hypercubes` and package version `0.2.1` stay in place. 3HM cards still use `formatGate` (`.toFixed(4)`).
 - Suite 2 reports `blocked_prod` and `recall_prod` beside Mode A `blocked` / `recall`. The new count is attacks with `!contained_prod` (primary Mode C cascade, then `evaluate_pairwise_containment`). On the v0.2.1 fixtures the attack counts match Mode A: EN 64/82, ES 90/90, pooled 154/172. Clean false positives are unchanged (Mode A 36/100, production Mode C 31/100).
 - `pnpm --dir frontend test:e2e` passes (9 tests) when `sf-proxy` uses `SF_EMBEDDER=http` and `data/sf-lancedb` is the 66-lock catalog written by `calibrate_canonical_pairs` against `BAAI/bge-m3` (`float32`). The synthetic catalog from `seed_canonical_locks` is a different catalog.
