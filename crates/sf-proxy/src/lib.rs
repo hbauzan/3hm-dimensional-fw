@@ -6,6 +6,7 @@ mod cors;
 mod embedder;
 mod env_config;
 mod fhv1_api;
+mod fhv1_eval;
 mod fhv1_pipeline;
 mod handler;
 mod normalize;
@@ -35,10 +36,17 @@ pub use env_config::{
     find_env_file, get_all_providers_env, get_provider_env, load_dotenv, parse_env_content,
     read_env_file_map, ProviderEnvInfo, UpstreamEnvCatalog,
 };
+pub use fhv1_eval::{
+    attach_comparison, confusion_from_flags, confusion_json, forbid_surface, forbidden_digests,
+    granularity_name, metrics_for, nfkc_lower, overlap_ids, parse_granularity,
+    persist_benchmark_run, prepare_prompts, prepare_prompts_for, score_view, select_view,
+    ConfusionCounts, Fhv1Prompt, PersistRequest, PreparedPrompt, PreparedView, RunMetrics,
+    ScoredView, ALL_GRANULARITIES, CATEGORIES,
+};
 pub use fhv1_pipeline::{
     calibrate_fhv1_corpus, corpus_sha256, evaluate_fhv1_input, expand_for_granularity,
     expand_text_multi_granularity, strategy_tags, ExpandedChunk, Fhv1CalibrateSpec,
-    Fhv1EvaluateSpec, Fhv1EvaluatedInput,
+    Fhv1EvaluateSpec, Fhv1EvaluatedInput, EMBED_BATCH_SIZE,
 };
 pub use handler::{
     handle_api_v1_upstream_env, handle_v1_chat_completions, router, router_with_cors, ProxyAppState,

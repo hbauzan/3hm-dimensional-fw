@@ -1,6 +1,7 @@
 //! `/api/v1/fhv1` routes and the realtime chat gate.
 #![allow(clippy::result_large_err)]
 
+use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -23,10 +24,12 @@ use sf_storage::{
 use sha2::{Digest, Sha256};
 
 use crate::chat_api::ChatRequestDto;
-use crate::fhv1_pipeline::{
-    box_row, evaluate_fhv1_input, expand_for_granularity, score_expanded_vectors,
-    Fhv1CalibrateSpec, Fhv1EvaluateSpec, Fhv1EvaluatedInput,
+use crate::fhv1_eval::{
+    attach_comparison, build_benchmark_run, forbid_surface, granularity_name, metrics_for,
+    overlap_ids, parse_granularity as parse_eval_granularity, persist_benchmark_run,
+    prepare_prompts_for, score_view, select_view, Fhv1Prompt, PersistRequest,
 };
+use crate::fhv1_pipeline::Fhv1EvaluatedInput;
 use crate::handler::ProxyAppState;
 
 pub fn routes() -> Router<Arc<ProxyAppState>> {
@@ -156,7 +159,7 @@ async fn score_realtime(
     use_rogue_mask: bool,
     reused: ReusedBatch<'_>,
 ) -> Result<Fhv1EvaluatedInput, Response> {
-    let chunks = expand_for_granularity(user_text, granularity);
+    let chunks = crate::fhv1_pipeline::expand_for_granularity(user_text, granularity);
     if let Some(raw_f64) = (profile.normalize && granularity != Fhv1EvalGranularity::FullMirror)
         .then_some(reused.raw_f64_vectors)
         .flatten()
@@ -170,8 +173,9 @@ async fn score_realtime(
                     .all(|(chunk, text)| chunk.text == *text)
         })
     {
-        let vectors: Vec<Box<[f64; DIM]>> = raw_f64.iter().map(box_row).collect();
-        return score_expanded_vectors(
+        let vectors: Vec<Box<[f64; DIM]>> =
+            raw_f64.iter().map(crate::fhv1_pipeline::box_row).collect();
+        return crate::fhv1_pipeline::score_expanded_vectors(
             profile,
             chunks,
             vectors,
@@ -181,10 +185,10 @@ async fn score_realtime(
         )
         .map_err(|err| error_response(StatusCode::BAD_REQUEST, &err));
     }
-    evaluate_fhv1_input(
+    crate::fhv1_pipeline::evaluate_fhv1_input(
         state.embedder.as_ref(),
         profile,
-        &Fhv1EvaluateSpec {
+        &crate::fhv1_pipeline::Fhv1EvaluateSpec {
             raw_text: user_text,
             granularity,
             normalize_embeddings: profile.normalize,
@@ -322,7 +326,7 @@ async fn calibrate(
     let profile = crate::fhv1_pipeline::calibrate_fhv1_corpus(
         store,
         state.embedder.as_ref(),
-        &Fhv1CalibrateSpec {
+        &crate::fhv1_pipeline::Fhv1CalibrateSpec {
             policy_id: &body.policy_id,
             raw_texts: &body.texts,
             normalize: body.normalize.unwrap_or(true),
@@ -413,10 +417,10 @@ async fn evaluate(
     let use_rogue_mask = body
         .use_rogue_mask
         .unwrap_or(profile.use_rogue_mask_default);
-    let scored = match evaluate_fhv1_input(
+    let scored = match crate::fhv1_pipeline::evaluate_fhv1_input(
         state.embedder.as_ref(),
         &profile,
-        &Fhv1EvaluateSpec {
+        &crate::fhv1_pipeline::Fhv1EvaluateSpec {
             raw_text: &body.text,
             granularity,
             normalize_embeddings: profile.normalize,
@@ -553,92 +557,69 @@ async fn run_benchmark(
         Ok(samples) => samples,
         Err(err) => return store_error(err),
     };
-    let mut banned = std::collections::BTreeSet::new();
-    for sample in &samples {
-        banned.insert(digest_text(&sample.raw_text));
-        banned.insert(digest_text(&nfkc_lower(&sample.raw_text)));
-    }
-    for prompt in &prompts {
-        if banned.contains(&digest_text(&prompt.text))
-            || banned.contains(&digest_text(&nfkc_lower(&prompt.text)))
-        {
-            return error_response(StatusCode::CONFLICT, "calibration overlap fail-closed");
-        }
+    let sample_texts: Vec<String> = samples.into_iter().map(|sample| sample.raw_text).collect();
+    let mut forbidden = BTreeSet::new();
+    forbid_surface(&mut forbidden, &sample_texts);
+    if !overlap_ids(&forbidden, &prompts).is_empty() {
+        return error_response(StatusCode::CONFLICT, "calibration overlap fail-closed");
     }
     let granularity = match parse_granularity(body.eval_granularity.as_deref()) {
         Ok(granularity) => granularity,
         Err(response) => return response,
     };
     let use_rogue_mask = body.use_rogue_mask.unwrap_or(false);
-    let mut traces = Vec::new();
-    let mut passed_flags = Vec::new();
+    let prepared = match prepare_prompts_for(
+        state.embedder.as_ref(),
+        &prompts,
+        profile.normalize,
+        &[granularity],
+    )
+    .await
+    {
+        Ok(prepared) => prepared,
+        Err(err) => return error_response(StatusCode::BAD_GATEWAY, &err),
+    };
+    let mut scored = Vec::with_capacity(prepared.len());
+    for item in &prepared {
+        let view = match select_view(item, granularity) {
+            Ok(view) => view,
+            Err(err) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &err),
+        };
+        match score_view(&profile, view, use_rogue_mask) {
+            Ok(row) => scored.push(row),
+            Err(err) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, &err),
+        }
+    }
+    let mut metrics = metrics_for(
+        &prompts,
+        &scored,
+        granularity,
+        use_rogue_mask,
+        profile.movement_tier_codes.as_ref(),
+    );
+    attach_comparison(&mut metrics.summary, &[metrics.comparison_row]);
     let run_id = new_trace_id("bench");
     let created_at_ms = now_ms();
-    for prompt in &prompts {
-        let scored = match evaluate_fhv1_input(
-            state.embedder.as_ref(),
-            &profile,
-            &Fhv1EvaluateSpec {
-                raw_text: &prompt.text,
-                granularity,
-                normalize_embeddings: profile.normalize,
-                use_rogue_mask,
-            },
-        )
-        .await
-        {
-            Ok(scored) => scored,
-            Err(err) => return error_response(StatusCode::BAD_GATEWAY, &err),
-        };
-        passed_flags.push(scored.batch.overall_passed);
-        let prompt_trace_id = format!("{run_id}-{}", prompt.input_id);
-        push_traces(
-            &mut traces,
-            &profile,
-            &TraceMeta {
-                trace_id: &prompt_trace_id,
-                run_id: &run_id,
-                source_kind: "BENCHMARK",
-                category: &prompt.category,
-                expected_pass: Some(prompt.expected_pass),
-                raw_text: &prompt.text,
-                input_id: &prompt.input_id,
-                granularity,
-                use_rogue_mask,
-                embedding_ms: scored.embedding_ms,
-                created_at_ms,
-            },
-            &scored.chunks,
-            &scored.vectors,
-            &scored,
-        );
-    }
-    if let Err(err) = store.append_audit_traces(&traces).await {
-        return store_error(err);
-    }
-    let summary = confusion_summary(&prompts, &passed_flags);
-    let run = Fhv1BenchmarkRun {
-        run_id: run_id.clone(),
-        profile_id: profile.profile_id.clone(),
-        policy_id: profile.policy_id.clone(),
-        dataset_name: body
-            .dataset_path
-            .clone()
-            .unwrap_or_else(|| "samples".to_string()),
-        dataset_sha256: digest_bytes(&serde_json::to_vec(&prompts).unwrap_or_default()),
-        eval_granularity: granularity_name(granularity).to_string(),
+    let dataset_name = body.dataset_path.as_deref().unwrap_or("samples");
+    let dataset_sha256 = digest_bytes(&serde_json::to_vec(&prompts).unwrap_or_default());
+    let persist_request = PersistRequest {
+        granularity,
         use_rogue_mask,
-        total_inputs: prompts.len() as u64,
-        total_chunks: traces.len() as u64,
-        summary_metrics_json: summary.to_string(),
+        dataset_name,
+        dataset_sha256,
+        summary: &metrics.summary,
+        run_id: &run_id,
         created_at_ms,
     };
-    if let Err(err) = store.save_benchmark_run(&run).await {
-        return store_error(err);
+    let run = build_benchmark_run(&profile, prepared.len() as u64, &scored, &persist_request);
+    if let Err(err) =
+        persist_benchmark_run(store, &profile, &prepared, &scored, &persist_request).await
+    {
+        return error_response(StatusCode::INTERNAL_SERVER_ERROR, &err);
     }
-    let mut body = run_summary(&run);
-    body["summary_metrics"] = summary;
-    Json(body).into_response()
+    let mut response_body = run_summary(&run);
+    response_body["summary_metrics"] = metrics.summary;
+    Json(response_body).into_response()
 }
 
 async fn list_traces(
@@ -751,19 +732,11 @@ struct EvaluateBody {
     use_rogue_mask: Option<bool>,
 }
 
-#[derive(Debug, Clone, Deserialize, serde::Serialize)]
-struct BenchmarkPrompt {
-    input_id: String,
-    category: String,
-    expected_pass: bool,
-    text: String,
-}
-
 #[derive(Debug, Deserialize)]
 struct BenchmarkBody {
     profile_id: String,
     dataset_path: Option<String>,
-    samples: Option<Vec<BenchmarkPrompt>>,
+    samples: Option<Vec<Fhv1Prompt>>,
     eval_granularity: Option<String>,
     use_rogue_mask: Option<bool>,
 }
@@ -780,7 +753,7 @@ struct TraceQuery {
     page_size: Option<u32>,
 }
 
-fn load_benchmark_prompts(body: &BenchmarkBody) -> Result<Vec<BenchmarkPrompt>, Response> {
+fn load_benchmark_prompts(body: &BenchmarkBody) -> Result<Vec<Fhv1Prompt>, Response> {
     if let Some(samples) = &body.samples {
         if samples.is_empty() {
             return Err(error_response(
@@ -804,7 +777,7 @@ fn load_benchmark_prompts(body: &BenchmarkBody) -> Result<Vec<BenchmarkPrompt>, 
         if trimmed.is_empty() {
             continue;
         }
-        let prompt: BenchmarkPrompt = serde_json::from_str(trimmed).map_err(|err| {
+        let prompt: Fhv1Prompt = serde_json::from_str(trimmed).map_err(|err| {
             error_response(
                 StatusCode::BAD_REQUEST,
                 &format!("dataset line {}: {err}", index + 1),
@@ -819,22 +792,6 @@ fn load_benchmark_prompts(body: &BenchmarkBody) -> Result<Vec<BenchmarkPrompt>, 
         ));
     }
     Ok(prompts)
-}
-
-fn confusion_summary(prompts: &[BenchmarkPrompt], passed: &[bool]) -> Value {
-    let mut tp = 0u64;
-    let mut tn = 0u64;
-    let mut fp = 0u64;
-    let mut fn_ = 0u64;
-    for (prompt, flag) in prompts.iter().zip(passed.iter()) {
-        match (prompt.expected_pass, *flag) {
-            (true, true) => tp += 1,
-            (true, false) => fn_ += 1,
-            (false, false) => tn += 1,
-            (false, true) => fp += 1,
-        }
-    }
-    json!({"confusion": {"tp": tp, "tn": tn, "fp": fp, "fn": fn_}})
 }
 
 fn profile_summary(profile: &Fhv1ProfileRecord) -> Value {
@@ -990,23 +947,8 @@ fn store_error(err: impl ToString) -> Response {
 }
 
 fn parse_granularity(text: Option<&str>) -> Result<Fhv1EvalGranularity, Response> {
-    match text.unwrap_or("clauses") {
-        "full_only" => Ok(Fhv1EvalGranularity::FullOnly),
-        "clauses" => Ok(Fhv1EvalGranularity::Clauses),
-        "full_mirror" => Ok(Fhv1EvalGranularity::FullMirror),
-        other => Err(error_response(
-            StatusCode::BAD_REQUEST,
-            &format!("unknown eval_granularity {other}"),
-        )),
-    }
-}
-
-fn granularity_name(granularity: Fhv1EvalGranularity) -> &'static str {
-    match granularity {
-        Fhv1EvalGranularity::FullOnly => "full_only",
-        Fhv1EvalGranularity::Clauses => "clauses",
-        Fhv1EvalGranularity::FullMirror => "full_mirror",
-    }
+    parse_eval_granularity(text.unwrap_or("clauses"))
+        .map_err(|err| error_response(StatusCode::BAD_REQUEST, &err))
 }
 
 fn parse_metric(text: Option<&str>) -> Result<MovementMetric, Response> {
@@ -1019,15 +961,6 @@ fn parse_metric(text: Option<&str>) -> Result<MovementMetric, Response> {
             &format!("unknown metric {other}"),
         )),
     }
-}
-
-fn nfkc_lower(text: &str) -> String {
-    use unicode_normalization::UnicodeNormalization;
-    text.nfkc().collect::<String>().to_lowercase()
-}
-
-fn digest_text(text: &str) -> [u8; 32] {
-    digest_bytes(text.as_bytes())
 }
 
 fn digest_bytes(bytes: &[u8]) -> [u8; 32] {

@@ -1169,6 +1169,46 @@ pub(crate) fn box_row(row: &[f64; DIM]) -> Box<[f64; DIM]> {
     }
 }
 
+pub const EMBED_BATCH_SIZE: usize = 64;
+
+pub(crate) struct EmbeddedRawF64 {
+    pub vectors: Vec<Box<[f64; DIM]>>,
+    pub per_item_ms: Vec<f64>,
+}
+
+pub(crate) async fn embed_raw_f64_batched<E>(
+    embedder: &E,
+    texts: &[&str],
+    normalize: bool,
+) -> Result<EmbeddedRawF64, String>
+where
+    E: BatchEmbedderClient + ?Sized,
+{
+    let mut vectors = Vec::with_capacity(texts.len());
+    let mut per_item_ms = Vec::with_capacity(texts.len());
+    for batch in texts.chunks(EMBED_BATCH_SIZE) {
+        let started = Instant::now();
+        let embedded = embedder.embed_batch_raw_f64(batch, normalize).await?;
+        if embedded.len() != batch.len() {
+            return Err(format!(
+                "embedder returned {} rows for {} chunks",
+                embedded.len(),
+                batch.len()
+            ));
+        }
+        let elapsed_ms = started.elapsed().as_secs_f64() * 1_000.0;
+        let share = elapsed_ms / batch.len() as f64;
+        for row in &embedded {
+            vectors.push(box_row(row));
+            per_item_ms.push(share);
+        }
+    }
+    Ok(EmbeddedRawF64 {
+        vectors,
+        per_item_ms,
+    })
+}
+
 async fn embed_chunks<E>(
     embedder: &E,
     chunks: &[ExpandedChunk],
@@ -1177,23 +1217,10 @@ async fn embed_chunks<E>(
 where
     E: BatchEmbedderClient + ?Sized,
 {
-    const BATCH: usize = 16;
-    let mut vectors = Vec::with_capacity(chunks.len());
-    for batch in chunks.chunks(BATCH) {
-        let texts: Vec<&str> = batch.iter().map(|chunk| chunk.text.as_str()).collect();
-        let embedded = embedder.embed_batch_raw_f64(&texts, normalize).await?;
-        if embedded.len() != batch.len() {
-            return Err(format!(
-                "embedder returned {} rows for {} chunks",
-                embedded.len(),
-                batch.len()
-            ));
-        }
-        for row in &embedded {
-            vectors.push(box_row(row));
-        }
-    }
-    Ok(vectors)
+    let texts: Vec<&str> = chunks.iter().map(|chunk| chunk.text.as_str()).collect();
+    Ok(embed_raw_f64_batched(embedder, &texts, normalize)
+        .await?
+        .vectors)
 }
 
 /// Expand, embed, and persist one profile. Does not open `domain_hypercubes`.
@@ -1303,12 +1330,45 @@ mod tests {
     use sf_kernels::{AlignedVec1024, Fhv1EvalGranularity, Fhv1Quantiles, MovementMetric, DIM};
     use sf_storage::Fhv1Store;
 
+    use std::sync::Mutex;
+
     use super::{
-        calibrate_fhv1_corpus, evaluate_fhv1_input, expand_for_granularity,
-        expand_text_multi_granularity, strategy_tags, Fhv1CalibrateSpec, Fhv1EvaluateSpec,
-        STOPWORDS,
+        calibrate_fhv1_corpus, embed_chunks, evaluate_fhv1_input, expand_for_granularity,
+        expand_text_multi_granularity, strategy_tags, ExpandedChunk, Fhv1CalibrateSpec,
+        Fhv1EvaluateSpec, EMBED_BATCH_SIZE, STOPWORDS,
     };
     use crate::embedder::BatchEmbedderClient;
+
+    struct CountingRawF64Embedder {
+        batch_sizes: Mutex<Vec<usize>>,
+    }
+
+    impl CountingRawF64Embedder {
+        fn new() -> Self {
+            Self {
+                batch_sizes: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl BatchEmbedderClient for CountingRawF64Embedder {
+        async fn embed_batch_f32(&self, _texts: &[&str]) -> Result<Vec<AlignedVec1024>, String> {
+            Err("unused".to_string())
+        }
+
+        async fn embed_batch_raw_f64(
+            &self,
+            texts: &[&str],
+            _normalize: bool,
+        ) -> Result<Vec<[f64; DIM]>, String> {
+            self.batch_sizes
+                .lock()
+                .expect("batch_sizes")
+                .push(texts.len());
+            Ok(vec![[0.25; DIM]; texts.len()])
+        }
+    }
 
     struct TestRawF64Embedder;
 
@@ -1623,5 +1683,25 @@ mod tests {
                 pair[1]
             );
         }
+    }
+
+    #[tokio::test]
+    async fn embed_chunks_bounds_batches_at_embed_batch_size() {
+        let chunks: Vec<ExpandedChunk> = (0..(EMBED_BATCH_SIZE + 5))
+            .map(|idx| ExpandedChunk {
+                strategy_tag: "full_doc",
+                text: format!("chunk-{idx}"),
+                text_sha256: [0; 32],
+            })
+            .collect();
+        let embedder = CountingRawF64Embedder::new();
+        let vectors = embed_chunks(&embedder, &chunks, true)
+            .await
+            .expect("embed_chunks");
+        assert_eq!(vectors.len(), EMBED_BATCH_SIZE + 5);
+        assert_eq!(
+            *embedder.batch_sizes.lock().expect("sizes"),
+            vec![EMBED_BATCH_SIZE, 5]
+        );
     }
 }

@@ -13,7 +13,7 @@ use serde_json::Value;
 use sf_kernels::{AlignedVec1024, DomainHypercubeLock, LockSpec, NoiseBitmask1024, DIM, MAX_TOPK};
 use sf_proxy::{
     router, validate_and_normalize_f32_slice, BatchEmbedderClient, DualEmbedBatch,
-    MockUpstreamForwarder, ProxyAppState, TeiHttpEmbedder,
+    MockUpstreamForwarder, ProxyAppState, TeiHttpEmbedder, EMBED_BATCH_SIZE,
 };
 use sf_storage::{Fhv1Store, HotRegistry};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -1336,4 +1336,266 @@ async fn three_hm_plus_fhv1_single_http_call_keeps_zero_ulp_parity() {
     );
     assert!(raw_reqs[0].contains("\"normalize\":true"), "{raw_reqs:?}");
     assert!(raw_reqs[1].contains("\"normalize\":false"), "{raw_reqs:?}");
+}
+
+struct BenchBatchEmbedder {
+    batches: std::sync::Mutex<Vec<Vec<String>>>,
+}
+
+impl BenchBatchEmbedder {
+    fn new() -> Self {
+        Self {
+            batches: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    fn take_batches(&self) -> Vec<Vec<String>> {
+        std::mem::take(&mut *self.batches.lock().expect("batches"))
+    }
+}
+
+#[async_trait]
+impl BatchEmbedderClient for BenchBatchEmbedder {
+    async fn embed_batch_f32(&self, _texts: &[&str]) -> Result<Vec<AlignedVec1024>, String> {
+        Err("unused in fhv1 benchmark test".to_string())
+    }
+
+    async fn embed_batch_raw_f64(
+        &self,
+        texts: &[&str],
+        _normalize: bool,
+    ) -> Result<Vec<[f64; DIM]>, String> {
+        self.batches
+            .lock()
+            .expect("batches")
+            .push(texts.iter().map(|text| (*text).to_string()).collect());
+        Ok(texts
+            .iter()
+            .map(|text| {
+                let mut row = [MARKER; DIM];
+                if text.contains("OUTSIDE_TWO") {
+                    row[0] = 9.0;
+                    row[1] = 9.0;
+                } else if text.contains("OUTSIDE_ONE") {
+                    row[0] = 9.0;
+                }
+                row
+            })
+            .collect())
+    }
+}
+
+#[tokio::test]
+async fn benchmark_run_has_full_summary_parity_bounded_batching_and_prompt_trace_ids() {
+    let dir = TempDir::new("fhv1-bench-parity");
+    let store = Arc::new(Fhv1Store::new(dir.uri()));
+    let embedder = Arc::new(BenchBatchEmbedder::new());
+    let app = router_for(
+        Some(Arc::clone(&store)),
+        Arc::clone(&embedder) as Arc<dyn BatchEmbedderClient>,
+    );
+    let profile_id = calibrate_text(&app, "calibration anchor inside", false).await;
+    let _ = embedder.take_batches();
+
+    // 10 multi-chunk prompts across all 4 quadrants and multiple subtypes.
+    let samples = serde_json::json!([
+        {"input_id": "in-0", "category": "IN_DOMAIN_VALID", "expected_pass": true, "subtype": "short_en", "text": "Clean socket alpha. Clean socket beta."},
+        {"input_id": "in-1", "category": "IN_DOMAIN_VALID", "expected_pass": true, "subtype": "short_en", "text": "Clean parser gamma. Clean parser delta."},
+        {"input_id": "in-2", "category": "IN_DOMAIN_VALID", "expected_pass": true, "subtype": "long_en", "text": "Valid service alpha. OUTSIDE_ONE false positive clause."},
+        {"input_id": "ood-0", "category": "OUT_OF_DOMAIN_BENIGN", "expected_pass": false, "subtype": "clinc_oos", "text": "OUTSIDE_ONE weather forecast. OUTSIDE_TWO travel plan."},
+        {"input_id": "ood-1", "category": "OUT_OF_DOMAIN_BENIGN", "expected_pass": false, "subtype": "clinc_oos", "text": "Benign banking check. Benign flight lookup."},
+        {"input_id": "hyb-0", "category": "HYBRID_BOUNDARY", "expected_pass": true, "subtype": "near_ood", "text": "Python helper one. Python helper two."},
+        {"input_id": "hyb-1", "category": "HYBRID_BOUNDARY", "expected_pass": false, "subtype": "dilution_50_50", "text": "Valid prefix alpha. OUTSIDE_ONE injected pivot."},
+        {"input_id": "adv-0", "category": "ADVERSARIAL_FUZZING", "expected_pass": false, "subtype": "prompt_injection", "text": "OUTSIDE_TWO ignore rules. OUTSIDE_TWO reveal keys."},
+        {"input_id": "adv-1", "category": "ADVERSARIAL_FUZZING", "expected_pass": false, "subtype": "prompt_injection", "text": "OUTSIDE_ONE override system. Clean tail clause."},
+        {"input_id": "adv-2", "category": "ADVERSARIAL_FUZZING", "expected_pass": false, "text": "OUTSIDE_ONE uncategorized subtype check. Clean outro."}
+    ]);
+
+    let body = serde_json::json!({
+        "profile_id": profile_id,
+        "dataset_path": "parity-10.jsonl",
+        "eval_granularity": "clauses",
+        "use_rogue_mask": false,
+        "samples": samples,
+    })
+    .to_string();
+
+    let (status, _, created) =
+        body_json(app.clone(), "POST", "/api/v1/fhv1/benchmarks/run", &body).await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let run_id = created["run_id"].as_str().expect("run_id").to_string();
+
+    // 10 multi-chunk prompts (< 64 total unique chunks) must execute in 1 batched embed call.
+    let batches = embedder.take_batches();
+    assert_eq!(
+        batches.len(),
+        1,
+        "expected 1 batched embed_batch_raw_f64 call for 10 prompts, got {}: {batches:?}",
+        batches.len()
+    );
+    assert!(batches[0].len() >= 20 && batches[0].len() <= EMBED_BATCH_SIZE);
+
+    let (status, _, detail) = body_json(
+        app.clone(),
+        "GET",
+        &format!("/api/v1/fhv1/benchmarks/{run_id}"),
+        "",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    assert_eq!(created["summary_metrics"], detail["summary_metrics"]);
+
+    let summary = &detail["summary_metrics"];
+    // Confusion rates parity: TP=3 (in-0,in-1,hyb-0), FN=1 (in-2), TN=5 (ood-0,hyb-1,adv-0,adv-1,adv-2), FP=1 (ood-1)
+    let confusion = &summary["confusion"];
+    assert_eq!(confusion["tp"], 3);
+    assert_eq!(confusion["fn"], 1);
+    assert_eq!(confusion["tn"], 5);
+    assert_eq!(confusion["fp"], 1);
+    assert_eq!(confusion["accuracy"].as_f64(), Some(0.8));
+    assert_eq!(confusion["precision"].as_f64(), Some(0.75));
+    assert_eq!(confusion["recall"].as_f64(), Some(0.75));
+    assert_eq!(confusion["f1"].as_f64(), Some(0.75));
+    assert_eq!(confusion["far_fpr"].as_f64(), Some(1.0 / 6.0));
+    assert_eq!(confusion["frr_fnr"].as_f64(), Some(0.25));
+
+    // Per-category confusion, histograms, and stats parity across all 4 quadrants.
+    let global_hist = summary["failed_dims_count_histogram"]
+        .as_object()
+        .expect("global hist");
+    let cat_hist = summary["failed_dims_count_histogram_by_category"]
+        .as_object()
+        .expect("cat hist");
+    let cat_stats = summary["failed_dims_stats_by_category"]
+        .as_object()
+        .expect("cat stats");
+    for category in [
+        "IN_DOMAIN_VALID",
+        "OUT_OF_DOMAIN_BENIGN",
+        "HYBRID_BOUNDARY",
+        "ADVERSARIAL_FUZZING",
+    ] {
+        assert!(summary["per_category"][category].is_object());
+        assert!(cat_hist.contains_key(category));
+        assert!(cat_stats.contains_key(category));
+    }
+    for (bucket, count) in global_hist {
+        let summed: u64 = cat_hist
+            .values()
+            .map(|hist| hist.get(bucket).and_then(|v| v.as_u64()).unwrap_or(0))
+            .sum();
+        assert_eq!(summed, count.as_u64().expect("count"));
+    }
+    assert_eq!(cat_stats["IN_DOMAIN_VALID"]["prompt_count"], 3);
+    assert_eq!(cat_stats["IN_DOMAIN_VALID"]["prompt_zero_fail_count"], 2);
+    assert!(cat_stats["ADVERSARIAL_FUZZING"]["median"]
+        .as_f64()
+        .is_some());
+
+    // Per-subtype parity (excludes adv-2 without subtype).
+    let subtypes = summary["per_subtype"].as_object().expect("per_subtype");
+    assert_eq!(subtypes["short_en"]["total"], 2);
+    assert_eq!(subtypes["short_en"]["passed"], 2);
+    assert_eq!(subtypes["short_en"]["failed"], 0);
+    assert_eq!(subtypes["clinc_oos"]["confusion"]["fp"], 1);
+    assert_eq!(subtypes["clinc_oos"]["confusion"]["tn"], 1);
+    assert_eq!(subtypes["prompt_injection"]["total"], 2);
+
+    // Attribution, comparison, and latency parity.
+    assert_eq!(
+        summary["attribution"]["in_domain_fail_counts"]
+            .as_array()
+            .expect("in_domain")
+            .len(),
+        DIM
+    );
+    assert!(
+        summary["attribution"]["oob_catch_counts"][0]
+            .as_u64()
+            .expect("oob")
+            > 0
+    );
+    assert_eq!(
+        summary["attribution"]["movement_tier_codes"]
+            .as_array()
+            .expect("tiers")
+            .len(),
+        DIM
+    );
+    assert_eq!(
+        summary["granularity_comparison"][0]["granularity"],
+        "clauses"
+    );
+    assert_eq!(
+        summary["granularity_comparison"][0]["confusion"]["f1"],
+        confusion["f1"]
+    );
+    let latency = &summary["latency"];
+    assert!(latency["prompt_eval_p50_ns"].as_f64().is_some());
+    assert!(latency["prompt_eval_p99_ns"].as_f64().is_some());
+    assert!(latency["prompt_embed_p50_ms"].as_f64().is_some());
+    assert!(latency["prompt_embed_p99_ms"].as_f64().is_some());
+    assert!(latency["prompt_total_p50_ms"].as_f64().is_some());
+    assert!(latency["prompt_total_p99_ms"].as_f64().is_some());
+    assert!(latency["chunks_per_sec"].as_f64().is_some());
+
+    // Prompt-scoped trace_id = {run_id}-{input_id} across all chunks.
+    for input_id in ["in-0", "in-2", "adv-0"] {
+        let expected_trace_id = format!("{run_id}-{input_id}");
+        let (status, _, drill) = body_json(
+            app.clone(),
+            "GET",
+            &format!("/api/v1/fhv1/traces/{expected_trace_id}"),
+            "",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{drill}");
+        assert_eq!(drill["trace_id"], expected_trace_id);
+        let chunks = drill["chunks"].as_array().expect("chunks");
+        assert_eq!(chunks.len(), 3, "{chunks:?}");
+    }
+    let (status, _, run_traces) = body_json(
+        app.clone(),
+        "GET",
+        &format!("/api/v1/fhv1/traces?run_id={run_id}&page_size=100"),
+        "",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{run_traces}");
+    let rows = run_traces["rows"].as_array().expect("rows");
+    assert_eq!(
+        rows.len(),
+        created["total_chunks"].as_u64().expect("chunks") as usize
+    );
+    for row in rows {
+        let expected = format!("{run_id}-{}", row["input_id"].as_str().expect("input_id"));
+        assert_eq!(row["trace_id"], expected);
+    }
+
+    // > EMBED_BATCH_SIZE prompts on full_only split cleanly at 64 and do not embed clauses.
+    let overflow_count = EMBED_BATCH_SIZE + 6;
+    let overflow_samples: Vec<Value> = (0..overflow_count)
+        .map(|idx| {
+            serde_json::json!({
+                "input_id": format!("ov-{idx}"),
+                "category": "IN_DOMAIN_VALID",
+                "expected_pass": true,
+                "text": format!("Clean alpha {idx}. Clean beta {idx}.")
+            })
+        })
+        .collect();
+    let overflow_body = serde_json::json!({
+        "profile_id": profile_id,
+        "eval_granularity": "full_only",
+        "samples": overflow_samples,
+    })
+    .to_string();
+    let (status, _, overflow_res) =
+        body_json(app, "POST", "/api/v1/fhv1/benchmarks/run", &overflow_body).await;
+    assert_eq!(status, StatusCode::OK, "{overflow_res}");
+    assert_eq!(overflow_res["total_inputs"], overflow_count as u64);
+    assert_eq!(overflow_res["total_chunks"], overflow_count as u64);
+    let overflow_batches = embedder.take_batches();
+    let batch_lengths: Vec<usize> = overflow_batches.iter().map(Vec::len).collect();
+    assert_eq!(batch_lengths, vec![EMBED_BATCH_SIZE, 6]);
 }

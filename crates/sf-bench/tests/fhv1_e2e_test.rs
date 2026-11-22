@@ -43,13 +43,24 @@ impl BatchEmbedderClient for TestRawF64Embedder {
     }
 }
 
-fn prompt(id: &str, category: &str, expected: bool, text: &str) -> Fhv1Prompt {
+fn prompt_with_subtype(
+    id: &str,
+    category: &str,
+    expected: bool,
+    text: &str,
+    subtype: Option<&str>,
+) -> Fhv1Prompt {
     Fhv1Prompt {
         input_id: id.to_string(),
         category: category.to_string(),
         expected_pass: expected,
         text: text.to_string(),
+        subtype: subtype.map(str::to_string),
     }
+}
+
+fn prompt(id: &str, category: &str, expected: bool, text: &str) -> Fhv1Prompt {
+    prompt_with_subtype(id, category, expected, text, None)
 }
 
 #[test]
@@ -117,9 +128,21 @@ async fn granularity_mask_and_lance_persistence_diverge() {
     .expect("calibrate");
     let mixed = format!("{INSIDE} {LEAVING}.");
     let prompts = vec![
-        prompt("in", "IN_DOMAIN_VALID", true, INSIDE),
-        prompt("hybrid", "IN_DOMAIN_VALID", true, &mixed),
-        prompt("rogue", "ADVERSARIAL_FUZZING", false, ROGUE),
+        prompt_with_subtype("in", "IN_DOMAIN_VALID", true, INSIDE, Some("short_en")),
+        prompt_with_subtype(
+            "hybrid",
+            "IN_DOMAIN_VALID",
+            true,
+            &mixed,
+            Some("clause_mix"),
+        ),
+        prompt_with_subtype(
+            "rogue",
+            "ADVERSARIAL_FUZZING",
+            false,
+            ROGUE,
+            Some("rogue_probe"),
+        ),
     ];
     let prepared = prepare_prompts(&TestRawF64Embedder, &prompts, false)
         .await
@@ -175,6 +198,21 @@ async fn granularity_mask_and_lance_persistence_diverge() {
             .expect("count")
             > 0
     );
+    assert!(
+        clause_metrics.summary["failed_dims_count_histogram_by_category"]["IN_DOMAIN_VALID"]
+            .is_object()
+    );
+    assert_eq!(
+        clause_metrics.summary["failed_dims_stats_by_category"]["IN_DOMAIN_VALID"]["prompt_count"],
+        2
+    );
+    assert_eq!(
+        clause_metrics.summary["per_subtype"]["short_en"]["passed"],
+        1
+    );
+    assert!(clause_metrics.summary["latency"]["prompt_eval_p50_ns"]
+        .as_f64()
+        .is_some());
     let run_id = "fhv1-e2e-clauses";
     persist_benchmark_run(
         &store,
