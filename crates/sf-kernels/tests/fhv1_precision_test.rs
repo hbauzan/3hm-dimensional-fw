@@ -510,6 +510,33 @@ fn evaluate_chunk_rejects_bad_dim_and_non_finite() {
     );
 }
 
+#[test]
+fn non_zero_polarity_fails_closed_on_calibration_and_evaluation() {
+    let rows = [[0.0; DIM], [1.0; DIM]];
+    let observed = [0.5; DIM];
+
+    for polarity in [1u8, 255u8] {
+        let cal_err = compute_fhv1_profile_stats(&rows, polarity, MovementMetric::Span, standard())
+            .unwrap_err();
+        assert_eq!(cal_err, Fhv1Error::UnsupportedPolarity(polarity));
+        assert!(
+            cal_err.to_string().contains(&polarity.to_string()),
+            "unexpected display: {cal_err}"
+        );
+
+        let mut stats = envelope(0.0, 1.0);
+        stats.polarity = polarity;
+
+        let chunk_err = evaluate_fhv1_chunk(&stats, &observed, false).unwrap_err();
+        assert_eq!(chunk_err, Fhv1Error::UnsupportedPolarity(polarity));
+
+        let batch_err =
+            evaluate_fhv1_batch(&stats, &[observed], Fhv1EvalGranularity::FullOnly, false)
+                .unwrap_err();
+        assert_eq!(batch_err, Fhv1Error::UnsupportedPolarity(polarity));
+    }
+}
+
 fn linear_reference(sorted: &[f64], p: f64) -> f64 {
     let n = sorted.len();
     let rank = p * (n as f64 - 1.0);

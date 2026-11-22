@@ -199,6 +199,7 @@ async fn granularity_mask_and_lance_persistence_diverge() {
     assert!(runs[0].summary_metrics_json.contains("confusion"));
     let page = store
         .query_audit_trace_summaries(&Fhv1TraceQuery {
+            trace_id: None,
             run_id: Some(run_id.to_string()),
             profile_id: None,
             source_kind: Some("BENCHMARK".to_string()),

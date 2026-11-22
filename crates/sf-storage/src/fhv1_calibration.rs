@@ -154,6 +154,7 @@ pub struct Fhv1AuditTraceSummary {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Fhv1TraceQuery {
+    pub trace_id: Option<String>,
     pub run_id: Option<String>,
     pub profile_id: Option<String>,
     pub source_kind: Option<String>,

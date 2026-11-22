@@ -240,6 +240,7 @@ async fn lance_xlsx_csv_parquet_and_zip_keep_raw_f64_bits() {
     }
     {
         let query = Fhv1TraceQuery {
+            trace_id: None,
             run_id: Some(String::new()),
             profile_id: Some(profile_id.clone()),
             source_kind: Some("REALTIME_LAB".to_string()),
@@ -411,6 +412,7 @@ async fn trace_summaries_filter_by_profile_category_and_failure_page() {
     store.append_audit_traces(&rows).await.expect("append");
 
     let query = Fhv1TraceQuery {
+        trace_id: None,
         run_id: None,
         profile_id: Some(profile_id.to_string()),
         source_kind: None,
@@ -501,6 +503,198 @@ async fn rogue_mask_drilldown_keeps_pruned_observed_bits() {
     }
     assert_eq!(dimensions[0].status, DimBoundStatus::InBounds);
     assert_eq!(dimensions[0].observed.to_bits(), 0.5f64.to_bits());
+}
+
+#[tokio::test]
+async fn trace_summaries_push_down_trace_id_and_handle_missing_or_out_of_range() {
+    let dir = TempUri::new("trace-id-pushdown");
+    let store = Fhv1Store::new(dir.uri());
+
+    let missing_page = store
+        .query_audit_trace_summaries(&Fhv1TraceQuery {
+            trace_id: Some("does-not-exist".to_string()),
+            run_id: None,
+            profile_id: None,
+            source_kind: None,
+            category: None,
+            passed: None,
+            page: 1,
+            page_size: 25,
+        })
+        .await
+        .expect("missing table query");
+    assert_eq!(missing_page.total, 0);
+    assert!(missing_page.rows.is_empty());
+
+    let mut target_c1 = trace("python-v1-a", "trace-target", 1, 0.25, false);
+    target_c1.created_at_ms = 500;
+    let mut target_c0 = trace("python-v1-a", "trace-target", 0, 0.25, false);
+    target_c0.created_at_ms = 500;
+    let mut decoy = trace("python-v1-a", "trace-decoy", 0, 0.25, false);
+    decoy.created_at_ms = 500;
+
+    store
+        .append_audit_traces(&[decoy, target_c1])
+        .await
+        .expect("batch 1");
+    store
+        .append_audit_traces(&[target_c0])
+        .await
+        .expect("batch 2");
+
+    let matched = store
+        .query_audit_trace_summaries(&Fhv1TraceQuery {
+            trace_id: Some("trace-target".to_string()),
+            run_id: None,
+            profile_id: Some("python-v1-a".to_string()),
+            source_kind: None,
+            category: None,
+            passed: Some(false),
+            page: 1,
+            page_size: 10,
+        })
+        .await
+        .expect("trace_id pushdown");
+    assert_eq!(matched.total, 2);
+    assert_eq!(matched.rows.len(), 2);
+    assert_eq!(matched.rows[0].trace_id, "trace-target");
+    assert_eq!(matched.rows[0].chunk_index, 0);
+    assert_eq!(matched.rows[1].trace_id, "trace-target");
+    assert_eq!(matched.rows[1].chunk_index, 1);
+
+    let out_of_range = store
+        .query_audit_trace_summaries(&Fhv1TraceQuery {
+            trace_id: Some("trace-target".to_string()),
+            run_id: None,
+            profile_id: None,
+            source_kind: None,
+            category: None,
+            passed: None,
+            page: 3,
+            page_size: 2,
+        })
+        .await
+        .expect("out of range");
+    assert_eq!(out_of_range.total, 2);
+    assert!(out_of_range.rows.is_empty());
+}
+
+#[tokio::test]
+async fn trace_summaries_paginate_over_1000_rows_deterministically_across_batches() {
+    let dir = TempUri::new("trace-scale-1250");
+    let store = Fhv1Store::new(dir.uri());
+    let total_rows = 1_250usize;
+    let mut all_rows = Vec::with_capacity(total_rows);
+    for i in 0..total_rows {
+        let trace_num = (i * 37) % total_rows;
+        let trace_id = format!("trace-{trace_num:04}");
+        let chunk_index = (i % 3) as u32;
+        let created_at_ms = ((i * 13) % 417) as i64 * 10;
+        let mut row = trace("python-v1-scale", &trace_id, chunk_index, 0.25, true);
+        row.run_id = "run-scale".to_string();
+        row.created_at_ms = created_at_ms;
+        all_rows.push(row);
+    }
+
+    for batch in all_rows.chunks(250) {
+        store
+            .append_audit_traces(batch)
+            .await
+            .expect("append batch");
+    }
+
+    let mut expected = all_rows
+        .iter()
+        .map(|row| (row.created_at_ms, row.chunk_index, row.trace_id.clone()))
+        .collect::<Vec<_>>();
+    expected.sort_by(|left, right| {
+        right
+            .0
+            .cmp(&left.0)
+            .then(left.1.cmp(&right.1))
+            .then(left.2.cmp(&right.2))
+    });
+
+    let page_size = 250u32;
+    let mut observed = Vec::with_capacity(total_rows);
+    for page_num in 1..=5u32 {
+        let page = store
+            .query_audit_trace_summaries(&Fhv1TraceQuery {
+                trace_id: None,
+                run_id: Some("run-scale".to_string()),
+                profile_id: None,
+                source_kind: None,
+                category: None,
+                passed: None,
+                page: page_num,
+                page_size,
+            })
+            .await
+            .expect("paged query");
+        assert_eq!(page.page, page_num);
+        assert_eq!(page.page_size, page_size);
+        assert_eq!(page.total, total_rows as u64);
+        assert_eq!(page.rows.len(), page_size as usize);
+        for row in page.rows {
+            observed.push((row.created_at_ms, row.chunk_index, row.trace_id));
+        }
+    }
+    assert_eq!(observed, expected);
+
+    // Also verify a page larger than LanceDB's default 1024-row batch length stays ordered.
+    let wide_page1 = store
+        .query_audit_trace_summaries(&Fhv1TraceQuery {
+            trace_id: None,
+            run_id: Some("run-scale".to_string()),
+            profile_id: None,
+            source_kind: None,
+            category: None,
+            passed: None,
+            page: 1,
+            page_size: 1_100,
+        })
+        .await
+        .expect("wide page 1");
+    assert_eq!(wide_page1.total, total_rows as u64);
+    assert_eq!(wide_page1.rows.len(), 1_100);
+    let wide_page2 = store
+        .query_audit_trace_summaries(&Fhv1TraceQuery {
+            trace_id: None,
+            run_id: Some("run-scale".to_string()),
+            profile_id: None,
+            source_kind: None,
+            category: None,
+            passed: None,
+            page: 2,
+            page_size: 1_100,
+        })
+        .await
+        .expect("wide page 2");
+    assert_eq!(wide_page2.total, total_rows as u64);
+    assert_eq!(wide_page2.rows.len(), 150);
+    let wide_observed: Vec<_> = wide_page1
+        .rows
+        .into_iter()
+        .chain(wide_page2.rows)
+        .map(|row| (row.created_at_ms, row.chunk_index, row.trace_id))
+        .collect();
+    assert_eq!(wide_observed, expected);
+
+    let out_of_range = store
+        .query_audit_trace_summaries(&Fhv1TraceQuery {
+            trace_id: None,
+            run_id: Some("run-scale".to_string()),
+            profile_id: None,
+            source_kind: None,
+            category: None,
+            passed: None,
+            page: 6,
+            page_size: 250,
+        })
+        .await
+        .expect("out of range page");
+    assert_eq!(out_of_range.total, total_rows as u64);
+    assert!(out_of_range.rows.is_empty());
 }
 
 fn filled_sample(id: &str, value: f64) -> Fhv1RawSample {

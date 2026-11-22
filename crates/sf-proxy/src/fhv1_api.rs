@@ -687,6 +687,7 @@ async fn list_traces(
         }
     };
     let request = Fhv1TraceQuery {
+        trace_id: query.trace_id,
         run_id: query.run_id,
         profile_id: query.profile_id,
         source_kind: query.source_kind,
@@ -792,6 +793,7 @@ struct BenchmarkBody {
 
 #[derive(Debug, Deserialize)]
 struct TraceQuery {
+    trace_id: Option<String>,
     run_id: Option<String>,
     profile_id: Option<String>,
     source_kind: Option<String>,
@@ -1073,4 +1075,111 @@ fn new_trace_id(prefix: &str) -> String {
     static TRACE_SEQ: AtomicU64 = AtomicU64::new(0);
     let seq = TRACE_SEQ.fetch_add(1, Ordering::Relaxed);
     format!("{prefix}-{}-{seq}", now_ms())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use http_body_util::BodyExt;
+    use serde_json::Value;
+    use sf_kernels::{AlignedVec1024, DIM};
+    use sf_storage::{Fhv1AuditTrace, Fhv1Store, HotRegistry};
+    use tower::ServiceExt;
+
+    use crate::{router, MockBatchEmbedder, MockUpstreamForwarder, ProxyAppState};
+
+    fn sample_trace(trace_id: &str, created_at_ms: i64) -> Fhv1AuditTrace {
+        let vec = vec![0.0; DIM].into_boxed_slice().try_into().expect("dim");
+        Fhv1AuditTrace {
+            trace_id: trace_id.to_string(),
+            run_id: String::new(),
+            source_kind: "REALTIME_LAB".to_string(),
+            profile_id: "python-v1-test".to_string(),
+            policy_id: "python".to_string(),
+            category: "REALTIME".to_string(),
+            expected_pass: None,
+            input_id: trace_id.to_string(),
+            raw_text: "hello".to_string(),
+            eval_granularity: "full_only".to_string(),
+            use_rogue_mask: false,
+            chunk_index: 0,
+            chunk_strategy: "full_doc".to_string(),
+            chunk_text: "hello".to_string(),
+            input_vector: vec,
+            chunk_passed: true,
+            overall_passed: true,
+            full_text_passed: true,
+            all_chunks_passed: true,
+            evaluated_dims: 1024,
+            failed_dims_count: 0,
+            underflow_count: 0,
+            overflow_count: 0,
+            max_violation_delta: 0.0,
+            mean_abs_delta_vs_mean: 0.0,
+            eval_latency_ns: 10,
+            embedding_ms: 1.0,
+            created_at_ms,
+        }
+    }
+
+    #[tokio::test]
+    async fn list_traces_pushes_down_trace_id_query_param() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let path =
+            std::env::temp_dir().join(format!("fhv1-api-trace-id-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&path).expect("temp dir");
+        let store = Arc::new(Fhv1Store::new(path.to_str().expect("utf8")));
+        store
+            .append_audit_traces(&[
+                sample_trace("trace-keep", 100),
+                sample_trace("trace-drop", 200),
+            ])
+            .await
+            .expect("append traces");
+
+        let app = router(Arc::new(ProxyAppState {
+            registry: Arc::new(HotRegistry::from_locks([])),
+            embedder: Arc::new(MockBatchEmbedder {
+                pass_vector: AlignedVec1024::zeros(),
+                breach_vector: AlignedVec1024::zeros(),
+                centroids: HashMap::new(),
+            }),
+            upstream: Arc::new(MockUpstreamForwarder),
+            mock_upstream: Arc::new(MockUpstreamForwarder),
+            default_domain: "python".to_string(),
+            max_telemetry_coords: 4,
+            fhv1_store: Some(store),
+        }));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/v1/fhv1/traces?trace_id=trace-keep")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let payload: Value = serde_json::from_slice(&bytes).expect("json");
+        assert_eq!(payload["total"], 1);
+        let rows = payload["rows"].as_array().expect("rows");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["trace_id"], "trace-keep");
+        let _ = std::fs::remove_dir_all(&path);
+    }
 }

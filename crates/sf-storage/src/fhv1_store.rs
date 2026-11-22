@@ -12,7 +12,7 @@ use lancedb::arrow::arrow_array::{
 };
 use lancedb::arrow::arrow_buffer::Buffer;
 use lancedb::arrow::arrow_schema::{DataType, Field, SchemaRef};
-use lancedb::query::{ExecutableQuery, QueryBase, Select};
+use lancedb::query::{ColumnOrdering, ExecutableQuery, QueryBase, Select};
 use sf_kernels::{evaluate_fhv1_chunk, Fhv1ChunkEval, Fhv1Error, Fhv1ProfileStats, DIM};
 
 use crate::fhv1_calibration::{
@@ -178,29 +178,56 @@ impl Fhv1Store {
         query: &Fhv1TraceQuery,
     ) -> Result<Fhv1TracePage, Fhv1StorageError> {
         let (page, page_size) = page_window(query.page, query.page_size);
+        let Some(table) = self.open_existing_table(FHV1_AUDIT_TRACES_TABLE).await? else {
+            return Ok(Fhv1TracePage {
+                page,
+                page_size,
+                total: 0,
+                rows: Vec::new(),
+            });
+        };
         let filter = trace_filter(query);
-        let batches = self
-            .read_batches(FHV1_AUDIT_TRACES_TABLE, filter, Some(TRACE_SUMMARY_COLUMNS))
-            .await?;
-        let mut rows = Vec::new();
+        let row_count = Box::pin(table.count_rows(filter.clone()))
+            .await
+            .map_err(Fhv1StorageError::new)?;
+        let total = u64::try_from(row_count).unwrap_or(u64::MAX);
+        let start_u64 = u64::from(page - 1).saturating_mul(u64::from(page_size));
+        if total == 0 || start_u64 >= total {
+            return Ok(Fhv1TracePage {
+                page,
+                page_size,
+                total,
+                rows: Vec::new(),
+            });
+        }
+        let Ok(start) = usize::try_from(start_u64) else {
+            return Ok(Fhv1TracePage {
+                page,
+                page_size,
+                total,
+                rows: Vec::new(),
+            });
+        };
+        let limit = usize::try_from(page_size).unwrap_or(usize::MAX);
+        let mut lancedb_query = table
+            .query()
+            .select(Select::columns(TRACE_SUMMARY_COLUMNS))
+            .order_by(Some(vec![
+                ColumnOrdering::desc_nulls_last("created_at_ms".to_string()),
+                ColumnOrdering::asc_nulls_last("chunk_index".to_string()),
+                ColumnOrdering::asc_nulls_last("trace_id".to_string()),
+            ]))
+            .offset(start)
+            .limit(limit);
+        if let Some(filter) = filter.as_deref() {
+            lancedb_query = lancedb_query.only_if(filter);
+        }
+        let batches = collect_query_batches(lancedb_query).await?;
+        let mut rows = Vec::with_capacity(batches.iter().map(RecordBatch::num_rows).sum());
         for_each_row(&batches, |batch, index| {
             rows.push(read_summary(batch, index)?);
             Ok(())
         })?;
-        rows.sort_by(|left, right| {
-            right
-                .created_at_ms
-                .cmp(&left.created_at_ms)
-                .then(left.chunk_index.cmp(&right.chunk_index))
-                .then(left.trace_id.cmp(&right.trace_id))
-        });
-        let total = rows.len() as u64;
-        let start = ((page - 1) as usize).saturating_mul(page_size as usize);
-        let rows = rows
-            .into_iter()
-            .skip(start)
-            .take(page_size as usize)
-            .collect();
         Ok(Fhv1TracePage {
             page,
             page_size,
@@ -287,33 +314,49 @@ impl Fhv1Store {
         Ok(())
     }
 
+    async fn open_existing_table(
+        &self,
+        table_name: &str,
+    ) -> Result<Option<lancedb::Table>, Fhv1StorageError> {
+        let conn = self.connect().await?;
+        if !table_exists(&conn, table_name).await? {
+            return Ok(None);
+        }
+        let table = Box::pin(conn.open_table(table_name).execute())
+            .await
+            .map_err(Fhv1StorageError::new)?;
+        Ok(Some(table))
+    }
+
     async fn read_batches(
         &self,
         table_name: &str,
         filter: Option<String>,
         columns: Option<&[&str]>,
     ) -> Result<Vec<RecordBatch>, Fhv1StorageError> {
-        let conn = self.connect().await?;
-        if !table_exists(&conn, table_name).await? {
+        let Some(table) = self.open_existing_table(table_name).await? else {
             return Ok(Vec::new());
-        }
-        let table = Box::pin(conn.open_table(table_name).execute())
-            .await
-            .map_err(Fhv1StorageError::new)?;
-        let mut query = table.query().limit(1_000_000);
+        };
+        let mut query = table.query();
         if let Some(filter) = filter.as_deref() {
             query = query.only_if(filter);
         }
         if let Some(columns) = columns {
             query = query.select(Select::columns(columns));
         }
-        let stream = Box::pin(query.execute())
-            .await
-            .map_err(Fhv1StorageError::new)?;
-        Box::pin(stream.try_collect())
-            .await
-            .map_err(Fhv1StorageError::new)
+        collect_query_batches(query).await
     }
+}
+
+async fn collect_query_batches(
+    query: lancedb::query::Query,
+) -> Result<Vec<RecordBatch>, Fhv1StorageError> {
+    let stream = Box::pin(query.execute())
+        .await
+        .map_err(Fhv1StorageError::new)?;
+    Box::pin(stream.try_collect())
+        .await
+        .map_err(Fhv1StorageError::new)
 }
 
 /// Keeps the 1024-d comparison buffer out of the caller's async state machine.
@@ -352,6 +395,9 @@ fn page_window(page: u32, page_size: u32) -> (u32, u32) {
 
 fn trace_filter(query: &Fhv1TraceQuery) -> Option<String> {
     let mut parts = Vec::new();
+    if let Some(trace_id) = &query.trace_id {
+        parts.push(format!("trace_id = {}", sql_string(trace_id)));
+    }
     if let Some(run_id) = &query.run_id {
         parts.push(format!("run_id = {}", sql_string(run_id)));
     }

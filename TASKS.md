@@ -20,7 +20,7 @@ Close all P0 (3), P1 (4), and P2 (6) defects identified in `main @ f239f19` per 
 - **Slice Discipline**: Strictly 1 fresh coding agent and 1 atomic local commit per Vertical Tracer Bullet Slice (`1..7`). Halt after Slice 7 before `git push` or `git merge --no-ff`.
 
 ## 3. Tracer Bullet Slices
-- [ ] **Slice 1**: Kernel polarity fail-closed (`P2-13`), ADR-006 `violation_delta` doc lock (`P2-9` / `2B`), LanceDB predicate pushdown without silent `1_000_000` truncation & deterministic pagination (`P2-12`).
+- [x] **Slice 1**: Kernel polarity fail-closed (`P2-13`), ADR-006 `violation_delta` doc lock (`P2-9` / `2B`), LanceDB predicate pushdown without silent `1_000_000` truncation & deterministic pagination (`P2-12`).
 - [ ] **Slice 2**: `atomic_phrases()` EN/ES stopword & boundary fix (`P0-2`), `FullOnly` Base64 decoded payloads (`P2-10`), default movement metric `"variance"` in Rust (`P2-8`), lossless single-HTTP-call `3hm_plus_fhv1` dual embedder seam removing `promote_f32` (`P1-3`).
 - [ ] **Slice 3**: Shared evaluation engine in `sf-proxy` with `failed_dims_count_histogram_by_category`, per-category percentiles, and per-subtype counts (`P0-3`), plus full REST `POST /api/v1/fhv1/benchmarks/run` parity & bounded batched embedding (`P1-2`).
 - [ ] **Slice 4**: Curated offline base corpus `150–300` docs/domain (`1A` / `P0-2`), leak-free 400-prompt/domain 4-quadrant benchmark rebuild with `subtype` metadata & strict leak/language/length validators (`P0-1`), and `augment_fhv1_corpus.py --augment-llm` fail-closed CLI + offline tests (`1B` tooling).
