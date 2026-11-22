@@ -294,8 +294,7 @@ fn zero_span_norm_pos_is_absent_and_batch_does_not_stop_early() {
             batch.chunks[2].dimensions[9].status,
             DimBoundStatus::Underflow
         );
-        let expect_overall = matches!(granularity, Fhv1EvalGranularity::FullOnly);
-        assert_eq!(batch.overall_passed, expect_overall);
+        assert!(!batch.overall_passed);
         assert_eq!(batch.granularity, granularity);
     }
 
@@ -315,6 +314,28 @@ fn zero_span_norm_pos_is_absent_and_batch_does_not_stop_early() {
         evaluate_fhv1_batch(&wide, &empty, Fhv1EvalGranularity::Clauses, false).unwrap_err(),
         Fhv1Error::EmptyCorpus
     );
+}
+
+#[test]
+fn full_only_enforces_all_chunks_passed_for_decoded_payloads() {
+    let wide = envelope(0.0, 1.0);
+    let passing_full_doc = [0.5; DIM];
+    let mut breaching_decoded_payload = [0.5; DIM];
+    breaching_decoded_payload[3] = 2.5;
+
+    let batch = evaluate_fhv1_batch(
+        &wide,
+        &[passing_full_doc, breaching_decoded_payload],
+        Fhv1EvalGranularity::FullOnly,
+        false,
+    )
+    .expect("full_only batch");
+    assert_eq!(batch.chunks.len(), 2);
+    assert!(batch.chunks[0].chunk_passed);
+    assert!(!batch.chunks[1].chunk_passed);
+    assert!(batch.full_text_passed);
+    assert!(!batch.all_chunks_passed);
+    assert!(!batch.overall_passed);
 }
 
 #[test]

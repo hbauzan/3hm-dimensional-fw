@@ -102,7 +102,55 @@ def _parameters(model: object) -> Iterable[torch.nn.Parameter]:
 _USE_FORWARD = False
 
 
+def _is_normalize_module(module: object) -> bool:
+    if type(module).__name__ == "Normalize":
+        return True
+    try:
+        from sentence_transformers.sentence_transformer.modules import Normalize  # type: ignore[import-not-found]
+
+        return isinstance(module, Normalize)
+    except Exception:
+        try:
+            from sentence_transformers.models import Normalize  # type: ignore[import-not-found]
+
+            return isinstance(module, Normalize)
+        except Exception:
+            return False
+
+
+def _model_children(model: object) -> List[object]:
+    children = getattr(model, "children", None)
+    if not callable(children):
+        return []
+    return list(children())
+
+
+def _has_normalize_module(model: object) -> bool:
+    return any(_is_normalize_module(module) for module in _model_children(model))
+
+
+def _move_features_to_device(features: dict, target: torch.device) -> dict:
+    try:
+        from sentence_transformers.util import batch_to_device  # type: ignore[import-not-found]
+
+        return batch_to_device(features, target)
+    except ImportError:
+        return {
+            key: value.to(target) if isinstance(value, torch.Tensor) else value
+            for key, value in features.items()
+        }
+
+
 def _encode(model: object, texts: List[str], device: str, *, normalize: bool, batch_size: int):
+    if not normalize and _has_normalize_module(model):
+        forwarded = _forward_embeddings(
+            model, texts, device, normalize=False, batch_size=batch_size
+        )
+        if forwarded is None:
+            raise RuntimeError(
+                "Model contains a Normalize module and cannot execute pre-L2 forward without it"
+            )
+        return forwarded
     if _USE_FORWARD:
         forwarded = _forward_embeddings(model, texts, device, normalize=normalize, batch_size=batch_size)
         if forwarded is not None:
@@ -128,25 +176,61 @@ def _forward_embeddings(model: object, texts: List[str], device: str, *, normali
     if not callable(preprocess):
         return None
     import torch.nn.functional as functional
-    from sentence_transformers.util import batch_to_device
 
     resolve_prompt = getattr(model, "_resolve_prompt", None)
     prompt = resolve_prompt(None, None) if callable(resolve_prompt) else None
     target = torch.device(device)
     autocast_device = device if device in {"cpu", "cuda", "mps"} else "cpu"
+    children = _model_children(model)
     chunks = []
     with torch.inference_mode(), torch.autocast(device_type=autocast_device, enabled=False):
         for start in range(0, len(texts), batch_size):
             batch = texts[start : start + batch_size]
             features = preprocess(batch, prompt=prompt)
-            features = batch_to_device(features, target)
-            embedding = model(features)["sentence_embedding"]
+            features = _move_features_to_device(features, target)
             if normalize:
+                embedding = model(features)["sentence_embedding"]
                 embedding = functional.normalize(embedding, p=2, dim=1)
+            else:
+                if children:
+                    for module in children:
+                        if _is_normalize_module(module):
+                            continue
+                        features = module(features)
+                elif not _has_normalize_module(model):
+                    features = model(features)
+                else:
+                    raise RuntimeError(
+                        "Model contains a Normalize module but exposes no iterable children"
+                    )
+                embedding = features["sentence_embedding"]
             chunks.append(embedding.to(dtype=torch.float32, device="cpu"))
     if device == "mps":
         torch.mps.synchronize()
     return torch.cat(chunks, dim=0).numpy()
+
+
+def _verify_normalize_divergence(model: object, device: str) -> None:
+    texts = list(VERIFICATION_TEXTS)
+    emb_true = _encode(model, texts, device, normalize=True, batch_size=len(texts))
+    emb_false = _encode(model, texts, device, normalize=False, batch_size=len(texts))
+    norm_true_l2 = [float(sum(float(x) * float(x) for x in row) ** 0.5) for row in emb_true]
+    norm_false_l2 = [float(sum(float(x) * float(x) for x in row) ** 0.5) for row in emb_false]
+    print(
+        f"[sf-bge-m3-mps] startup_norms norm_true_l2={norm_true_l2} norm_false_l2={norm_false_l2}",
+        flush=True,
+    )
+    for idx, norm_val in enumerate(norm_true_l2):
+        if abs(norm_val - 1.0) > 1e-4:
+            raise RuntimeError(
+                f"Startup normalize=True L2 check failed at index {idx}: {norm_val}"
+            )
+    if _has_normalize_module(model):
+        for idx, norm_val in enumerate(norm_false_l2):
+            if abs(norm_val - 1.0) <= 0.5:
+                raise RuntimeError(
+                    f"Startup normalize=False failed to bypass 2_Normalize at index {idx}: L2={norm_val}"
+                )
 
 
 def _forward_matches_encode(model: object, device: str) -> bool:
@@ -372,6 +456,7 @@ def main() -> None:
     model = load_model(MODEL_ID, device)
     global _USE_FORWARD
     _USE_FORWARD = _forward_matches_encode(model, device)
+    _verify_normalize_divergence(model, device)
     warmup(model, device)
     app = create_app(model, device, MODEL_ID)
     app.state.accepting = False

@@ -137,7 +137,7 @@ pub struct Fhv1ProfileStats {
 /// How many chunks decide `overall_passed`. Every chunk is still evaluated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Fhv1EvalGranularity {
-    /// `overall_passed` follows chunk 0 (`full_text_passed`).
+    /// `overall_passed` follows `all_chunks_passed` across `full_doc` and decoded Base64 payloads.
     FullOnly,
     /// `overall_passed` follows `all_chunks_passed`.
     Clauses,
@@ -318,8 +318,8 @@ pub fn evaluate_fhv1_chunk(
 
 /// Score every chunk. No short-circuit: a failing chunk does not skip the rest.
 ///
-/// `full_text_passed` is chunk 0. `overall_passed` is chunk 0 for [`Fhv1EvalGranularity::FullOnly`]
-/// and `all_chunks_passed` for clause and full-mirror granularity.
+/// `full_text_passed` records chunk 0 while `overall_passed` follows `all_chunks_passed`
+/// across every granularity (including decoded Base64 payload chunks in [`Fhv1EvalGranularity::FullOnly`]).
 pub fn evaluate_fhv1_batch<R>(
     stats: &Fhv1ProfileStats,
     rows: &[R],
@@ -340,8 +340,9 @@ where
     let full_text_passed = chunks[0].chunk_passed;
     let all_chunks_passed = chunks.iter().all(|chunk| chunk.chunk_passed);
     let overall_passed = match granularity {
-        Fhv1EvalGranularity::FullOnly => full_text_passed,
-        Fhv1EvalGranularity::Clauses | Fhv1EvalGranularity::FullMirror => all_chunks_passed,
+        Fhv1EvalGranularity::FullOnly
+        | Fhv1EvalGranularity::Clauses
+        | Fhv1EvalGranularity::FullMirror => all_chunks_passed,
     };
     Ok(Fhv1BatchEval {
         chunks,

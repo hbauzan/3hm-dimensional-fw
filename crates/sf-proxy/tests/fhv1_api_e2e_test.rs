@@ -1599,3 +1599,70 @@ async fn benchmark_run_has_full_summary_parity_bounded_batching_and_prompt_trace
     let batch_lengths: Vec<usize> = overflow_batches.iter().map(Vec::len).collect();
     assert_eq!(batch_lengths, vec![EMBED_BATCH_SIZE, 6]);
 }
+
+#[tokio::test]
+async fn full_only_blocks_breaching_decoded_base64_payload_in_evaluate_and_chat() {
+    let dir = TempDir::new("fhv1-b64-fullonly");
+    let store = Arc::new(Fhv1Store::new(dir.uri()));
+    let domain_lock = lock();
+    let app = router_for(
+        Some(Arc::clone(&store)),
+        Arc::new(LabEmbedder {
+            centroid: domain_lock.centroid,
+        }),
+    );
+    let profile_id = calibrate_text(&app, INSIDE, false).await;
+
+    // Decodes to "OUTSIDE envelope secret payload" while outer text lacks "OUTSIDE".
+    let prompt = "inside the lab payload T1VUU0lERSBlbnZlbG9wZSBzZWNyZXQgcGF5bG9hZA== check";
+
+    let (status, headers, eval_body) = body_json(
+        app.clone(),
+        "POST",
+        "/api/v1/fhv1/evaluate",
+        &serde_json::json!({
+            "profile_id": profile_id,
+            "text": prompt,
+            "eval_granularity": "full_only",
+        })
+        .to_string(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{eval_body}");
+    assert_eq!(eval_body["eval_granularity"], "full_only");
+    assert_eq!(eval_body["full_text_passed"], true);
+    assert_eq!(eval_body["all_chunks_passed"], false);
+    assert_eq!(eval_body["overall_passed"], false);
+    assert_eq!(header(&headers, "x-sf-fhv1-decision"), "BREACH");
+    let chunks = eval_body["chunks"].as_array().expect("chunks");
+    assert_eq!(chunks.len(), 2);
+    assert_eq!(chunks[0]["chunk_strategy"], "full_doc");
+    assert_eq!(chunks[0]["chunk_passed"], true);
+    assert_eq!(chunks[1]["chunk_strategy"], "full_doc");
+    assert_eq!(chunks[1]["chunk_text"], "OUTSIDE envelope secret payload");
+    assert_eq!(chunks[1]["chunk_passed"], false);
+
+    let (chat_status, chat_headers, chat_body) = body_json(
+        app,
+        "POST",
+        "/api/v1/chat",
+        &serde_json::json!({
+            "messages": [{"role": "user", "content": prompt}],
+            "filter_mode": "fhv1",
+            "fhv1_profile_id": profile_id,
+            "fhv1_granularity": "full_only",
+        })
+        .to_string(),
+    )
+    .await;
+    assert_eq!(chat_status, StatusCode::FORBIDDEN, "{chat_body}");
+    assert_eq!(header(&chat_headers, "x-sf-fhv1-decision"), "BREACH");
+    assert_eq!(chat_body["error"]["kind"], "fhv1_ingress_breach");
+    assert_eq!(
+        chat_body["error"]["telemetry"]["failing_tier"],
+        "FHV1_AABB_ENVELOPE"
+    );
+    assert_eq!(chat_body["error"]["telemetry"]["full_text_passed"], true);
+    assert_eq!(chat_body["error"]["telemetry"]["all_chunks_passed"], false);
+    assert_eq!(chat_body["error"]["telemetry"]["failing_chunk_index"], 1);
+}

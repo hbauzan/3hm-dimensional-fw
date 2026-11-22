@@ -4,7 +4,7 @@
 > **Baseline**: `main @ f239f19` (post-`TASK-009` & `TASK-010`)
 > **Branch**: `feat/fhv1-task-011-hardening-falsification`
 > **Task Governance**: `TASK-011` in [`TASKS.md`](../TASKS.md) (`fabrica-de-software` + `transparent-dev-protocol`)
-> **Delivery Fence**: 1 fresh coding agent per Vertical Tracer Bullet Slice (`Slices 1–7`), 1 atomic local commit per Slice. **HALT after Slice 7** at the human Approval Gate before any `git push` or `git merge --no-ff`.
+> **Delivery Fence**: 1 fresh coding agent per Vertical Tracer Bullet Slice (`Slices 1–8`), 1 atomic local commit per Slice. **HALT after Slice 8** at the human Approval Gate before any `git push` or `git merge --no-ff`.
 
 ---
 
@@ -209,3 +209,24 @@
   4. Update `CHANGELOG.md` (`## [Unreleased]`) and `TASKS.md`, run `agent.sh validate` and `agent.sh notify`, commit Slice 7 atomically (`hbauzan <hbauzan@gmail.com>`).
   5. Audit `git log f239f19..HEAD --stat --format=fuller` (authorship, zero `Co-authored-by:`, zero forbidden lexical mentions, zero staged `.env`/`data/`/`repomix-output.xml`/`audit_*`/`.xlsx`) and assemble untracked `audit_task011_evidence.md`.
   6. **HALT** for human audit and explicit `"OK"` before any `git push` or `git merge --no-ff`.
+
+---
+
+### Slice 8 — Hotfix (`F-01` `FullOnly` Base64 Security Bypass, `F-02` True Pre-L2 `2_Normalize` Bypass & Real `normalize=false` A/B Re-Run, `F-03` Report Hygiene)
+* **Files**:
+  * `crates/sf-kernels/src/fhv1.rs`
+  * `crates/sf-kernels/tests/fhv1_precision_test.rs`
+  * `crates/sf-proxy/tests/fhv1_api_e2e_test.rs`
+  * `architecture_spec.md`
+  * `tools/bge_m3_mps_server.py`
+  * `tools/test_bge_m3_mps_server.py`
+  * `reports/fhv1_task011_empirical_report.md`
+  * `CHANGELOG.md`
+  * `TASKS.md`
+  * `roadmap/fhv1-task-011-hardening-falsification.roadmap.md`
+  * Untracked (NEVER staged): `audit_task011_evidence.md`
+* **Requirements**:
+  1. **`F-01` (`P1` Security Bypass)**: Set `overall_passed = all_chunks_passed` in `crates/sf-kernels/src/fhv1.rs::evaluate_fhv1_batch` across `FullOnly`, `Clauses`, and `FullMirror`, keeping `full_text_passed` and `all_chunks_passed` recorded separately and `sf-kernels` strictly 0-dep/zero-`serde`. Add kernel + `/api/v1/fhv1/evaluate` + `/api/v1/chat` `filter_mode="fhv1"` regression tests and update `architecture_spec.md` ADR-006.
+  2. **`F-02` (`P0` Confounder)**: Detect and bypass `Normalize` (`2_Normalize`) when `normalize=false` in `tools/bge_m3_mps_server.py` (never falling back to `model.encode(..., normalize_embeddings=False)` when a `Normalize` child exists), log and assert startup `norm_true_l2` vs `norm_false_l2`, and add unit tests in `tools/test_bge_m3_mps_server.py`.
+  3. **`F-03` (Documentation Hygiene)**: Scrub external provider/model literals from `reports/fhv1_task011_empirical_report.md` §1.
+  4. **Surgical Re-Execution & Full Gate Certification**: Rebuild release binaries, surgically delete only the 2 old `normalize=false` profiles + 16 impacted benchmark runs (`12` `normalize=false` + `4` `normalize=true full_only`) and their 16 JSON reports (preserving `domain_hypercubes` `66` rows and the `8` `normalize=true clauses/full_mirror` runs), re-calibrate `python-v2`/`receta-v2` with `--normalize false`, re-run the `16` impacted benchmark runs, verify `24` runs / `ALL_24_JSON_EQUAL=True` / `9,600` distinct benchmark `trace_id`s / `receta-adversarial_fuzzing-0022` blocked, certify live `0-ULP` across `python-v1`, `python-v2`, `receta-v2`, certify `14/14` live Playwright E2E, sync docs/reports, commit Slice 8 atomically (`hbauzan <hbauzan@gmail.com>`), regenerate `audit_task011_evidence.md`, and **HALT** prior to `git push` or `git merge --no-ff`.
