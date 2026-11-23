@@ -2315,14 +2315,16 @@ def format_stdout_summary(report: Mapping[str, Any]) -> str:
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="FHV1.1 Phase 2 Offline Replay Simulator (RFC-003 float64).")
-    parser.add_argument("--mode", choices=("default", "v2"), default="default")
+    parser.add_argument("--mode", choices=("default", "v2", "v3"), default="default")
     parser.add_argument("--lancedb-uri", type=Path, default=Path("data/sf-lancedb"))
     parser.add_argument("--benchmarks-dir", type=Path, default=Path("data/fhv1_benchmarks"))
     parser.add_argument("--xray-1a", type=Path, default=Path("/tmp/fhv1_1_id/xray_1a.json"))
     parser.add_argument("--xray-1b", type=Path, default=Path("/tmp/fhv1_1_id/xray_1b.json"))
     parser.add_argument("--xray-v2", type=Path, default=Path("/tmp/fhv1_1_id_v2/xray_v2.json"))
     parser.add_argument("--bg-parquet", type=Path, default=Path("data/fhv1_1_research/background_embeddings_1k.parquet"))
+    parser.add_argument("--augmented-dir", type=Path, default=Path("data/fhv1_augmented"))
     parser.add_argument("--task012-report", type=Path, default=Path("reports/fhv1_1_xray_and_replay_report.md"))
+    parser.add_argument("--task013-report", type=Path, default=Path("reports/fhv1_1_id_v2_report.md"))
     parser.add_argument("--task011-report", type=Path, default=Path("reports/fhv1_task011_empirical_report.md"))
     parser.add_argument("--out", type=Path, default=Path("/tmp/fhv1_1_id/replay_results.json"))
     return parser
@@ -2330,6 +2332,28 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_arg_parser().parse_args(list(sys.argv[1:] if argv is None else argv))
+    if args.mode == "v3":
+        import fhv1_1_replay_v3 as replay_v3
+
+        out_dir = args.out
+        if out_dir.suffix == ".json":
+            out_dir = Path("/tmp/fhv1_1_id_v3")
+        bg_parquet = args.bg_parquet
+        legacy_bg = Path("data/fhv1_1_research/background_embeddings_1k.parquet")
+        if bg_parquet == legacy_bg:
+            bg_parquet = Path("data/fhv1_1_research/background_embeddings_1200.parquet")
+        text = replay_v3.run_replay_v3(
+            lancedb_uri=args.lancedb_uri,
+            benchmarks_dir=args.benchmarks_dir,
+            bg_parquet=bg_parquet,
+            augmented_dir=args.augmented_dir,
+            task012_report=args.task012_report,
+            task013_report=args.task013_report,
+            out_dir=out_dir,
+        )
+        print(text)
+        print(f"\nWrote {out_dir}")
+        return 0
     if args.mode == "v2":
         import fhv1_1_replay_v2 as replay_v2
 
