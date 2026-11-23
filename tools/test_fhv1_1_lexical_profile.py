@@ -170,7 +170,10 @@ class LexicalProfileTests(unittest.TestCase):
         self.assertEqual(profile.char_df.get("{", 0.0), 0.0)
         self.assertIn("{", outsider)
         braced = lex.score("{", profile)
-        self.assertEqual(braced.features["rare_nonletter_char_rate"], 1.0)
+        self.assertEqual(
+            braced.features["rare_nonletter_char_rate"],
+            1.0 / float(lex.RARE_RATE_SMOOTH_DENOM),
+        )
 
     def test_connector_sets_match_the_closed_lists(self) -> None:
         self.assertEqual(
@@ -316,7 +319,10 @@ class LexicalProfileTests(unittest.TestCase):
         scored = lex.score("!!!", self.profile)
         self.assertEqual(scored.features["max_repeated_punct_run"], 3.0)
         self.assertEqual(self.profile.char_df.get("!", 0.0), 0.0)
-        self.assertEqual(scored.features["rare_nonletter_char_rate"], 1.0)
+        self.assertEqual(
+            scored.features["rare_nonletter_char_rate"],
+            3.0 / float(lex.RARE_RATE_SMOOTH_DENOM),
+        )
         self.assertGreater(scored.excesses["max_repeated_punct_run"], 0.0)
         self.assertLess(scored.s_struct, 1.0)
 
@@ -458,8 +464,14 @@ class LexicalProfileTests(unittest.TestCase):
         for mark in ("/", "?", ",", "1", "4"):
             self.assertEqual(profile.char_df.get(mark, 0.0), 0.0, mark)
         fraction = lex.score("1/4", profile)
-        self.assertEqual(fraction.features["rare_nonletter_char_rate"], 1.0)
-        self.assertEqual(fraction.features["rare_nonletter_bigram_rate"], 1.0)
+        self.assertEqual(
+            fraction.features["rare_nonletter_char_rate"],
+            3.0 / float(lex.RARE_RATE_SMOOTH_DENOM),
+        )
+        self.assertEqual(
+            fraction.features["rare_nonletter_bigram_rate"],
+            2.0 / float(lex.RARE_RATE_SMOOTH_DENOM),
+        )
 
     def test_operators_stay_quiet_when_common_in_fit(self) -> None:
         profile = lex.fit([_CODE] * 24, granularity="full_doc")
@@ -493,7 +505,10 @@ class LexicalProfileTests(unittest.TestCase):
         self.assertLess(profile.char_df["{"], 0.01)
         self.assertLess(profile.char_doc_count["{"] * 100, profile.n_docs)
         scored = lex.score("{", profile)
-        self.assertEqual(scored.features["rare_nonletter_char_rate"], 1.0)
+        self.assertEqual(
+            scored.features["rare_nonletter_char_rate"],
+            1.0 / float(lex.RARE_RATE_SMOOTH_DENOM),
+        )
         self.assertGreater(scored.excesses["rare_nonletter_char_rate"], 0.0)
 
     def test_empirical_df_overrides_brace_story(self) -> None:
@@ -503,7 +518,10 @@ class LexicalProfileTests(unittest.TestCase):
         self.assertEqual(quiet.features["rare_nonletter_char_rate"], 0.0)
         absent = lex.score("|", profile)
         self.assertEqual(profile.char_df.get("|", 0.0), 0.0)
-        self.assertEqual(absent.features["rare_nonletter_char_rate"], 1.0)
+        self.assertEqual(
+            absent.features["rare_nonletter_char_rate"],
+            1.0 / float(lex.RARE_RATE_SMOOTH_DENOM),
+        )
 
     def test_single_rare_bigram_scores_higher_than_many(self) -> None:
         one = lex.score(self.probe + " =>", self.profile)
@@ -633,6 +651,96 @@ class LexicalProfileTests(unittest.TestCase):
         self.assertGreaterEqual(report.p50_us, 0.0)
         self.assertGreaterEqual(report.p99_us, 0.0)
         self.assertGreaterEqual(report.p99_us, report.p50_us)
+
+    def test_short_zero_punct_spanish_query_scores_exactly_one(self) -> None:
+        query = "como hacer salsa blanca"
+        self.assertEqual(query.count("."), 0)
+        self.assertEqual(query.count("?"), 0)
+        self.assertNotIn(",", query)
+        scored = lex.score(query, self.profile)
+        self.assertEqual(scored.features["punct_ratio"], 0.0)
+        self.assertEqual(scored.features["digit_ratio"], 0.0)
+        self.assertEqual(scored.excesses["punct_ratio"], 0.0)
+        self.assertEqual(scored.excesses["digit_ratio"], 0.0)
+        self.assertEqual(scored.excesses["max_repeated_punct_run"], 0.0)
+        self.assertEqual(scored.excesses["letter_ratio"], 0.0)
+        self.assertEqual(scored.s_struct, 1.0)
+
+    def test_latin_letters_with_tildes_have_zero_symbol_ratio(self) -> None:
+        text = "áéíóúñü ÁÉÍÓÚÑÜ café piña"
+        features = lex._feature_map(
+            text,
+            self.profile.n_docs,
+            self.profile.char_doc_count,
+            self.profile.bigram_doc_count,
+            self.profile.primary_language,
+        )
+        self.assertEqual(features["symbol_ratio"], 0.0)
+        self.assertGreater(features["letter_ratio"], 0.0)
+        for char in "áéíóúñüÁÉÍÓÚÑÜ":
+            self.assertTrue(lex._is_latin_letter(char), char)
+
+    def test_short_inverted_question_against_declarative_does_not_collapse(self) -> None:
+        declarative = [
+            "La masa de pan lleva harina agua sal y levadura en el bol.",
+            "Hornea la pizza con salsa de tomate y queso mozzarella.",
+            "El caldo de pollo lleva zanahoria papa y cebolla blanca.",
+            "Mezcla la manteca con azucar hasta obtener crema suave.",
+        ] * 10
+        profile = lex.fit(declarative)
+        self.assertEqual(profile.char_df.get("¿", 0.0), 0.0)
+        self.assertEqual(profile.char_df.get("?", 0.0), 0.0)
+        marks = lex.score("¿...?", profile)
+        self.assertLess(marks.features["rare_nonletter_char_rate"], 1.0)
+        self.assertLess(marks.excesses["rare_nonletter_char_rate"], 20.0)
+        self.assertLess(marks.excesses["rare_nonletter_bigram_rate"], 20.0)
+        question = lex.score("¿como hacer salsa blanca?", profile)
+        self.assertEqual(question.features["symbol_ratio"], 0.0)
+        self.assertLess(question.excesses["rare_nonletter_char_rate"], 20.0)
+        self.assertGreater(question.s_struct, 0.3)
+        self.assertGreater(abs(question.s_struct - 0.014), 0.2)
+
+    def test_rare_operator_burst_still_fires_strongly(self) -> None:
+        scored = lex.score("{}=>;::&&", self.profile)
+        self.assertGreater(scored.features["rare_nonletter_char_rate"], 0.0)
+        self.assertGreater(scored.features["rare_nonletter_bigram_rate"], 0.0)
+        self.assertLess(scored.s_struct, 0.05)
+
+    def test_extreme_short_punct_burst_still_fires_strongly(self) -> None:
+        scored = lex.score("???!!!", self.profile)
+        self.assertEqual(scored.features["letter_ratio"], 0.0)
+        self.assertGreater(scored.excesses["letter_ratio"], 0.0)
+        self.assertGreater(scored.excesses["punct_ratio"], 0.0)
+        self.assertGreater(scored.excesses["max_repeated_punct_run"], 0.0)
+        self.assertLess(scored.s_struct, 0.05)
+
+    def test_homoglyph_and_smuggle_and_stuffing_remain_strong(self) -> None:
+        zwsp = self.probe[:12] + "\u200b" + self.probe[12:]
+        cyrillic = self.probe.replace("a", "\u0430", 1)
+        fullwidth = self.probe.replace("a", "\uff41", 1)
+        for sample in (zwsp, cyrillic, fullwidth):
+            scored = lex.score(sample, self.profile)
+            self.assertLess(scored.s_struct, 1.0, sample[:40])
+            self.assertGreater(
+                scored.excesses["non_latin_or_control_unicode_ratio"],
+                0.0,
+                sample[:40],
+            )
+        self.assertLess(lex.score(_SMUGGLE, self.profile).s_struct, 0.05)
+        stuffed = lex.score(_STUFFING, self.profile)
+        self.assertGreater(stuffed.excesses["target_connector_ratio"], 0.0)
+        self.assertLess(stuffed.s_struct, 1.0)
+
+    def test_upper_only_channels_ignore_low_side_zero_punct(self) -> None:
+        scored = lex.score("papa horno caldo masa", self.profile)
+        self.assertEqual(scored.features["punct_ratio"], 0.0)
+        self.assertEqual(scored.features["digit_ratio"], 0.0)
+        self.assertLess(
+            scored.features["punct_ratio"],
+            self.profile.envelopes["punct_ratio"].p01,
+        )
+        self.assertEqual(scored.excesses["punct_ratio"], 0.0)
+        self.assertEqual(scored.excesses["digit_ratio"], 0.0)
 
 
 if __name__ == "__main__":
