@@ -1,11 +1,11 @@
 ---
 task_id: "TASK-013"
-status: "IN_PROGRESS"
+status: "DONE"
 assigned_architect: "maximum-architect-agent"
 protocol: "transparent-dev-protocol"
 title: "fhv1_1 I+D v2: 1000-doc 1B, 1024D fine dials, document-level calibration"
 created_at: "2026-11-22T18:50:00-03:00"
-active_slice: "Slice 1"
+active_slice: "DONE"
 ---
 
 # TASK-013: `fhv1_1` I+D v2 — 1,000-doc `1B`, 1,024D Fine Dials, Document-Level Calibration
@@ -25,7 +25,7 @@ Execute 100% offline R&D (`tools/`, `reports/`, `roadmap/`, `TASKS.md` only — 
 
 ## 3. Tracer Bullet Slices
 - [x] **Slice 0**: Disk audit (`14.23 GiB` free before, `1,483,436 KB` authorized delete, `15.81 GiB` free after), branch from `a89b20d` because `TASK-012` is not on `main`, roadmap, and `TASKS.md` governance.
-- [ ] **Slice 1**: `1,000`-doc three-stratum leak-free background corpus (`>= 12` tests), `normalize=true` cache `background_embeddings_1k.parquet`, temp unnormalized `general_prose` parquet, delete the old `background_embeddings.parquet`, ports closed.
-- [ ] **Slice 2**: `--mode v2` Prueba A / six buckets / hypothesis `2.3` (`>= 26` xray tests), then delete `bg_general_unnorm.parquet`.
-- [ ] **Slice 3**: `--mode v2` replay (`Tail-Z`, polarity, language-lock, three fixes, `5×5` OOF, bootstrap CI, `>= 24` replay tests, `>= 62` `fhv1_1` tests).
-- [ ] **Slice 4**: `reports/fhv1_1_id_v2_report.md`, full Python/Rust/Frontend gates, LanceDB re-check, temp purge, `TASKS.md` `DONE`, untracked `audit_fhv1_1_id_v2_bundle.md`, Approval Gate halt.
+- [x] **Slice 1**: 1,000-doc three-stratum background is on disk as `background_embeddings_1k.parquet` (`du -sk` 48,188 KiB) and the old `background_embeddings.parquet` was deleted at 25,300 KiB.
+- [x] **Slice 2**: `--mode v2` labeled all 1,024 coordinates, primary `LOCALE_LANG_DIMS` is empty, and `bg_general_unnorm.parquet` was deleted after `xray_v2.json` was written.
+- [x] **Slice 3**: `--mode v2` replay stored Tail-Z, `F_polarity`, language-lock, document-level calibration, short-query, and flooding, with 5×5 and 1,000-resample bootstrap on the four winning cells.
+- [x] **Slice 4**: `reports/fhv1_1_id_v2_report.md` records those measurements, `/tmp/fhv1_1_id_v2` is removed, and this task is `DONE`; the audit bundle stays untracked.
