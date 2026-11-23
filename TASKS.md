@@ -5,7 +5,7 @@ assigned_architect: "maximum-architect-agent"
 protocol: "transparent-dev-protocol"
 title: "fhv1_1 I+D v3: full-1024D directional dials and auto-calibrated lexical guardrail"
 created_at: "2026-11-23T11:30:00-03:00"
-active_slice: "Slice 3"
+active_slice: "Slice 4"
 ---
 
 # TASK-014: `fhv1_1` I+D v3 — Full-1,024D Directional Dials, Auto-Calibrated Lexical/Symbol Guardrail, 1,200-Doc `1B`
@@ -26,5 +26,5 @@ Execute 100% offline R&D (`tools/`, `reports/`, `roadmap/`, `TASKS.md` only) per
 - [x] **Slice 0**: Phase-0 integrity audit passed (`12,074,392` KiB free, LanceDB `DIFF_IDENTICAL=0`, Python `103/103`, cargo `173/173`, frontend `70/70`). Branch cut from `main @ 89f1cba`. Roadmap and this task file registered.
 - [x] **Slice 1**: Append `200` `structural_symbol_noise` docs, refresh `background_embeddings_1200.parquet` at `normalize=true`, extend contrast presets, delete `background_embeddings_1k.parquet` only after verification.
 - [x] **Slice 2**: Auto-calibrated character, non-letter, and connector guardrail in `tools/fhv1_1_lexical_profile.py` with `>= 26` tests.
-- [ ] **Slice 3**: `--mode v3` all-1,024D directional scorers, swept `F2_L2` / `Tail-Z` / `S_struct` hooks, nested OOF and document-level `CAL_ONLY`, `>= 30` tests, JSON under `/tmp/fhv1_1_id_v3/`.
+- [x] **Slice 3**: `--mode v3` all-1,024D directional scorers, swept `F2_L2` / `Tail-Z` / `S_struct` hooks, nested OOF and document-level `CAL_ONLY`, `>= 30` tests, JSON under `/tmp/fhv1_1_id_v3/`.
 - [ ] **Slice 4**: Report from those JSON files, cleanup, full gates, `TASK-014` `DONE`, untracked audit bundle, halt before push or merge.
