@@ -217,6 +217,40 @@ def _nfkc_casefold(text: str) -> str:
     return unicodedata.normalize("NFKC", text).casefold()
 
 
+def _collapsed_mask(text: str) -> str:
+    """Map letters to L and digits to D, drop whitespace, collapse each run."""
+    mapped: list[str] = []
+    for ch in _delete_unicode_whitespace(text):
+        if ch.isalpha():
+            mapped.append("L")
+        elif ch.isdigit():
+            mapped.append("D")
+        else:
+            mapped.append(ch)
+    return re.sub(r"D+", "D", re.sub(r"L+", "L", "".join(mapped)))
+
+
+def _char_4grams(text: str) -> set[str]:
+    compact = _delete_unicode_whitespace(text)
+    if len(compact) < 4:
+        return set()
+    return {compact[i : i + 4] for i in range(len(compact) - 3)}
+
+
+def _max_char_4gram_df(rows: list[dict[str, Any]]) -> tuple[int, str]:
+    counts: Counter[str] = Counter()
+    for row in rows:
+        for gram in _char_4grams(row["text"]):
+            counts[gram] += 1
+    if not counts:
+        return 0, ""
+    gram, freq = counts.most_common(1)[0]
+    return freq, gram
+
+
+_ALPHA_TOKEN_RE = re.compile(r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+")
+
+
 def _global_id_index(stratum: str, local_idx: int) -> int:
     if stratum == "general_prose":
         return local_idx
@@ -710,6 +744,46 @@ class BackgroundCorpusContractTest(unittest.TestCase):
             if len(bad) >= 12:
                 break
         self.assertEqual(bad, [])
+
+    def test_structural_symbol_noise_rejects_repeated_templates(self) -> None:
+        for lang in ("en", "es"):
+            block = [
+                row
+                for row in self.rows
+                if row["lang"] == lang and row["stratum"] == "structural_symbol_noise"
+            ]
+            by_topic: dict[str, list[dict[str, Any]]] = {topic: [] for topic in NOISE_TOPICS}
+            for row in block:
+                by_topic[row["topic"]].append(row)
+            digit_masks = [_collapsed_mask(row["text"]) for row in by_topic["digit_dump"]]
+            self.assertEqual(len(digit_masks), 25, lang)
+            self.assertEqual(
+                len(set(digit_masks)),
+                25,
+                f"{lang} digit_dump masks {Counter(digit_masks).most_common(3)}",
+            )
+            mixed_rows = by_topic["mixed_low_lexical"]
+            mixed_masks = [_collapsed_mask(row["text"]) for row in mixed_rows]
+            self.assertEqual(len(mixed_masks), 25, lang)
+            self.assertEqual(
+                len(set(mixed_masks)),
+                25,
+                f"{lang} mixed masks {Counter(mixed_masks).most_common(3)}",
+            )
+            token_rows: Counter[str] = Counter()
+            for row in mixed_rows:
+                tokens = {
+                    token.casefold()
+                    for token in _ALPHA_TOKEN_RE.findall(row["text"])
+                    if len(token) >= 4
+                }
+                for token in tokens:
+                    token_rows[token] += 1
+            repeated = [(token, freq) for token, freq in token_rows.items() if freq > 2]
+            self.assertEqual(repeated, [], f"{lang} long-token df")
+            for topic in ("punct_burst", "symbol_operator"):
+                freq, gram = _max_char_4gram_df(by_topic[topic])
+                self.assertLessEqual(freq, 4, f"{lang} {topic} 4-gram {gram!r} df={freq}")
 
 
 if __name__ == "__main__":

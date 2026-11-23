@@ -998,203 +998,203 @@
 {"id": "bg-es-0498", "lang": "es", "stratum": "near_ood_neighbor", "topic": "agronomia_cosecha", "text": "Guardar la cosecha en silo bolsa exige humedad bajo 14 por ciento y un piso que no junte agua. El lote embolsado el lunes estaba en 13.6 y el piso es una loma. Se midió la bolsa al tercer día: 13.8, sin olor de fermento. Una subida sobre 15 exigiria extraer y secar, con merma y con flete doble.\n\nLa bolsa no es el destino final. El contrato de venta de mayo pide entrega en el acopio. Hasta entonces el grano sigue siendo del productor y el seguro de silo bolsa, no el de granizo, es el que aplica. El parte semanal incluye metros de bolsa, humedad y la fecha prevista de extracción."}
 {"id": "bg-es-0499", "lang": "es", "stratum": "near_ood_neighbor", "topic": "agronomia_cosecha", "text": "El personal de cosecha rota en turnos de diez horas con una hora de solape para pasar el parte. En el solape se informan atascos, humedad y cualquier mezcla de cultivares, que el acopio paga distinto. No se mezcla el cultivar corto con el largo en la misma tolva. Una mezcla fuerza la venta del camión como condición cámara y baja el precio.\n\nEl martes el turno mañana cortó el cultivar largo hasta el alambrado medio y dejó el corto para la tarde. El parte lo dice y las cartas de porte coinciden. No hubo mezcla. El precio del largo se mantuvo. El corto, con mas proteina, se vendió en el contrato separado que ya estaba abierto."}
 {"id": "bg-es-0500", "lang": "es", "stratum": "near_ood_neighbor", "topic": "agronomia_cosecha", "text": "Cerrar la cosecha del establecimiento pide tres numeros que tienen que coincidir: hectareas de los lotes, toneladas de las cartas y el remanente en planta. Si la suma de cartas más el remanente no explica el rendimiento por hectarea, hay grano sin carta o una carta duplicada. Este año las 640 hectareas dieron 3520 toneladas en cartas y 80 en el silo propio. El rendimiento medio es 5.6 toneladas por hectarea, alineado con el monitor despues de la recalibracion.\n\nQueda abierta solo la bolsa del lote 3, con 40 toneladas ya incluidas en las 80. No hay camion sin carta. El seguro de granizo se cierra con el acta de fin de cosecha, que el inspector firma cuando no queda cultivo en pie. Esa acta no incluye el grano embolsado: ese riesgo ya pasó al seguro de almacen."}
-{"id": "bg-en-0501", "lang": "en", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "?????!.;?!.;?!.;?!.;?!.;?!.;?!*-?!*-?!*-?!"}
-{"id": "bg-en-0502", "lang": "en", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "!???-\"-\"-\"-\"-\"-\"-\"-\"-\"-\"-\"-\",'.;,'.;,'.;,'."}
-{"id": "bg-en-0503", "lang": "en", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": ".???,;^~,;^~,;^~,;^~,;^~,;^~^~!?^~!?^~!?^~!?"}
-{"id": "bg-en-0504", "lang": "en", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": ";????!*-?!*-?!*-?!*-?!*-?!*-.;*-.;*-.;*-.;*-."}
-{"id": "bg-en-0505", "lang": "en", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": ":???.,.,.,.,.,.,.,.,.,.,.,.,\"'~^\"'~^\"'~^\"'~^\"'"}
-{"id": "bg-en-0506", "lang": "en", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "-???^?!~^?!~^?!~^?!~^?!~^?!~.;?!.;?!.;?!.;?!.;?"}
-{"id": "bg-en-0507", "lang": "en", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "'???*-.;*-.;*-.;*-.;*-.;*-.;-'\"*-'\"*-'\"*-'\"*-'\"*"}
-{"id": "bg-en-0508", "lang": "en", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "\"???\"~\"~\"~\"~\"~\"~\"~\"~\"~\"~\"~\"~^;,~^;,~^;,~^;,~^;,~^"}
-{"id": "bg-en-0509", "lang": "en", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "*????;.!?;.!?;.!?;.!?;.!?;.!?!*-?!*-?!*-?!"}
-{"id": "bg-en-0510", "lang": "en", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": ",???-'\"*-'\"*-'\"*-'\"*-'\"*-'\"*,'.;,'.;,'.;,'."}
-{"id": "bg-en-0511", "lang": "en", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "~???,^,^,^,^,^,^,^,^,^,^,^,^^~!?^~!?^~!?^~!?"}
-{"id": "bg-en-0512", "lang": "en", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "^????-*!?-*!?-*!?-*!?-*!?-*!.;*-.;*-.;*-.;*-."}
-{"id": "bg-en-0513", "lang": "en", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "?!??.;,'.;,'.;,'.;,'.;,'.;,'\"'~^\"'~^\"'~^\"'~^\"'"}
-{"id": "bg-en-0514", "lang": "en", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "!!??^!^!^!^!^!^!^!^!^!^!^!^!.;?!.;?!.;?!.;?!.;?"}
-{"id": "bg-en-0515", "lang": "en", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": ".!??*;.-*;.-*;.-*;.-*;.-*;.--'\"*-'\"*-'\"*-'\"*-'\"*"}
-{"id": "bg-en-0516", "lang": "en", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": ";!??\"'~^\"'~^\"'~^\"'~^\"'~^\"'~^^;,~^;,~^;,~^;,~^;,~^"}
-{"id": "bg-en-0517", "lang": "en", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": ":!???.?.?.?.?.?.?.?.?.?.?.?.?!*-?!*-?!*-?!"}
-{"id": "bg-en-0518", "lang": "en", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "-!??-*\"'-*\"'-*\"'-*\"'-*\"'-*\"','.;,'.;,'.;,'."}
-{"id": "bg-en-0519", "lang": "en", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "'!??,~^;,~^;,~^;,~^;,~^;,~^;^~!?^~!?^~!?^~!?"}
-{"id": "bg-en-0520", "lang": "en", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "\"!???*?*?*?*?*?*?*?*?*?*?*?*.;*-.;*-.;*-.;*-."}
-{"id": "bg-en-0521", "lang": "en", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "*!??.',;.',;.',;.',;.',;.',;\"'~^\"'~^\"'~^\"'~^\"'"}
-{"id": "bg-en-0522", "lang": "en", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": ",!??^~!?^~!?^~!?^~!?^~!?^~!?.;?!.;?!.;?!.;?!.;?"}
-{"id": "bg-en-0523", "lang": "en", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "~!??*.*.*.*.*.*.*.*.*.*.*.*.-'\"*-'\"*-'\"*-'\"*-'\"*"}
-{"id": "bg-en-0524", "lang": "en", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "^!??\"^~'\"^~'\"^~'\"^~'\"^~'\"^~'^;,~^;,~^;,~^;,~^;,~^"}
-{"id": "bg-en-0525", "lang": "en", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "?.???!.;?!.;?!.;?!.;?!.;?!.;?!*-?!*-?!*-?!"}
-{"id": "bg-en-0526", "lang": "en", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "310000-1980-01-01/00:00:03/100000|11.20.30.40:4000|1.10.30|2/9|5000,5011,5022,5033|ffeeaedeedbeacbf|aaefcfbc-1000-2100-3000-400000000000"}
-{"id": "bg-en-0527", "lang": "en", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "310001-1981-02-03/03:05:10/100001|11.21.33.45:4001|2.11.31|3/10|5019,5030,5041,5052|caaaadcfcbbfdfbc|cbabcefe-1001-2101-3000-400000000001"}
-{"id": "bg-en-0528", "lang": "en", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "310002-1982-03-05/06:10:17/100002|11.22.36.50:4002|3.12.32|4/11|5038,5049,5060,5071|febfaaadcfadaaad|fccacbef-1002-2102-3000-400000000002"}
-{"id": "bg-en-0529", "lang": "en", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "310003-1983-04-07/09:15:24/100003|11.23.39.55:4003|4.13.33|5/12|5057,5068,5079,5090|bfdfbfefacaadbad|cddaeaad-1003-2103-3000-400000000003"}
-{"id": "bg-en-0530", "lang": "en", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "310004-1984-05-09/12:20:31/100004|11.24.42.60:4004|5.14.34|6/9|5076,5087,5098,5109|eafbbccafafdaeaa|fefcfdef-1004-2104-3000-400000000004"}
-{"id": "bg-en-0531", "lang": "en", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "310005-1985-06-11/15:25:38/100005|11.25.45.65:4005|1.15.35|7/10|5095,5106,5117,5128|bbbabaeefefacabb|dfbbfbca-1005-2105-3000-400000000005"}
-{"id": "bg-en-0532", "lang": "en", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "310006-1986-07-13/18:30:45/100006|11.26.48.70:4006|2.16.36|8/11|5114,5125,5136,5147|dcccbdcadaadfdbb|aeddfeae-1006-2106-3000-400000000006"}
-{"id": "bg-en-0533", "lang": "en", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "310007-1987-08-15/21:35:52/100007|11.27.51.75:4007|3.17.37|9/12|5133,5144,5155,5166|adececacbeeaceac|dfedfdea-1007-2107-3000-400000000007"}
-{"id": "bg-en-0534", "lang": "en", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "310008-1988-09-17/00:40:59/100008|11.28.54.80:4008|4.18.38|10/9|5152,5163,5174,5185|deabeffdfcfefbaf|faacaaab-1008-2108-3000-400000000008"}
-{"id": "bg-en-0535", "lang": "en", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "310009-1989-10-19/03:45:06/100009|11.29.57.85:4009|5.19.39|11/10|5171,5182,5193,5204|ffcdeedbabfbecaf|cbceaeef-1009-2109-3000-400000000009"}
-{"id": "bg-en-0536", "lang": "en", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "310010-1990-11-21/06:50:13/100010|11.30.60.40:4010|1.20.40|12/11|5190,5201,5212,5223|caddeafdedeebffa|fceeabdb-1010-2110-3000-400000000010"}
-{"id": "bg-en-0537", "lang": "en", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "310011-1991-12-23/09:55:20/100011|11.31.63.45:4011|2.21.41|13/12|5209,5220,5231,5242|fbfefddecbebebfd|cdffcabd-1011-2111-3000-400000000011"}
-{"id": "bg-en-0538", "lang": "en", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "310012-1992-01-25/12:00:27/100012|11.32.66.50:4012|3.22.42|14/9|5228,5239,5250,5261|ccbefcbccffebeed|eebfcdfa-1012-2112-3000-400000000012"}
-{"id": "bg-en-0539", "lang": "en", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "310013-1993-02-27/15:05:34/100013|11.33.69.55:4013|4.23.43|15/10|5247,5258,5269,5280|ebdafffeabdbefee|bfbadcbc-1013-2113-3000-400000000013"}
-{"id": "bg-en-0540", "lang": "en", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "310014-1994-03-02/18:10:41/100014|11.34.72.60:4014|5.24.44|16/11|5266,5277,5288,5299|bceffebfffefbcef|eacadefe-1014-2114-3000-400000000014"}
-{"id": "bg-en-0541", "lang": "en", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "310015-1995-04-04/21:15:48/100015|11.35.75.65:4015|1.25.45|17/12|5285,5296,5307,5318|edafcaadfeecddfb|abeadddf-1015-2115-3000-400000000015"}
-{"id": "bg-en-0542", "lang": "en", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "310016-1996-05-06/00:20:55/100016|11.36.78.70:4016|2.26.46|18/9|5304,5315,5326,5337|aeaacfefdadfaafc|dbabdabd-1016-2116-3000-400000000016"}
-{"id": "bg-en-0543", "lang": "en", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "310017-1980-06-08/03:25:02/100017|11.37.81.75:4017|3.27.47|19/10|5323,5334,5345,5356|dfcacccabedcdbfd|aacbefaf-1017-2117-3000-400000000017"}
-{"id": "bg-en-0544", "lang": "en", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "310018-1981-07-10/06:30:09/100018|11.38.84.80:4018|4.28.48|20/11|5342,5353,5364,5375|aadccbaefcefafef|cbddecca-1018-2118-3000-400000000018"}
-{"id": "bg-en-0545", "lang": "en", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "310019-1982-08-12/09:35:16/100019|11.39.87.85:4019|5.29.49|21/12|5361,5372,5383,5394|dbfbddcaaecdfaea|fcfcaaae-1019-2119-3000-400000000019"}
-{"id": "bg-en-0546", "lang": "en", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "310020-1983-09-14/12:40:23/100020|11.40.90.40:4020|1.30.50|22/9|5380,5391,5402,5413|fcbbdcabeddacddb|cdbcadea-1020-2120-3000-400000000020"}
-{"id": "bg-en-0547", "lang": "en", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "310021-1984-10-16/15:45:30/100021|11.41.93.45:4021|2.31.51|23/10|5399,5410,5421,5432|ccdddfedcbddfedd|fedebccb-1021-2121-3000-400000000021"}
-{"id": "bg-en-0548", "lang": "en", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "310022-1985-11-18/18:50:37/100022|11.42.96.50:4022|3.32.52|24/11|5418,5429,5440,5451|fdecdedbcfcacbde|bfedbfaf-1022-2122-3000-400000000022"}
-{"id": "bg-en-0549", "lang": "en", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "310023-1986-12-20/21:55:44/100023|11.43.99.55:4023|4.33.53|25/12|5437,5448,5459,5470|beaedbbcabcdfccf|eaafbccb-1023-2123-3000-400000000023"}
-{"id": "bg-en-0550", "lang": "en", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "310024-1987-01-22/00:00:51/100024|11.44.32.60:4024|5.34.54|26/9|5456,5467,5478,5489|edceafdeffbacacf|bbcfbabc-1024-2124-3000-400000000024"}
-{"id": "bg-en-0551", "lang": "en", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "{{{|}|{}|{}|{}|{}|{}|{}|{}|{=>->::{}|//=>"}
-{"id": "bg-en-0552", "lang": "en", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "{}{|/<>/<>/<>/<>/<>/<>/<>/<>->::=><>/<>//*+*/=>"}
-{"id": "bg-en-0553", "lang": "en", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "{|{|[]=[]=[]=[]=[]=[]=[]=[]=::=>->[]=[]=[]=//=>"}
-{"id": "bg-en-0554", "lang": "en", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "{<{||+{}|+{}|+{}|+{}|+{}|+{}=>::->+{}|+{}|+{}|+{}|/*+*/=>"}
-{"id": "bg-en-0555", "lang": "en", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "{>{|<=/<=/<=/<=/<=/<=/<=/<=/->=>::=/<//=>"}
-{"id": "bg-en-0556", "lang": "en", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "{[{|{}|{}|{}|{}|{}|{}|{}|{}|=>->::{}|{}|/*+*/=>"}
-{"id": "bg-en-0557", "lang": "en", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "{]{|>/<>/<>/<>/<>/<>/<>/<>/<->::=><>/<>/<>///=>"}
-{"id": "bg-en-0558", "lang": "en", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "{={|=[]=[]=[]=[]=[]=[]=[]=[]::=>->[]=[]=[]=[]=/*+*/=>"}
-{"id": "bg-en-0559", "lang": "en", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "{/{|+{}|+{}|+{}|+{}|+{}|+{}|=>::->+{}|//=>"}
-{"id": "bg-en-0560", "lang": "en", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "{+{|/<=/<=/<=/<=/<=/<=/<=/<=->=>::=/<=/</*+*/=>"}
-{"id": "bg-en-0561", "lang": "en", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "{{}||{}|{}|{}|{}|{}|{}|{}|{}=>->::{}|{}|{}|//=>"}
-{"id": "bg-en-0562", "lang": "en", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "{}}|<>/<>/<>/<>/<>/<>/<>/<>/->::=><>/<>/<>/<>//*+*/=>"}
-{"id": "bg-en-0563", "lang": "en", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "{|}|]=[]=[]=[]=[]=[]=[]=[]=[::=>->[]=//=>"}
-{"id": "bg-en-0564", "lang": "en", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "{<}|{}|+{}|+{}|+{}|+{}|+{}|+=>::->+{}|+{}|/*+*/=>"}
-{"id": "bg-en-0565", "lang": "en", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "{>}|=/<=/<=/<=/<=/<=/<=/<=/<->=>::=/<=/<=/<//=>"}
-{"id": "bg-en-0566", "lang": "en", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "{[}|}|{}|{}|{}|{}|{}|{}|{}|{=>->::{}|{}|{}|{}|/*+*/=>"}
-{"id": "bg-en-0567", "lang": "en", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "{]}|/<>/<>/<>/<>/<>/<>/<>/<>->::=><>///=>"}
-{"id": "bg-en-0568", "lang": "en", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "{=}|[]=[]=[]=[]=[]=[]=[]=[]=::=>->[]=[]=/*+*/=>"}
-{"id": "bg-en-0569", "lang": "en", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "{/}|}|+{}|+{}|+{}|+{}|+{}|+{=>::->+{}|+{}|+{}|//=>"}
-{"id": "bg-en-0570", "lang": "en", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "{+}|<=/<=/<=/<=/<=/<=/<=/<=/->=>::=/<=/<=/<=/</*+*/=>"}
-{"id": "bg-en-0571", "lang": "en", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "{{||{}|{}|{}|{}|{}|{}|{}|{}|=>->::{}|//=>"}
-{"id": "bg-en-0572", "lang": "en", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "{}||>/<>/<>/<>/<>/<>/<>/<>/<->::=><>/<>//*+*/=>"}
-{"id": "bg-en-0573", "lang": "en", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "{|||=[]=[]=[]=[]=[]=[]=[]=[]::=>->[]=[]=[]=//=>"}
-{"id": "bg-en-0574", "lang": "en", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "{<|||+{}|+{}|+{}|+{}|+{}|+{}=>::->+{}|+{}|+{}|+{}|/*+*/=>"}
-{"id": "bg-en-0575", "lang": "en", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "{>||/<=/<=/<=/<=/<=/<=/<=/<=->=>::=/<//=>"}
-{"id": "bg-en-0576", "lang": "en", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "branka clanka dranka flanka granka planka [1700/13]"}
-{"id": "bg-en-0577", "lang": "en", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "skanka snanka | tranka kranka => pranka blanka (1729:16)"}
-{"id": "bg-en-0578", "lang": "en", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "glanka franka vranka -> brenka clenka :: drenka +1758-19"}
-{"id": "bg-en-0579", "lang": "en", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "flenka/grenka plenka skenka snenka trenka <1787>"}
-{"id": "bg-en-0580", "lang": "en", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "krenka prenka { blenka glenka } frenka vrenka @1816.44"}
-{"id": "bg-en-0581", "lang": "en", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "brinka clinka drinka flinka grinka plinka [1845/28]"}
-{"id": "bg-en-0582", "lang": "en", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "skinka sninka | trinka krinka => prinka blinka (1874:31)"}
-{"id": "bg-en-0583", "lang": "en", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "glinka frinka vrinka -> bronka clonka :: dronka +1903-34"}
-{"id": "bg-en-0584", "lang": "en", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "flonka/gronka plonka skonka snonka tronka <1932>"}
-{"id": "bg-en-0585", "lang": "en", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "kronka pronka { blonka glonka } fronka vronka @1961.49"}
-{"id": "bg-en-0586", "lang": "en", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "brunka clunka drunka flunka grunka plunka [1990/43]"}
-{"id": "bg-en-0587", "lang": "en", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "skunka snunka | trunka krunka => prunka blunka (2019:46)"}
-{"id": "bg-en-0588", "lang": "en", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "glunka frunka vrunka -> bralpa clalpa :: dralpa +2048-49"}
-{"id": "bg-en-0589", "lang": "en", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "flalpa/gralpa plalpa skalpa snalpa tralpa <2077>"}
-{"id": "bg-en-0590", "lang": "en", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "kralpa pralpa { blalpa glalpa } fralpa vralpa @2106.54"}
-{"id": "bg-en-0591", "lang": "en", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "brelpa clelpa drelpa flelpa grelpa plelpa [2135/58]"}
-{"id": "bg-en-0592", "lang": "en", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "skelpa snelpa | trelpa krelpa => prelpa blelpa (2164:61)"}
-{"id": "bg-en-0593", "lang": "en", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "glelpa frelpa vrelpa -> brilpa clilpa :: drilpa +2193-64"}
-{"id": "bg-en-0594", "lang": "en", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "flilpa/grilpa plilpa skilpa snilpa trilpa <2222>"}
-{"id": "bg-en-0595", "lang": "en", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "krilpa prilpa { blilpa glilpa } frilpa vrilpa @2251.59"}
-{"id": "bg-en-0596", "lang": "en", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "brolpa clolpa drolpa flolpa grolpa plolpa [2280/73]"}
-{"id": "bg-en-0597", "lang": "en", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "skolpa snolpa | trolpa krolpa => prolpa blolpa (2309:76)"}
-{"id": "bg-en-0598", "lang": "en", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "glolpa frolpa vrolpa -> brulpa clulpa :: drulpa +2338-79"}
-{"id": "bg-en-0599", "lang": "en", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "flulpa/grulpa plulpa skulpa snulpa trulpa <2367>"}
-{"id": "bg-en-0600", "lang": "en", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "krulpa prulpa { blulpa glulpa } frulpa vrulpa @2396.64"}
-{"id": "bg-es-0501", "lang": "es", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "-;?!?!.;?!.;?!.;?!.;?!.;?!.;?!*-?!*-?!*-?!"}
-{"id": "bg-es-0502", "lang": "es", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "';?!-\"-\"-\"-\"-\"-\"-\"-\"-\"-\"-\"-\",'.;,'.;,'.;,'."}
-{"id": "bg-es-0503", "lang": "es", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "\";?!,;^~,;^~,;^~,;^~,;^~,;^~^~!?^~!?^~!?^~!?"}
-{"id": "bg-es-0504", "lang": "es", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "*;?!?!*-?!*-?!*-?!*-?!*-?!*-.;*-.;*-.;*-.;*-."}
-{"id": "bg-es-0505", "lang": "es", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": ",;?!.,.,.,.,.,.,.,.,.,.,.,.,\"'~^\"'~^\"'~^\"'~^\"'"}
-{"id": "bg-es-0506", "lang": "es", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "~;?!^?!~^?!~^?!~^?!~^?!~^?!~.;?!.;?!.;?!.;?!.;?"}
-{"id": "bg-es-0507", "lang": "es", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "^;?!*-.;*-.;*-.;*-.;*-.;*-.;-'\"*-'\"*-'\"*-'\"*-'\"*"}
-{"id": "bg-es-0508", "lang": "es", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "?:?!\"~\"~\"~\"~\"~\"~\"~\"~\"~\"~\"~\"~^;,~^;,~^;,~^;,~^;,~^"}
-{"id": "bg-es-0509", "lang": "es", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "!:?!?;.!?;.!?;.!?;.!?;.!?;.!?!*-?!*-?!*-?!"}
-{"id": "bg-es-0510", "lang": "es", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": ".:?!-'\"*-'\"*-'\"*-'\"*-'\"*-'\"*,'.;,'.;,'.;,'."}
-{"id": "bg-es-0511", "lang": "es", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": ";:?!,^,^,^,^,^,^,^,^,^,^,^,^^~!?^~!?^~!?^~!?"}
-{"id": "bg-es-0512", "lang": "es", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "::?!?-*!?-*!?-*!?-*!?-*!?-*!.;*-.;*-.;*-.;*-."}
-{"id": "bg-es-0513", "lang": "es", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "-:?!.;,'.;,'.;,'.;,'.;,'.;,'\"'~^\"'~^\"'~^\"'~^\"'"}
-{"id": "bg-es-0514", "lang": "es", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "':?!^!^!^!^!^!^!^!^!^!^!^!^!.;?!.;?!.;?!.;?!.;?"}
-{"id": "bg-es-0515", "lang": "es", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "\":?!*;.-*;.-*;.-*;.-*;.-*;.--'\"*-'\"*-'\"*-'\"*-'\"*"}
-{"id": "bg-es-0516", "lang": "es", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "*:?!\"'~^\"'~^\"'~^\"'~^\"'~^\"'~^^;,~^;,~^;,~^;,~^;,~^"}
-{"id": "bg-es-0517", "lang": "es", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": ",:?!?.?.?.?.?.?.?.?.?.?.?.?.?!*-?!*-?!*-?!"}
-{"id": "bg-es-0518", "lang": "es", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "~:?!-*\"'-*\"'-*\"'-*\"'-*\"'-*\"','.;,'.;,'.;,'."}
-{"id": "bg-es-0519", "lang": "es", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "^:?!,~^;,~^;,~^;,~^;,~^;,~^;^~!?^~!?^~!?^~!?"}
-{"id": "bg-es-0520", "lang": "es", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "?-?!?*?*?*?*?*?*?*?*?*?*?*?*.;*-.;*-.;*-.;*-."}
-{"id": "bg-es-0521", "lang": "es", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "!-?!.',;.',;.',;.',;.',;.',;\"'~^\"'~^\"'~^\"'~^\"'"}
-{"id": "bg-es-0522", "lang": "es", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": ".-?!^~!?^~!?^~!?^~!?^~!?^~!?.;?!.;?!.;?!.;?!.;?"}
-{"id": "bg-es-0523", "lang": "es", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": ";-?!*.*.*.*.*.*.*.*.*.*.*.*.-'\"*-'\"*-'\"*-'\"*-'\"*"}
-{"id": "bg-es-0524", "lang": "es", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": ":-?!\"^~'\"^~'\"^~'\"^~'\"^~'\"^~'^;,~^;,~^;,~^;,~^;,~^"}
-{"id": "bg-es-0525", "lang": "es", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "--?!?!.;?!.;?!.;?!.;?!.;?!.;?!*-?!*-?!*-?!"}
-{"id": "bg-es-0526", "lang": "es", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "640000-1980-01-01/00:00:03/100000|18.20.30.40:4200|1.10.39|2/15|5070,5081,5092,5103|ffbdefffeaeaadff|cbbebadd-1000-2100-3050-400000000000"}
-{"id": "bg-es-0527", "lang": "es", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "640001-1981-02-03/03:05:10/100001|18.21.33.45:4201|2.11.40|3/16|5089,5100,5111,5122|cadceeddeeeddbff|fcddcfbb-1001-2101-3050-400000000001"}
-{"id": "bg-es-0528", "lang": "es", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "640002-1982-03-05/06:10:17/100002|18.22.36.50:4202|3.12.41|4/17|5108,5119,5130,5141|fbfceacedadaccea|cdffcbdc-1002-2102-3050-400000000002"}
-{"id": "bg-es-0529", "lang": "es", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "640003-1983-04-07/09:15:24/100003|18.23.39.55:4203|4.13.42|5/18|5127,5138,5149,5160|ccaeffaabeddffed|eeafcace-1003-2103-3050-400000000003"}
-{"id": "bg-es-0530", "lang": "es", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "640004-1984-05-09/12:20:31/100004|18.24.42.60:4204|5.14.43|6/15|5146,5157,5168,5179|ebcdfccebceacadd|bfcecdaa-1004-2104-3050-400000000004"}
-{"id": "bg-es-0531", "lang": "es", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "640005-1985-06-11/15:25:38/100005|18.25.45.65:4205|1.15.44|7/16|5165,5176,5187,5198|bcefbbafffcefdfe|eaeadcee-1005-2105-3050-400000000005"}
-{"id": "bg-es-0532", "lang": "es", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "640006-1986-07-13/18:30:45/100006|18.26.48.70:4206|2.16.45|8/17|5184,5195,5206,5217|edfebeebdddbcefb|abafdfcf-1006-2106-3050-400000000006"}
-{"id": "bg-es-0533", "lang": "es", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "640007-1987-08-15/21:35:52/100007|18.27.51.75:4207|3.17.46|9/18|5203,5214,5225,5236|aebabccfcbbeebeb|dabbddeb-1007-2107-3050-400000000007"}
-{"id": "bg-es-0534", "lang": "es", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "640008-1988-09-17/00:40:59/100008|18.28.54.80:4208|4.18.47|10/15|5222,5233,5244,5255|dfdacfaacdbbbdec|abdbdacf-1008-2108-3050-400000000008"}
-{"id": "bg-es-0535", "lang": "es", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "640009-1989-10-19/03:45:06/100009|18.29.57.85:4209|5.19.48|11/16|5241,5252,5263,5274|aaffcedcabceeaef|ccfaafaa-1009-2109-3050-400000000009"}
-{"id": "bg-es-0536", "lang": "es", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "640010-1990-11-21/06:50:13/100010|18.30.60.40:4210|1.20.49|12/17|5260,5271,5282,5293|dbabcbbaefabbbdf|fdbcacfc-1010-2110-3050-400000000010"}
-{"id": "bg-es-0537", "lang": "es", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "640011-1991-12-23/09:55:20/100011|18.31.63.45:4211|2.21.50|13/18|5279,5290,5301,5312|fccbcafbfcbfeeda|ceacabda-1011-2111-3050-400000000011"}
-{"id": "bg-es-0538", "lang": "es", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "640012-1992-01-25/12:00:27/100012|18.32.66.50:4212|3.22.51|14/15|5298,5309,5320,5331|cdecdcdddabadfcb|ffcdadfb-1012-2112-3050-400000000012"}
-{"id": "bg-es-0539", "lang": "es", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "640013-1993-02-27/15:05:34/100013|18.33.69.55:4213|4.23.52|15/16|5317,5328,5339,5350|feacfbbfbeadaccd|bfedbcdd-1013-2113-3050-400000000013"}
-{"id": "bg-es-0540", "lang": "es", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "640014-1994-03-02/18:10:41/100014|18.34.72.60:4214|5.24.53|16/17|5336,5347,5358,5369|bfbcfedcbcaadece|eaadbfbb-1014-2114-3050-400000000014"}
-{"id": "bg-es-0541", "lang": "es", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "640015-1995-04-04/21:15:48/100015|18.35.75.65:4215|1.25.54|17/18|5355,5366,5377,5388|eebdfdbefebdabdf|bbbebefc-1015-2115-3050-400000000015"}
-{"id": "bg-es-0542", "lang": "es", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "640016-1996-05-06/00:20:55/100016|18.36.78.70:4216|2.26.55|18/15|5374,5385,5396,5407|bfddaaaaedfadcdb|dcdebbde-1016-2116-3050-400000000016"}
-{"id": "bg-es-0543", "lang": "es", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "640017-1980-06-08/03:25:02/100017|18.37.81.75:4217|3.27.56|19/16|5393,5404,5415,5426|daffacedcbaeffcc|adffeffa-1017-2117-3050-400000000017"}
-{"id": "bg-es-0544", "lang": "es", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "640018-1981-07-10/06:30:09/100018|18.38.84.80:4218|4.28.57|20/17|5412,5423,5434,5445|aaaeabafcdabcacd|dcbfeced-1018-2118-3050-400000000018"}
-{"id": "bg-es-0545", "lang": "es", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "640019-1982-08-12/09:35:16/100019|18.39.87.85:4219|5.29.58|21/18|5431,5442,5453,5464|dbcaaeebabfefbcd|fdcbebcf-1019-2119-3050-400000000019"}
-{"id": "bg-es-0546", "lang": "es", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "640020-1983-09-14/12:40:23/100020|18.40.90.40:4220|1.30.59|22/15|5450,5461,5472,5483|ccefbdcfeffbceba|ceeaeeab-1020-2120-3050-400000000020"}
-{"id": "bg-es-0547", "lang": "es", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "640021-1984-10-16/15:45:30/100021|18.41.93.45:4221|2.31.60|23/16|5469,5480,5491,5502|edafbaaafbaefabb|ffaaecef-1021-2121-3050-400000000021"}
-{"id": "bg-es-0548", "lang": "es", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "640022-1985-11-18/18:50:37/100022|18.42.96.50:4222|3.32.61|24/17|5488,5499,5510,5521|bebbdeecdaebedbb|cabcffaa-1022-2122-3050-400000000022"}
-{"id": "bg-es-0549", "lang": "es", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "640023-1986-12-20/21:55:44/100023|18.43.99.55:4223|4.33.62|25/18|5507,5518,5529,5540|efdadbbabeffbeae|ebdbfeec-1023-2123-3050-400000000023"}
-{"id": "bg-es-0550", "lang": "es", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "640024-1987-01-22/00:00:51/100024|18.44.32.60:4224|5.34.63|26/15|5526,5537,5548,5559|aafceafbbafcebaf|bcfdfbca-1024-2124-3050-400000000024"}
-{"id": "bg-es-0551", "lang": "es", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "{<[<{}|{}|{}|{}|{}|{}|{}|{}|=>->::{}|//::"}
-{"id": "bg-es-0552", "lang": "es", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "{>[<>/<>/<>/<>/<>/<>/<>/<>/<->::=><>/<>//*+*/::"}
-{"id": "bg-es-0553", "lang": "es", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "{[[<=[]=[]=[]=[]=[]=[]=[]=[]::=>->[]=[]=[]=//::"}
-{"id": "bg-es-0554", "lang": "es", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "{][<+{}|+{}|+{}|+{}|+{}|+{}|=>::->+{}|+{}|+{}|+{}|/*+*/::"}
-{"id": "bg-es-0555", "lang": "es", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "{=[</<=/<=/<=/<=/<=/<=/<=/<=->=>::=/<//::"}
-{"id": "bg-es-0556", "lang": "es", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "{/[<|{}|{}|{}|{}|{}|{}|{}|{}=>->::{}|{}|/*+*/::"}
-{"id": "bg-es-0557", "lang": "es", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "{+[<<>/<>/<>/<>/<>/<>/<>/<>/->::=><>/<>/<>///::"}
-{"id": "bg-es-0558", "lang": "es", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "{{]<]=[]=[]=[]=[]=[]=[]=[]=[::=>->[]=[]=[]=[]=/*+*/::"}
-{"id": "bg-es-0559", "lang": "es", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "{}]<{}|+{}|+{}|+{}|+{}|+{}|+=>::->+{}|//::"}
-{"id": "bg-es-0560", "lang": "es", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "{|]<=/<=/<=/<=/<=/<=/<=/<=/<->=>::=/<=/</*+*/::"}
-{"id": "bg-es-0561", "lang": "es", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "{<]<}|{}|{}|{}|{}|{}|{}|{}|{=>->::{}|{}|{}|//::"}
-{"id": "bg-es-0562", "lang": "es", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "{>]</<>/<>/<>/<>/<>/<>/<>/<>->::=><>/<>/<>/<>//*+*/::"}
-{"id": "bg-es-0563", "lang": "es", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "{[]<[]=[]=[]=[]=[]=[]=[]=[]=::=>->[]=//::"}
-{"id": "bg-es-0564", "lang": "es", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "{]]<}|+{}|+{}|+{}|+{}|+{}|+{=>::->+{}|+{}|/*+*/::"}
-{"id": "bg-es-0565", "lang": "es", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "{=]<<=/<=/<=/<=/<=/<=/<=/<=/->=>::=/<=/<=/<//::"}
-{"id": "bg-es-0566", "lang": "es", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "{/]<{}|{}|{}|{}|{}|{}|{}|{}|=>->::{}|{}|{}|{}|/*+*/::"}
-{"id": "bg-es-0567", "lang": "es", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "{+]<>/<>/<>/<>/<>/<>/<>/<>/<->::=><>///::"}
-{"id": "bg-es-0568", "lang": "es", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "{{=<=[]=[]=[]=[]=[]=[]=[]=[]::=>->[]=[]=/*+*/::"}
-{"id": "bg-es-0569", "lang": "es", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "{}=<|+{}|+{}|+{}|+{}|+{}|+{}=>::->+{}|+{}|+{}|//::"}
-{"id": "bg-es-0570", "lang": "es", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "{|=</<=/<=/<=/<=/<=/<=/<=/<=->=>::=/<=/<=/<=/</*+*/::"}
-{"id": "bg-es-0571", "lang": "es", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "{<=<|{}|{}|{}|{}|{}|{}|{}|{}=>->::{}|//::"}
-{"id": "bg-es-0572", "lang": "es", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "{>=<<>/<>/<>/<>/<>/<>/<>/<>/->::=><>/<>//*+*/::"}
-{"id": "bg-es-0573", "lang": "es", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "{[=<]=[]=[]=[]=[]=[]=[]=[]=[::=>->[]=[]=[]=//::"}
-{"id": "bg-es-0574", "lang": "es", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "{]=<+{}|+{}|+{}|+{}|+{}|+{}|=>::->+{}|+{}|+{}|+{}|/*+*/::"}
-{"id": "bg-es-0575", "lang": "es", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "{==<=/<=/<=/<=/<=/<=/<=/<=/<->=>::=/<//::"}
-{"id": "bg-es-0576", "lang": "es", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "baranka ceranka dolanka feranka golanka linanka [2000/17]"}
-{"id": "bg-es-0577", "lang": "es", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "moranka nelanka | peranka rinanka => toranka veranka (2029:20)"}
-{"id": "bg-es-0578", "lang": "es", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "zulanka quianka chuanka -> barenka cerenka :: dolenka +2058-23"}
-{"id": "bg-es-0579", "lang": "es", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "ferenka/golenka linenka morenka nelenka perenka <2087>"}
-{"id": "bg-es-0580", "lang": "es", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "rinenka torenka { verenka zulenka } quienka chuenka @2116.44"}
-{"id": "bg-es-0581", "lang": "es", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "barinka cerinka dolinka ferinka golinka lininka [2145/32]"}
-{"id": "bg-es-0582", "lang": "es", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "morinka nelinka | perinka rininka => torinka verinka (2174:35)"}
-{"id": "bg-es-0583", "lang": "es", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "zulinka quiinka chuinka -> baronka ceronka :: dolonka +2203-38"}
-{"id": "bg-es-0584", "lang": "es", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "feronka/golonka linonka moronka nelonka peronka <2232>"}
-{"id": "bg-es-0585", "lang": "es", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "rinonka toronka { veronka zulonka } quionka chuonka @2261.49"}
-{"id": "bg-es-0586", "lang": "es", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "barunka cerunka dolunka ferunka golunka linunka [2290/47]"}
-{"id": "bg-es-0587", "lang": "es", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "morunka nelunka | perunka rinunka => torunka verunka (2319:50)"}
-{"id": "bg-es-0588", "lang": "es", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "zulunka quiunka chuunka -> baralpa ceralpa :: dolalpa +2348-53"}
-{"id": "bg-es-0589", "lang": "es", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "feralpa/golalpa linalpa moralpa nelalpa peralpa <2377>"}
-{"id": "bg-es-0590", "lang": "es", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "rinalpa toralpa { veralpa zulalpa } quialpa chualpa @2406.54"}
-{"id": "bg-es-0591", "lang": "es", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "barelpa cerelpa dolelpa ferelpa golelpa linelpa [2435/62]"}
-{"id": "bg-es-0592", "lang": "es", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "morelpa nelelpa | perelpa rinelpa => torelpa verelpa (2464:65)"}
-{"id": "bg-es-0593", "lang": "es", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "zulelpa quielpa chuelpa -> barilpa cerilpa :: dolilpa +2493-68"}
-{"id": "bg-es-0594", "lang": "es", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "ferilpa/golilpa linilpa morilpa nelilpa perilpa <2522>"}
-{"id": "bg-es-0595", "lang": "es", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "rinilpa torilpa { verilpa zulilpa } quiilpa chuilpa @2551.59"}
-{"id": "bg-es-0596", "lang": "es", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "barolpa cerolpa dololpa ferolpa gololpa linolpa [2580/77]"}
-{"id": "bg-es-0597", "lang": "es", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "morolpa nelolpa | perolpa rinolpa => torolpa verolpa (2609:80)"}
-{"id": "bg-es-0598", "lang": "es", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "zulolpa quiolpa chuolpa -> barulpa cerulpa :: dolulpa +2638-83"}
-{"id": "bg-es-0599", "lang": "es", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "ferulpa/golulpa linulpa morulpa nelulpa perulpa <2667>"}
-{"id": "bg-es-0600", "lang": "es", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "rinulpa torulpa { verulpa zululpa } quiulpa chuulpa @2696.64"}
+{"id": "bg-en-0501", "lang": "en", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "? ?? ??? ???? ? ??? ?? ???? ?? ??"}
+{"id": "bg-en-0502", "lang": "en", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "! !! !!! !!!! ! !!! !! !!!! !! !!"}
+{"id": "bg-en-0503", "lang": "en", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "...--.----.-..---.--...-..--.-."}
+{"id": "bg-en-0504", "lang": "en", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": ";;:::;;:;;:::;:;;::;:::;;:;;:"}
+{"id": "bg-en-0505", "lang": "en", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "((())(()))((())())(())()()()"}
+{"id": "bg-en-0506", "lang": "en", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "[[][]][[][[]]][[][]][][][]["}
+{"id": "bg-en-0507", "lang": "en", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "{{}{}}{{}{{}}}{{}{}}{}{}{}{"}
+{"id": "bg-en-0508", "lang": "en", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "<<>><<>>>><<>>><<>>><<>>>><"}
+{"id": "bg-en-0509", "lang": "en", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "''\"\"'''\"\"''\"\"\"''\"\"''\"\"''"}
+{"id": "bg-en-0510", "lang": "en", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": ",, ,,, ,, ,,,, , ,,, ,, ,,,, ,,,"}
+{"id": "bg-en-0511", "lang": "en", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "//\\/\\//\\\\//\\/\\\\//\\\\//\\\\/"}
+{"id": "bg-en-0512", "lang": "en", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "|| ||| || |||| | ||| || |||| |||"}
+{"id": "bg-en-0513", "lang": "en", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "***++*++++*++***++*+++*++**"}
+{"id": "bg-en-0514", "lang": "en", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "===~~=~~~~=~=~~~=~~~~~=~~=~"}
+{"id": "bg-en-0515", "lang": "en", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "^^^``^````^``^^^``^```^```^"}
+{"id": "bg-en-0516", "lang": "en", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "$$$%%$%%%%$%%$$$%%$%%%$%%%$"}
+{"id": "bg-en-0517", "lang": "en", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "###@@#@@@@#@@###@@#@@@#@@@#"}
+{"id": "bg-en-0518", "lang": "en", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "&& & &&& && &&&& & &&& && &&&& &&"}
+{"id": "bg-en-0519", "lang": "en", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "????!!!!??!!!????!!??!!!!!"}
+{"id": "bg-en-0520", "lang": "en", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "...!!!..!!....!!!..!......"}
+{"id": "bg-en-0521", "lang": "en", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": ";;,,,;;,,;;;,;;,,,;;,,;;;,,"}
+{"id": "bg-en-0522", "lang": "en", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "([)]([())][()()][)]([())])"}
+{"id": "bg-en-0523", "lang": "en", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "{<}>{{<}>}<{>}{<>}{<>>}{}"}
+{"id": "bg-en-0524", "lang": "en", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "'',\"\"',\"\",'',\"\"',\"\",'',\""}
+{"id": "bg-en-0525", "lang": "en", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "//||\\\\||//\\\\||//||\\\\||//"}
+{"id": "bg-en-0526", "lang": "en", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "1973-04-18#0622110944182"}
+{"id": "bg-en-0527", "lang": "en", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "04/18/1973*0622110944182"}
+{"id": "bg-en-0528", "lang": "en", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "18.04.1973@0622110944182"}
+{"id": "bg-en-0529", "lang": "en", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "06:22:11%197304180622119"}
+{"id": "bg-en-0530", "lang": "en", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "(418,22011)+(119,14730)+(306,42819)"}
+{"id": "bg-en-0531", "lang": "en", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "[418;22011][119;14730][306;42819]"}
+{"id": "bg-en-0532", "lang": "en", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "{418|22011}{119|14730}{306|42819}"}
+{"id": "bg-en-0533", "lang": "en", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "<418=22011><119=14730><306=42819>"}
+{"id": "bg-en-0534", "lang": "en", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "10.20.30.40:41007~062211"}
+{"id": "bg-en-0535", "lang": "en", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "14.2.0+18.6.3+9.1.44+7.0.3"}
+{"id": "bg-en-0536", "lang": "en", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "418:7=220:11=119:3=306:9=14:5"}
+{"id": "bg-en-0537", "lang": "en", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "6.022^23*1.660^14*9.81^02"}
+{"id": "bg-en-0538", "lang": "en", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "(054)418-220119/(011)306-428819"}
+{"id": "bg-en-0539", "lang": "en", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "$418.22+$119.14-$306.08+$73.60"}
+{"id": "bg-en-0540", "lang": "en", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "18.6%+22.1%-3.4%+9.0%+14.2%"}
+{"id": "bg-en-0541", "lang": "en", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "418_220_119_147_306_428_519"}
+{"id": "bg-en-0542", "lang": "en", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "./418/220/119/147/306/428"}
+{"id": "bg-en-0543", "lang": "en", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "?418=220&119=147&306=428&73=64"}
+{"id": "bg-en-0544", "lang": "en", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "418..220,119..147,306..428,73..64"}
+{"id": "bg-en-0545", "lang": "en", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "06:22:11+09:14:07-03:30:55"}
+{"id": "bg-en-0546", "lang": "en", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "418,220,119;147,306,428;519,73,64;81,22,15"}
+{"id": "bg-en-0547", "lang": "en", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "+41.18-22.07/+19.14-3.06/+7.73-0.64"}
+{"id": "bg-en-0548", "lang": "en", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "418/7:220/11:119/3:306/9:14/5"}
+{"id": "bg-en-0549", "lang": "en", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "{418,220,119,147}/{306,428,519,73}"}
+{"id": "bg-en-0550", "lang": "en", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "3<14<22<41<80<119<220<418<736"}
+{"id": "bg-en-0551", "lang": "en", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "{=>{=>}}{{=>}{=>}}{=>}{}"}
+{"id": "bg-en-0552", "lang": "en", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "<->><->>><-<>>><->><->>>"}
+{"id": "bg-en-0553", "lang": "en", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "%%/=/%=//%=/%/=%%/=/%==%"}
+{"id": "bg-en-0554", "lang": "en", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "[[]:-][[-]:][-[]:][[]:-]"}
+{"id": "bg-en-0555", "lang": "en", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "(*~)(~*)(*~*)(~*()~*)(()"}
+{"id": "bg-en-0556", "lang": "en", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "||&:&|&:||&:&|&:||&:&||&"}
+{"id": "bg-en-0557", "lang": "en", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "^+=>+^=>>^+=>+^+=>>^+>>+"}
+{"id": "bg-en-0558", "lang": "en", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "#!@?##!@?#@!?#!@?##!@??@"}
+{"id": "bg-en-0559", "lang": "en", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "$*;&$$;*&$;*&$*;&$$;*&&*"}
+{"id": "bg-en-0560", "lang": "en", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "\\/|_\\\\/|_\\//|_\\/|_\\\\//\\\\"}
+{"id": "bg-en-0561", "lang": "en", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "'\",.\"'',\".'\",.\"'',\"..\",'"}
+{"id": "bg-en-0562", "lang": "en", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": ";:!?;;:?!;!?!:;:!?;;:!!:"}
+{"id": "bg-en-0563", "lang": "en", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "`~^-``~^`-`~^-``~^`-``-`"}
+{"id": "bg-en-0564", "lang": "en", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "([)][(])([)][()]([)][[])"}
+{"id": "bg-en-0565", "lang": "en", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "{<}>}{<>{>}{<}>}{<>}{{}>"}
+{"id": "bg-en-0566", "lang": "en", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "=><-=>>><-=><-=>>><-=>>="}
+{"id": "bg-en-0567", "lang": "en", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "+*/=++*/=+*/=+*/*=+/++/+"}
+{"id": "bg-en-0568", "lang": "en", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "::=|::|=:::|=::|=:::||::"}
+{"id": "bg-en-0569", "lang": "en", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "|<>>=|<>=|<<=|>>=|<||<|="}
+{"id": "bg-en-0570", "lang": "en", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "&|!=&&|=!&|!&=&&|!=&||&="}
+{"id": "bg-en-0571", "lang": "en", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "?!.-??!.-?!.--?!.-??!!??"}
+{"id": "bg-en-0572", "lang": "en", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "#%^&##%^&#%^&##%^&#%^^%#"}
+{"id": "bg-en-0573", "lang": "en", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "@*+-@@*+-@*+-@@*+-@*++*@"}
+{"id": "bg-en-0574", "lang": "en", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "~/\\|~~/\\|~/\\|~~/\\|~//~|\\"}
+{"id": "bg-en-0575", "lang": "en", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "_=:;__:;=:_=:;__:;=_::_="}
+{"id": "bg-en-0576", "lang": "en", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "harbor granite [1842/7361]"}
+{"id": "bg-en-0577", "lang": "en", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "violinist|glaciers:220419"}
+{"id": "bg-en-0578", "lang": "en", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "{pebblestone->meadowlark}"}
+{"id": "bg-en-0579", "lang": "en", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "lanterns/willowbark+1842"}
+{"id": "bg-en-0580", "lang": "en", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "copper::canyonland=18421"}
+{"id": "bg-en-0581", "lang": "en", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "<marble>thunderclaps^1284"}
+{"id": "bg-en-0582", "lang": "en", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "cobalts=>linenfolds~1842"}
+{"id": "bg-en-0583", "lang": "en", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "(quartzite)basaltrock%318"}
+{"id": "bg-en-0584", "lang": "en", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "tundras#fjordlands&18421"}
+{"id": "bg-en-0585", "lang": "en", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "prairies?cometfalls!1842"}
+{"id": "bg-en-0586", "lang": "en", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "41821973-nebulas-pulsars"}
+{"id": "bg-en-0587", "lang": "en", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "magnetic,turbines;184219"}
+{"id": "bg-en-0588", "lang": "en", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "rudders...anchors...2148"}
+{"id": "bg-en-0589", "lang": "en", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "ballasts//tillers//18421"}
+{"id": "bg-en-0590", "lang": "en", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "[[cleats]]buoyages:11482"}
+{"id": "bg-en-0591", "lang": "en", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "jetties<->wharfside/5184"}
+{"id": "bg-en-0592", "lang": "en", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "pierside|=|coves|=|18421"}
+{"id": "bg-en-0593", "lang": "en", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "*inlets*ridgeline*21482*"}
+{"id": "bg-en-0594", "lang": "en", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "taluses::=moraines+18421"}
+{"id": "bg-en-0595", "lang": "en", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "cirques~>butteside~>1842"}
+{"id": "bg-en-0596", "lang": "en", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "alpines@4182197@sparkles"}
+{"id": "bg-en-0597", "lang": "en", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "9.518427(keels)compasses"}
+{"id": "bg-en-0598", "lang": "en", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "sextants\"fathomline\"2841"}
+{"id": "bg-en-0599", "lang": "en", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "leewards'beaconage'33418"}
+{"id": "bg-en-0600", "lang": "en", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "isobars`updrafting`44182"}
+{"id": "bg-es-0501", "lang": "es", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "¿ ¿¿ ¿¿¿ ¿¿¿¿ ¿ ¿¿¿ ¿¿ ¿¿¿¿ ¿¿ ¿¿¿¿ ¿¿"}
+{"id": "bg-es-0502", "lang": "es", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "¡ ¡¡ ¡¡¡ ¡¡¡¡ ¡ ¡¡¡ ¡¡ ¡¡¡¡ ¡¡ ¡¡¡¡ ¡¡"}
+{"id": "bg-es-0503", "lang": "es", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "««»»«»«««»»»«»««»»«»»««»»«»««»»"}
+{"id": "bg-es-0504", "lang": "es", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "¿...¿¿....¿...¿¿....¿...¿¿....¿"}
+{"id": "bg-es-0505", "lang": "es", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "¡---¡¡----¡---¡¡----¡---¡¡----¡"}
+{"id": "bg-es-0506", "lang": "es", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "¿;¿;;¿;;;¿;¿;;¿;;;¿;;¿;¿;;;¿;;"}
+{"id": "bg-es-0507", "lang": "es", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "¡:¡::¡:::¡:¡::¡:::¡::¡:¡:::¡::"}
+{"id": "bg-es-0508", "lang": "es", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "«(»)«((»))«(»)«()»«((»)«()»«()"}
+{"id": "bg-es-0509", "lang": "es", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "«[»]«[[»]]«[»]«[]»«[[»]«[]»«[]"}
+{"id": "bg-es-0510", "lang": "es", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "«{»}«{{»}}«{»}«{}»«{{»}«{}»«{}"}
+{"id": "bg-es-0511", "lang": "es", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "¿<¿>>¿<<¿>¿<¿>>¿<<¿>>¿<¿>¿<<¿"}
+{"id": "bg-es-0512", "lang": "es", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "¡/¡\\\\¡//¡\\¡/¡\\\\¡//¡\\\\¡/¡\\¡//"}
+{"id": "bg-es-0513", "lang": "es", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "«|»||«||»|«|»||«|||»|«||»|«||"}
+{"id": "bg-es-0514", "lang": "es", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "¿*¿++¿**¿+¿*¿++¿***¿+¿**¿++¿**"}
+{"id": "bg-es-0515", "lang": "es", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "¡=¡~~¡==¡~¡=¡~~¡===¡~¡==¡~~¡=="}
+{"id": "bg-es-0516", "lang": "es", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "«#»@@«##»@«#»@@«###»@«##»@«###"}
+{"id": "bg-es-0517", "lang": "es", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "¿$¿%%¿$$¿%¿$¿%%¿$$$¿%¿$$¿%%¿$$"}
+{"id": "bg-es-0518", "lang": "es", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "¡^¡``¡^^¡`¡^¡``¡^^^¡`¡^^¡``¡^^"}
+{"id": "bg-es-0519", "lang": "es", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "«'»,,«''»,«'»,,«'''»,«''»,«'''"}
+{"id": "bg-es-0520", "lang": "es", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "¿¿¡¡¿¿¿¡¡¡¿¡¿¿¡¡¿¡¡¿¿¿¡¡¡¿¡¡¿"}
+{"id": "bg-es-0521", "lang": "es", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "...««»»....«»...««»»....«»...."}
+{"id": "bg-es-0522", "lang": "es", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "---«»----««---»»----«»---««»--"}
+{"id": "bg-es-0523", "lang": "es", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "(¿¡)((¿)¡)(¿¡)()¿)(¡¿)((¡)¿)("}
+{"id": "bg-es-0524", "lang": "es", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "{¡¿}{{¡}¿}{¡¿}{}¡}{¿¡}{{¿}¡}{"}
+{"id": "bg-es-0525", "lang": "es", "stratum": "structural_symbol_noise", "topic": "punct_burst", "text": "&&¿**¡&&¿*&&¡***¿&&**¡&&¿***¡"}
+{"id": "bg-es-0526", "lang": "es", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "1978--04--19--06--23--12"}
+{"id": "bg-es-0527", "lang": "es", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "08\\\\19\\\\1978\\\\0623\\\\1211"}
+{"id": "bg-es-0528", "lang": "es", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "1978#04#19#0623#1211#0930"}
+{"id": "bg-es-0529", "lang": "es", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "06~23~12~19~04~1978~11~30"}
+{"id": "bg-es-0530", "lang": "es", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "12+23+19+04+1978+11+30+06"}
+{"id": "bg-es-0531", "lang": "es", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "(12/7)/(19/4)/(23/6)/(11/3)"}
+{"id": "bg-es-0532", "lang": "es", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "[19.04.1978][06.23.12][11.30]"}
+{"id": "bg-es-0533", "lang": "es", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "{06:23:12}{19:04:11}{30:08:02}"}
+{"id": "bg-es-0534", "lang": "es", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "<12,23,19,4,1978,11,30,8>"}
+{"id": "bg-es-0535", "lang": "es", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "12;23;19|04;1978;11|30;6;9"}
+{"id": "bg-es-0536", "lang": "es", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "12|23|19;04|1978|11;30|6|9"}
+{"id": "bg-es-0537", "lang": "es", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "*$418*$220*$119*$147*$306"}
+{"id": "bg-es-0538", "lang": "es", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "18%22%7%19%4%11%30%6%15%8"}
+{"id": "bg-es-0539", "lang": "es", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "6^23^19^4^12^11^30^8^2^17"}
+{"id": "bg-es-0540", "lang": "es", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "12=23=19=4=1978=11=30=6=15"}
+{"id": "bg-es-0541", "lang": "es", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "18&22&7&19&4&11&30&6&15&9"}
+{"id": "bg-es-0542", "lang": "es", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "12@23@19@4@1978@11@30@6@8"}
+{"id": "bg-es-0543", "lang": "es", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "19?04?1978?06?23?12?11?30"}
+{"id": "bg-es-0544", "lang": "es", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "06!23!12!19!04!1978!11!30"}
+{"id": "bg-es-0545", "lang": "es", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "'418''220''119''147''306'"}
+{"id": "bg-es-0546", "lang": "es", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "\"418\"\"220\"\"119\"\"147\"\"73\""}
+{"id": "bg-es-0547", "lang": "es", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "418...220...119...147...306"}
+{"id": "bg-es-0548", "lang": "es", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "418::220::119::147::306::73"}
+{"id": "bg-es-0549", "lang": "es", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "418=>220=>119=>147=>306=>73"}
+{"id": "bg-es-0550", "lang": "es", "stratum": "structural_symbol_noise", "topic": "digit_dump", "text": "12~19~04|23:06:11|418.220"}
+{"id": "bg-es-0551", "lang": "es", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "«=>::»«=>>::«=>»::«=»«=>::»«="}
+{"id": "bg-es-0552", "lang": "es", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "¿->|/>¿-|/>>¿->|/¿->>|¿->|/>¿"}
+{"id": "bg-es-0553", "lang": "es", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "¡<%=~>¡<=%~¡<%~=¡<=%~¡<%=~>¡"}
+{"id": "bg-es-0554", "lang": "es", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "«[|->]»«[-|]»«[->|]»«[|->]»«"}
+{"id": "bg-es-0555", "lang": "es", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "¿{/::}¿{/:}¿{/::}¿{:}/¿{/::}¿"}
+{"id": "bg-es-0556", "lang": "es", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "¡/*-*/¡/*/-*¡/*-*/¡/*-*/¡/*-"}
+{"id": "bg-es-0557", "lang": "es", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "«//=/»«/=/»«//==»«/=»/«//=/»«"}
+{"id": "bg-es-0558", "lang": "es", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "¿<-|>¿<->|¿<<->¿|->¿<¿<-|>¿<"}
+{"id": "bg-es-0559", "lang": "es", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "¡==>|¡=>|¡==>>¡|==>¡|¡==>|¡="}
+{"id": "bg-es-0560", "lang": "es", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "«<==|»«<=|»«<===»«<=»«<==|»«"}
+{"id": "bg-es-0561", "lang": "es", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "¿>>|<<¿>|<<¿>>||<<¿>>|¿>>|<<"}
+{"id": "bg-es-0562", "lang": "es", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "¡&&||¡&|¡&&|¡|||&&¡|&¡&&||¡&"}
+{"id": "bg-es-0563", "lang": "es", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "«~>>|»«~>|»«~>>>»«~>»«~>>|»«"}
+{"id": "bg-es-0564", "lang": "es", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "¿<~|¿<<~¿<~||¿|<<~¿<~¿<<~|¿<"}
+{"id": "bg-es-0565", "lang": "es", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "¡|>::¡|>:¡|>>::¡::|>¡|>::¡|>"}
+{"id": "bg-es-0566", "lang": "es", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "«<|=»«<|»«<<|=»«<|»=«<|=»«<|"}
+{"id": "bg-es-0567", "lang": "es", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "¿::=|¿:=|¿:::|=¿|::=¿::=|¿:="}
+{"id": "bg-es-0568", "lang": "es", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "¡->::¡->:¡-->>::¡:->¡->::¡->"}
+{"id": "bg-es-0569", "lang": "es", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "«=>|»«=|»«==>>»«=>»|«=>|»«=>"}
+{"id": "bg-es-0570", "lang": "es", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "¿[]-¿[[]-¿[]--¿-[]¿[[]-¿[]-¿"}
+{"id": "bg-es-0571", "lang": "es", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "¡{}:¡{{}:¡{}::¡:{}¡{{}:¡{}:¡"}
+{"id": "bg-es-0572", "lang": "es", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "«()>»«(>»«(()>>»«()>»«()»«(>"}
+{"id": "bg-es-0573", "lang": "es", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "¿#%^¿##%¿#%^^¿^#%¿##%¿#%^¿##"}
+{"id": "bg-es-0574", "lang": "es", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "¡@*+¡@@*¡@*++¡+@*¡@@*¡@*+¡@@"}
+{"id": "bg-es-0575", "lang": "es", "stratum": "structural_symbol_noise", "topic": "symbol_operator", "text": "«_=;»«_;»«__=;»«_=»;«_=;»«_;"}
+{"id": "bg-es-0576", "lang": "es", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "faroles/muelles::1842197"}
+{"id": "bg-es-0577", "lang": "es", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "veleros=>brumosos->18421"}
+{"id": "bg-es-0578", "lang": "es", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "basaltos||cuarzos||18421"}
+{"id": "bg-es-0579", "lang": "es", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "{dunares:estepas:184219}"}
+{"id": "bg-es-0580", "lang": "es", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "fiordos<mesetario>184219"}
+{"id": "bg-es-0581", "lang": "es", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "paramos+cumbres^18421973"}
+{"id": "bg-es-0582", "lang": "es", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "nieblas~graniticos~18421"}
+{"id": "bg-es-0583", "lang": "es", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "[glaciares]censos%184219"}
+{"id": "bg-es-0584", "lang": "es", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "orbitas&linternas&184219"}
+{"id": "bg-es-0585", "lang": "es", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "praderas?cobrizos?184219"}
+{"id": "bg-es-0586", "lang": "es", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "184219::sauces::marmoles"}
+{"id": "bg-es-0587", "lang": "es", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "truenos;meridianos;18421"}
+{"id": "bg-es-0588", "lang": "es", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "latitud--longitud--18421"}
+{"id": "bg-es-0589", "lang": "es", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "brujulas//rumbos//184219"}
+{"id": "bg-es-0590", "lang": "es", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "«derivas»marejada:184219"}
+{"id": "bg-es-0591", "lang": "es", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "pleamar</bajamar>/184219"}
+{"id": "bg-es-0592", "lang": "es", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "escollera/|diques/|18421"}
+{"id": "bg-es-0593", "lang": "es", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "¡darsenas!boyantes!18421"}
+{"id": "bg-es-0594", "lang": "es", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "timones=:quillas=:184219"}
+{"id": "bg-es-0595", "lang": "es", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "mastiles<~nortes<~184219"}
+{"id": "bg-es-0596", "lang": "es", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "oestes@1842197@silicatos"}
+{"id": "bg-es-0597", "lang": "es", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "6.184(feldespatos)gneises"}
+{"id": "bg-es-0598", "lang": "es", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "pizarras\"areniscas\"18421"}
+{"id": "bg-es-0599", "lang": "es", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "calizas'olivinos'1842197"}
+{"id": "bg-es-0600", "lang": "es", "stratum": "structural_symbol_noise", "topic": "mixed_low_lexical", "text": "piritas`topacios`1842197"}
