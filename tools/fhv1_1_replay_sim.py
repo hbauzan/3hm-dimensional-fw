@@ -2,6 +2,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
+#     "httpx>=0.27.0",
 #     "lancedb>=0.20.0",
 #     "numpy>=2.0.0",
 #     "pyarrow>=18.0.0",
@@ -2314,20 +2315,41 @@ def format_stdout_summary(report: Mapping[str, Any]) -> str:
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="FHV1.1 Phase 2 Offline Replay Simulator (RFC-003 float64).")
+    parser.add_argument("--mode", choices=("default", "v2"), default="default")
     parser.add_argument("--lancedb-uri", type=Path, default=Path("data/sf-lancedb"))
     parser.add_argument("--benchmarks-dir", type=Path, default=Path("data/fhv1_benchmarks"))
     parser.add_argument("--xray-1a", type=Path, default=Path("/tmp/fhv1_1_id/xray_1a.json"))
     parser.add_argument("--xray-1b", type=Path, default=Path("/tmp/fhv1_1_id/xray_1b.json"))
+    parser.add_argument("--xray-v2", type=Path, default=Path("/tmp/fhv1_1_id_v2/xray_v2.json"))
+    parser.add_argument("--bg-parquet", type=Path, default=Path("data/fhv1_1_research/background_embeddings_1k.parquet"))
+    parser.add_argument("--task012-report", type=Path, default=Path("reports/fhv1_1_xray_and_replay_report.md"))
+    parser.add_argument("--task011-report", type=Path, default=Path("reports/fhv1_task011_empirical_report.md"))
     parser.add_argument("--out", type=Path, default=Path("/tmp/fhv1_1_id/replay_results.json"))
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_arg_parser().parse_args(list(sys.argv[1:] if argv is None else argv))
-    report = run_simulation(args.lancedb_uri, args.benchmarks_dir, args.xray_1a, args.xray_1b)
+    if args.mode == "v2":
+        import fhv1_1_replay_v2 as replay_v2
+
+        report = replay_v2.run_replay_v2(
+            lancedb_uri=args.lancedb_uri,
+            benchmarks_dir=args.benchmarks_dir,
+            xray_v2_path=args.xray_v2,
+            bg_parquet=args.bg_parquet,
+            task012_report=args.task012_report,
+            task011_report=args.task011_report,
+        )
+        text = replay_v2.format_v2_summary(report)
+        payload = json.dumps(report, indent=2, allow_nan=False)
+    else:
+        report = run_simulation(args.lancedb_uri, args.benchmarks_dir, args.xray_1a, args.xray_1b)
+        text = format_stdout_summary(report)
+        payload = json.dumps(report, indent=2)
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(json.dumps(report, indent=2), encoding="utf-8")
-    print(format_stdout_summary(report))
+    args.out.write_text(payload, encoding="utf-8")
+    print(text)
     print(f"\nWrote {args.out}")
     return 0
 
