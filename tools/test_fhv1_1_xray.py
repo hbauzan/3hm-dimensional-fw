@@ -1156,5 +1156,154 @@ class ModeV2FineDialsTest(unittest.TestCase):
         self.assertEqual(legacy.bg_embeddings, Path("data/fhv1_1_research/background_embeddings.parquet"))
 
 
+def _synthetic_contrast_groups(dim: int = 4) -> dict[tuple[str, str, str, bool], dict[str, object]]:
+    """Per-stratum blocks sized like the 1,200-doc full_doc cache. No I/O."""
+    counts = {
+        "general_prose": 300,
+        "technical_structured": 100,
+        "near_ood_neighbor": 100,
+        "structural_symbol_noise": 100,
+    }
+    sentinels = {
+        "general_prose": 1.0,
+        "technical_structured": 2.0,
+        "near_ood_neighbor": 3.0,
+        "structural_symbol_noise": 9.0,
+    }
+    groups: dict[tuple[str, str, str, bool], dict[str, object]] = {}
+    for lang_index, lang in enumerate(("en", "es")):
+        for granularity in ("full_doc", "clause_opt2c"):
+            for stratum, nrows in counts.items():
+                matrix = np.zeros((nrows, dim), dtype=np.float64)
+                matrix[:, 0] = sentinels[stratum]
+                matrix[:, 1] = float(lang_index)
+                groups[(lang, granularity, stratum, True)] = {
+                    "vectors": matrix,
+                    "doc_ids": [f"{lang}-{granularity}-{stratum}-{i}" for i in range(nrows)],
+                }
+    return groups
+
+
+class ContrastPresetV3Test(unittest.TestCase):
+    def test_contrast_presets_stack_synthetic_groups_without_network(self) -> None:
+        self.assertEqual(xray.V2_BASE_STRATA, ("general_prose", "technical_structured"))
+        self.assertEqual(
+            xray.V2_FULL_STRATA,
+            ("general_prose", "technical_structured", "near_ood_neighbor"),
+        )
+        self.assertEqual(xray.contrast_preset_strata("1B_base_tech"), xray.V2_BASE_STRATA)
+        self.assertEqual(xray.contrast_preset_strata("1B_full"), xray.V2_FULL_STRATA)
+        self.assertNotIn("structural_symbol_noise", xray.contrast_preset_strata("1B_full"))
+        self.assertEqual(
+            xray.contrast_preset_strata("1B_base_tech_noise"),
+            xray.V2_BASE_STRATA + ("structural_symbol_noise",),
+        )
+        self.assertEqual(
+            xray.contrast_preset_strata("1B_full_v3"),
+            xray.V2_FULL_STRATA + ("structural_symbol_noise",),
+        )
+        self.assertEqual(
+            xray.V2_CONTRAST_FULL_DOC_PER_LANG,
+            {
+                "1B_base_tech": 400,
+                "1B_base_tech_noise": 500,
+                "1B_full": 500,
+                "1B_full_v3": 600,
+            },
+        )
+        groups = _synthetic_contrast_groups()
+        expected_rows = {
+            "1B_base_tech": 400,
+            "1B_base_tech_noise": 500,
+            "1B_full": 500,
+            "1B_full_v3": 600,
+        }
+        expected_noise = {
+            "1B_base_tech": 0,
+            "1B_base_tech_noise": 100,
+            "1B_full": 0,
+            "1B_full_v3": 100,
+        }
+        for preset, rows in expected_rows.items():
+            for lang in ("en", "es"):
+                stacked = xray.stack_contrast_preset(groups, lang, "full_doc", preset)
+                self.assertEqual(stacked.shape, (rows, 4))
+                self.assertEqual(stacked.dtype, np.float64)
+                noise_rows = int(np.sum(stacked[:, 0] == 9.0))
+                self.assertEqual(noise_rows, expected_noise[preset], preset)
+        en_groups = groups
+        base = xray.stack_contrast_preset(en_groups, "en", "full_doc", "1B_base_tech")
+        base_noise = xray.stack_contrast_preset(en_groups, "en", "full_doc", "1B_base_tech_noise")
+        full = xray.stack_contrast_preset(en_groups, "en", "full_doc", "1B_full")
+        full_v3 = xray.stack_contrast_preset(en_groups, "en", "full_doc", "1B_full_v3")
+        np.testing.assert_array_equal(base_noise[:400], base)
+        np.testing.assert_array_equal(full_v3[:500], full)
+        np.testing.assert_array_equal(full[:400], base)
+        self.assertTrue(np.all(base_noise[400:, 0] == 9.0))
+        self.assertTrue(np.all(full_v3[500:, 0] == 9.0))
+        with self.assertRaises(KeyError):
+            xray.contrast_preset_strata("1B_unknown")
+
+    def test_cli_bg_1200_argument_keeps_bg_1k_default(self) -> None:
+        args = xray.build_arg_parser().parse_args(["--mode", "v2"])
+        self.assertEqual(args.mode, "v2")
+        self.assertEqual(args.bg_1k, Path("data/fhv1_1_research/background_embeddings_1k.parquet"))
+        self.assertEqual(args.bg_1200, Path("data/fhv1_1_research/background_embeddings_1200.parquet"))
+        custom = xray.build_arg_parser().parse_args(
+            ["--bg-1200", "/tmp/custom_1200.parquet", "--bg-1k", "/tmp/custom_1k.parquet"]
+        )
+        self.assertEqual(custom.bg_1200, Path("/tmp/custom_1200.parquet"))
+        self.assertEqual(custom.bg_1k, Path("/tmp/custom_1k.parquet"))
+        untouched = xray.build_arg_parser().parse_args([])
+        self.assertEqual(untouched.bg_1k, Path("data/fhv1_1_research/background_embeddings_1k.parquet"))
+        self.assertEqual(untouched.mode, "1a")
+
+    def test_background_embeddings_1200_parquet_contract(self) -> None:
+        path = Path(__file__).resolve().parents[1] / "data/fhv1_1_research/background_embeddings_1200.parquet"
+        self.assertTrue(path.is_file(), path)
+        groups = xray.load_embedding_groups(path)
+        expected_full = {
+            "general_prose": 300,
+            "technical_structured": 100,
+            "near_ood_neighbor": 100,
+            "structural_symbol_noise": 100,
+        }
+        full_rows = 0
+        clause_rows = 0
+        max_l2_error = 0.0
+        for key, group in groups.items():
+            lang, granularity, stratum, normalize = key
+            self.assertIn(lang, {"en", "es"})
+            self.assertIn(granularity, {"full_doc", "clause_opt2c"})
+            self.assertIn(stratum, expected_full)
+            self.assertIs(normalize, True)
+            vectors = np.asarray(group["vectors"], dtype=np.float64)
+            self.assertEqual(vectors.shape[1], xray.DIM)
+            self.assertTrue(np.all(np.isfinite(vectors)))
+            error = float(np.max(np.abs(np.linalg.norm(vectors, axis=1) - 1.0)))
+            max_l2_error = max(max_l2_error, error)
+            if granularity == "full_doc":
+                self.assertEqual(vectors.shape[0], expected_full[stratum])
+                full_rows += int(vectors.shape[0])
+            else:
+                self.assertGreater(vectors.shape[0], 0)
+                clause_rows += int(vectors.shape[0])
+        self.assertEqual(full_rows, 1200)
+        self.assertGreater(clause_rows, 0)
+        self.assertLess(max_l2_error, 1e-5)
+        for lang in ("en", "es"):
+            base = xray.stack_contrast_preset(groups, lang, "full_doc", "1B_base_tech")
+            base_noise = xray.stack_contrast_preset(groups, lang, "full_doc", "1B_base_tech_noise")
+            full = xray.stack_contrast_preset(groups, lang, "full_doc", "1B_full")
+            full_v3 = xray.stack_contrast_preset(groups, lang, "full_doc", "1B_full_v3")
+            self.assertEqual(base.shape, (400, xray.DIM))
+            self.assertEqual(base_noise.shape, (500, xray.DIM))
+            self.assertEqual(full.shape, (500, xray.DIM))
+            self.assertEqual(full_v3.shape, (600, xray.DIM))
+            np.testing.assert_array_equal(base_noise[:400], base)
+            np.testing.assert_array_equal(full_v3[:500], full)
+            np.testing.assert_array_equal(full[:400], base)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

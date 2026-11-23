@@ -128,6 +128,19 @@ V2_BUCKET_ORDER: tuple[str, ...] = (
 V2_LANG_TOPK: tuple[int, ...] = (16, 32, 64, 128)
 V2_BASE_STRATA: tuple[str, ...] = ("general_prose", "technical_structured")
 V2_FULL_STRATA: tuple[str, ...] = ("general_prose", "technical_structured", "near_ood_neighbor")
+V2_NOISE_STRATUM = "structural_symbol_noise"
+V2_CONTRAST_PRESETS: dict[str, tuple[str, ...]] = {
+    "1B_base_tech": V2_BASE_STRATA,
+    "1B_base_tech_noise": (*V2_BASE_STRATA, V2_NOISE_STRATUM),
+    "1B_full": V2_FULL_STRATA,
+    "1B_full_v3": (*V2_FULL_STRATA, V2_NOISE_STRATUM),
+}
+V2_CONTRAST_FULL_DOC_PER_LANG: dict[str, int] = {
+    "1B_base_tech": 400,
+    "1B_base_tech_noise": 500,
+    "1B_full": 500,
+    "1B_full_v3": 600,
+}
 V2_DOMAIN_LANG: dict[str, str] = {"python": "en", "receta": "es"}
 V2_FULL_DOC_COUNTS: dict[tuple[str, str], int] = {
     ("en", "general_prose"): 300,
@@ -2331,6 +2344,36 @@ def _stack_embedding_groups(
     return np.concatenate(parts, axis=0)
 
 
+def contrast_preset_strata(preset: str) -> tuple[str, ...]:
+    """Strata for one 1B contrast preset.
+
+    ``1B_full`` stays on the three legacy strata. ``1B_full_v3`` and
+    ``1B_base_tech_noise`` append ``structural_symbol_noise``.
+    """
+    try:
+        return V2_CONTRAST_PRESETS[preset]
+    except KeyError as exc:
+        raise KeyError(f"unknown contrast preset: {preset}") from exc
+
+
+def stack_contrast_preset(
+    groups: Mapping[tuple[str, str, str, bool], Mapping[str, Any]],
+    lang: str,
+    granularity: str,
+    preset: str,
+    *,
+    normalize: bool = True,
+) -> np.ndarray:
+    """Stack embedding slices for a contrast preset. Does not open LanceDB."""
+    return _stack_embedding_groups(
+        groups,
+        lang,
+        granularity,
+        contrast_preset_strata(preset),
+        normalize=normalize,
+    )
+
+
 def _assert_unit_norm(matrix: np.ndarray, label: str) -> None:
     norms = np.linalg.norm(matrix, axis=1)
     error = float(np.max(np.abs(norms - 1.0)))
@@ -2443,17 +2486,15 @@ def build_v2_report(
     classifications: dict[str, dict[str, dict[str, Any]]] = {}
     for granularity in ("full_doc", "clause_opt2c"):
         classifications[granularity] = {}
-        for background_name, strata in (
-            ("1B_base_tech", V2_BASE_STRATA),
-            ("1B_full", V2_FULL_STRATA),
-        ):
+        for background_name in ("1B_base_tech", "1B_full"):
+            strata = contrast_preset_strata(background_name)
             classifications[granularity][background_name] = {}
             for domain, lang in V2_DOMAIN_LANG.items():
                 contrast = _stack_embedding_groups(
                     groups, lang, granularity, strata, normalize=True
                 )
                 if granularity == "full_doc":
-                    expected_rows = 400 if background_name == "1B_base_tech" else 500
+                    expected_rows = V2_CONTRAST_FULL_DOC_PER_LANG[background_name]
                     if contrast.shape[0] != expected_rows:
                         raise RuntimeError(
                             f"{background_name} {lang} full_doc rows {contrast.shape[0]} != {expected_rows}"
@@ -2680,6 +2721,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path("data/fhv1_1_research/background_embeddings_1k.parquet"),
         help="normalize=true 1,000-doc background parquet for --mode v2.",
+    )
+    parser.add_argument(
+        "--bg-1200",
+        type=Path,
+        default=Path("data/fhv1_1_research/background_embeddings_1200.parquet"),
+        help="normalize=true 1,200-doc background parquet, including structural_symbol_noise.",
     )
     parser.add_argument(
         "--out",

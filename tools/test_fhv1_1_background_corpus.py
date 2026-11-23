@@ -7,9 +7,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sys
+import unicodedata
 import unittest
 from collections import Counter
 from pathlib import Path
@@ -23,6 +25,8 @@ if str(TOOLS_DIR) not in sys.path:
 import generate_fhv1_benchmark as generator  # noqa: E402
 
 CORPUS_PATH = TOOLS_DIR / "fhv1_1_background_corpus.jsonl"
+# SHA-256 of the pre-slice file: bg-en-0001..0500 then bg-es-0001..0500, 1,000 lines.
+LOCKED_PREFIX_SHA256 = "9d7f64fd34a45bbd337ca8d2f72b61e25f8754b808f448bfb1abaa1c17c2dc14"
 
 GENERAL_TOPICS: tuple[str, ...] = (
     "finance",
@@ -69,7 +73,19 @@ NEAR_ES_TOPICS: tuple[str, ...] = (
     "agronomia_cosecha",
 )
 
-STRATA: tuple[str, ...] = ("general_prose", "technical_structured", "near_ood_neighbor")
+STRATA: tuple[str, ...] = (
+    "general_prose",
+    "technical_structured",
+    "near_ood_neighbor",
+    "structural_symbol_noise",
+)
+
+NOISE_TOPICS: tuple[str, ...] = (
+    "punct_burst",
+    "digit_dump",
+    "symbol_operator",
+    "mixed_low_lexical",
+)
 
 # Python-specific denylist. import / yield / lambda stay legal: they occur in
 # non-Python neighbor languages.
@@ -165,6 +181,8 @@ BLOCK_SPECS: tuple[tuple[str, str, int], ...] = (
     ("es", "general_prose", 300),
     ("es", "technical_structured", 100),
     ("es", "near_ood_neighbor", 100),
+    ("en", "structural_symbol_noise", 100),
+    ("es", "structural_symbol_noise", 100),
 )
 
 
@@ -181,6 +199,34 @@ def _prefix(text: str) -> str:
     toks = cleaned.split()
     width = min(6, len(toks))
     return " ".join(toks[:width])
+
+
+def _prefix_has_letter(prefix: str) -> bool:
+    return re.search(r"[a-zA-Záéíóúüñ]", prefix) is not None
+
+
+def _delete_unicode_whitespace(text: str) -> str:
+    return "".join(ch for ch in text if not ch.isspace())
+
+
+def _raw_non_ws_prefix(text: str, width: int = 24) -> str:
+    return _delete_unicode_whitespace(text)[:width]
+
+
+def _nfkc_casefold(text: str) -> str:
+    return unicodedata.normalize("NFKC", text).casefold()
+
+
+def _global_id_index(stratum: str, local_idx: int) -> int:
+    if stratum == "general_prose":
+        return local_idx
+    if stratum == "technical_structured":
+        return 300 + local_idx
+    if stratum == "near_ood_neighbor":
+        return 400 + local_idx
+    if stratum == "structural_symbol_noise":
+        return 500 + local_idx
+    raise AssertionError(f"unknown stratum: {stratum}")
 
 
 def _ngrams(tokens: list[str], n: int) -> set[str]:
@@ -294,15 +340,13 @@ class BackgroundCorpusContractTest(unittest.TestCase):
         return [row for row in self.rows if row["lang"] == lang and row["stratum"] == stratum]
 
     def test_schema_order_ids_and_exact_keys(self) -> None:
-        self.assertEqual(len(self.rows), 1000)
+        self.assertEqual(len(self.rows), 1200)
         offset = 0
         for lang, stratum, count in BLOCK_SPECS:
             block = self.rows[offset : offset + count]
             self.assertEqual(len(block), count)
             for local_idx, row in enumerate(block, start=1):
-                global_idx = local_idx if stratum == "general_prose" else (
-                    300 + local_idx if stratum == "technical_structured" else 400 + local_idx
-                )
+                global_idx = _global_id_index(stratum, local_idx)
                 self.assertEqual(set(row.keys()), {"id", "lang", "stratum", "topic", "text"})
                 self.assertEqual(row["lang"], lang)
                 self.assertEqual(row["stratum"], stratum)
@@ -311,9 +355,9 @@ class BackgroundCorpusContractTest(unittest.TestCase):
                 self.assertEqual(row["text"], row["text"].strip())
                 self.assertIn(row["stratum"], STRATA)
             offset += count
-        self.assertEqual(offset, 1000)
+        self.assertEqual(offset, 1200)
         langs = Counter(row["lang"] for row in self.rows)
-        self.assertEqual(langs, Counter({"en": 500, "es": 500}))
+        self.assertEqual(langs, Counter({"en": 600, "es": 600}))
 
     def test_general_prose_topic_quotas(self) -> None:
         for lang in ("en", "es"):
@@ -383,8 +427,13 @@ class BackgroundCorpusContractTest(unittest.TestCase):
     def test_unique_normalized_prefixes_per_language(self) -> None:
         for lang in ("en", "es"):
             subset = [row for row in self.rows if row["lang"] == lang]
-            prefixes = Counter(_prefix(row["text"]) for row in subset)
-            dups = [(prefix, freq) for prefix, freq in prefixes.items() if freq != 1]
+            prefixes: list[str] = []
+            for row in subset:
+                prefix = _prefix(row["text"])
+                if not _prefix_has_letter(prefix):
+                    continue
+                prefixes.append(prefix)
+            dups = [(prefix, freq) for prefix, freq in Counter(prefixes).items() if freq != 1]
             self.assertEqual(dups, [], f"{lang} prefix collisions")
 
     def test_pairwise_jaccard_strictly_below_threshold(self) -> None:
@@ -448,7 +497,10 @@ class BackgroundCorpusContractTest(unittest.TestCase):
             if row["stratum"] == "near_ood_neighbor":
                 neighbor_hits += len(hits)
                 continue
-            self.assertIn(row["stratum"], {"general_prose", "technical_structured"})
+            self.assertIn(
+                row["stratum"],
+                {"general_prose", "technical_structured", "structural_symbol_noise"},
+            )
             self.assertEqual(hits, [], f"{row['id']} culinary leak {hits}: {row['text'][:160]}")
         self.assertGreater(neighbor_hits, 0)
 
@@ -534,6 +586,129 @@ class BackgroundCorpusContractTest(unittest.TestCase):
                 bad.append(f"{lang}/{stratum} x{count} {skeleton}")
                 if len(bad) >= 8:
                     break
+        self.assertEqual(bad, [])
+
+    def test_first_1000_lines_match_locked_byte_prefix(self) -> None:
+        raw = CORPUS_PATH.read_bytes()
+        lines = raw.splitlines(keepends=True)
+        self.assertGreaterEqual(len(lines), 1200)
+        prefix = b"".join(lines[:1000])
+        self.assertEqual(hashlib.sha256(prefix).hexdigest(), LOCKED_PREFIX_SHA256)
+        expected_ids = [f"bg-en-{i:04d}" for i in range(1, 501)] + [
+            f"bg-es-{i:04d}" for i in range(1, 501)
+        ]
+        self.assertEqual([row["id"] for row in self.rows[:1000]], expected_ids)
+        for row in self.rows[:1000]:
+            self.assertNotEqual(row["stratum"], "structural_symbol_noise")
+            self.assertIn(row["stratum"], {"general_prose", "technical_structured", "near_ood_neighbor"})
+
+    def test_structural_symbol_noise_ids_topics_and_quota(self) -> None:
+        self.assertEqual([row["id"] for row in self.rows[1000:1100]], [f"bg-en-{i:04d}" for i in range(501, 601)])
+        self.assertEqual([row["id"] for row in self.rows[1100:1200]], [f"bg-es-{i:04d}" for i in range(501, 601)])
+        for start, lang in ((1000, "en"), (1100, "es")):
+            block = self.rows[start : start + 100]
+            self.assertEqual(len(block), 100)
+            counts = Counter(row["topic"] for row in block)
+            self.assertEqual(dict(counts), {topic: 25 for topic in NOISE_TOPICS})
+            for topic_index, topic in enumerate(NOISE_TOPICS):
+                slice_rows = block[topic_index * 25 : (topic_index + 1) * 25]
+                self.assertEqual([row["topic"] for row in slice_rows], [topic] * 25)
+                self.assertEqual(
+                    [row["id"] for row in slice_rows],
+                    [f"bg-{lang}-{501 + topic_index * 25 + offset:04d}" for offset in range(25)],
+                )
+            for row in block:
+                self.assertEqual(row["lang"], lang)
+                self.assertEqual(row["stratum"], "structural_symbol_noise")
+                self.assertEqual(set(row.keys()), {"id", "lang", "stratum", "topic", "text"})
+                self.assertEqual(row["text"], row["text"].strip())
+                self.assertGreaterEqual(len(_raw_non_ws_prefix(row["text"], 10_000)), 24)
+
+    def test_empty_alphabetic_prefix_only_for_structural_symbol_noise(self) -> None:
+        saw_empty = False
+        for row in self.rows:
+            prefix = _prefix(row["text"])
+            if _prefix_has_letter(prefix):
+                continue
+            saw_empty = True
+            self.assertEqual(
+                row["stratum"],
+                "structural_symbol_noise",
+                f"{row['id']} empty alphabetic prefix {prefix!r}",
+            )
+        self.assertTrue(saw_empty)
+
+    def test_structural_symbol_noise_raw_prefixes_unique_per_language(self) -> None:
+        for lang in ("en", "es"):
+            rows = [
+                row
+                for row in self.rows
+                if row["lang"] == lang and row["stratum"] == "structural_symbol_noise"
+            ]
+            self.assertEqual(len(rows), 100)
+            prefixes = [_raw_non_ws_prefix(row["text"]) for row in rows]
+            for row, prefix in zip(rows, prefixes):
+                self.assertGreaterEqual(len(prefix), 24, row["id"])
+            dups = [prefix for prefix, freq in Counter(prefixes).items() if freq != 1]
+            self.assertEqual(dups, [], lang)
+
+    def test_structural_symbol_noise_stripped_sequences_miss_references(self) -> None:
+        ref_texts = _collect_reference_texts()
+        self.assertGreater(len(ref_texts), 1500)
+        ref_exact: set[str] = set()
+        ref_folded: set[str] = set()
+        for ref in ref_texts:
+            stripped = _delete_unicode_whitespace(ref)
+            if not stripped:
+                continue
+            ref_exact.add(stripped)
+            ref_folded.add(_nfkc_casefold(stripped))
+        self.assertGreater(len(ref_exact), 1000)
+        bad: list[str] = []
+        for row in self.rows:
+            if row["stratum"] != "structural_symbol_noise":
+                continue
+            stripped = _delete_unicode_whitespace(row["text"])
+            if stripped in ref_exact:
+                bad.append(f"{row['id']} stripped-exact")
+            if _nfkc_casefold(stripped) in ref_folded:
+                bad.append(f"{row['id']} stripped-nfkc-casefold")
+            if len(bad) >= 8:
+                break
+        self.assertEqual(bad, [])
+
+    def test_structural_symbol_noise_reference_windows_are_disjoint(self) -> None:
+        ref_texts = _collect_reference_texts()
+        ref_raw: set[str] = set()
+        ref_folded: set[str] = set()
+        ref_4: set[str] = set()
+        ref_5: set[str] = set()
+        for ref in ref_texts:
+            trimmed = ref.strip()
+            ref_raw.add(trimmed)
+            ref_folded.add(generator.nfkc_lower(trimmed))
+            tokens = _norm_tokens(trimmed)
+            ref_4.update(_ngrams(tokens, 4))
+            ref_5.update(_ngrams(tokens, 5))
+        bad: list[str] = []
+        for row in self.rows:
+            if row["stratum"] != "structural_symbol_noise":
+                continue
+            raw = row["text"].strip()
+            folded = generator.nfkc_lower(raw)
+            if raw in ref_raw:
+                bad.append(f"{row['id']} raw")
+            if folded in ref_folded:
+                bad.append(f"{row['id']} nfkc")
+            tokens = _norm_tokens(raw)
+            hit4 = _ngrams(tokens, 4) & ref_4
+            hit5 = _ngrams(tokens, 5) & ref_5
+            if hit4:
+                bad.append(f"{row['id']} 4gram {next(iter(hit4))}")
+            if hit5:
+                bad.append(f"{row['id']} 5gram {next(iter(hit5))}")
+            if len(bad) >= 12:
+                break
         self.assertEqual(bad, [])
 
 
