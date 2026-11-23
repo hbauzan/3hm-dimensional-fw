@@ -373,7 +373,7 @@ Set `TASK-014` to `DONE` in `TASKS.md`. Run:
 * LanceDB `19/19`, `DIFF_IDENTICAL=0`, counts `66 / 4 / 149458 / 24 / 164939`,
 * `PORTS_8080_8088_CLOSED`,
 * `git log` author/committer on every `TASK-014` commit equals `Héctor Andrés Bauzán Saavedra <hbauzan@gmail.com>` and the messages contain zero `Co-authored-by:`,
-* a word-boundary scan of added and modified tracked files for forbidden assistant, editor, IDE, and commercial model names (zero hits),
+* a word-boundary scan of added and modified tracked files for forbidden external helpers, editing tools, and commercial model names (zero hits),
 * `agent.sh validate --task-file TASKS.md` and `agent.sh notify --task-file TASKS.md`.
 
 Commit: `chore(fhv1): publish the fhv1_1 v3 full-1024D and lexical guardrail report`
