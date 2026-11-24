@@ -27,6 +27,7 @@ import socket
 import subprocess
 import sys
 import time
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
@@ -74,6 +75,30 @@ DEFAULT_OUT_DIR = Path("/tmp/fhv1_1_id_v4")
 SERVER_HOST = "127.0.0.1"
 SERVER_PORT = 8080
 SERVER_SCRIPT = Path(__file__).resolve().parent / "bge_m3_mps_server.py"
+N_CAL_LADDER: tuple[int, ...] = (1, 5, 10, 25, 50, 100, 200, 400, 600)
+N_CAL_SEEDS: tuple[int, ...] = (0, 1, 2, 3, 4)
+STD_T_ZERO_FALLBACK = "std_pool=std_C"
+DESCRIPTION_ONLY_TEXTS: dict[str, str] = {
+    "python": (
+        "Production Python services keep request handlers thin: validate the inbound schema, "
+        "enqueue durable work, and return a typed acknowledgment without blocking on downstream "
+        "side effects. Background workers own retries, idempotency keys, and dead-letter routing "
+        "so a transient database blip never doubles a payment capture. Structured logging carries "
+        "correlation ids across process boundaries, while property-based tests pin edge cases in "
+        "parsers that hand-written fixtures routinely miss. When latency budgets tighten, profile "
+        "before rewriting: most regressions come from accidental N-plus-one queries, not from the "
+        "language runtime itself."
+    ),
+    "receta": (
+        "Una cocina de producción separa mise en place, cocción y emplatado para que el servicio "
+        "no se trabe en el pico de la noche. Las salsas madres se reducen con fuego bajo y se "
+        "guardan etiquetadas con fecha, mientras las proteínas se temperan antes de sellar para "
+        "evitar un centro frío. El control de textura vive en la salmuera, el reposo y el corte "
+        "final, no en improvisar al momento del pase. Cuando una salsa corta, se rescata con un "
+        "poco de líquido frío y emulsión lenta; nunca se sube el fuego a ciegas. El inventario "
+        "diario marca mermas reales para ajustar compras sin desperdiciar producto noble."
+    ),
+}
 
 
 def _log(message: str) -> None:
@@ -734,8 +759,27 @@ class EmbedServerSession:
         self.host = host
         self.port = port
         self.ready_timeout_s = ready_timeout_s
-        self.proc: subprocess.Popen[str] | None = None
+        self.proc: subprocess.Popen[bytes] | None = None
         self._registered = False
+        self._stderr_path: Path | None = None
+        self._stderr_handle: Any = None
+
+    def _close_stderr(self) -> None:
+        handle = self._stderr_handle
+        self._stderr_handle = None
+        if handle is not None:
+            try:
+                handle.close()
+            except OSError:
+                pass
+
+    def _stderr_tail(self, limit: int = 2000) -> str:
+        if self._stderr_path is None or not self._stderr_path.is_file():
+            return ""
+        try:
+            return self._stderr_path.read_text(encoding="utf-8", errors="replace")[-limit:]
+        except OSError:
+            return ""
 
     def start(self) -> int:
         if self.proc is not None:
@@ -744,20 +788,27 @@ class EmbedServerSession:
             raise RuntimeError(f"{self.host}:{self.port} is already open")
         env = os.environ.copy()
         env["HF_HUB_OFFLINE"] = "1"
+        env.setdefault("UV_CACHE_DIR", "/Users/hbauzan/.cache/uv")
         env["TEI_PORT"] = str(self.port)
+        # Launch via uv so the server's PEP 723 deps resolve; raw sys.executable lacks torch/fastapi.
+        self._stderr_path = Path("/tmp") / f"fhv1_1_bge_server_{os.getpid()}.stderr"
+        self._stderr_handle = open(self._stderr_path, "w", encoding="utf-8")
         self.proc = subprocess.Popen(
-            [sys.executable, str(self.script)],
+            ["uv", "run", "--offline", "--script", str(self.script)],
             env=env,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            text=True,
+            stderr=self._stderr_handle,
         )
         atexit.register(self.cleanup)
         self._registered = True
         deadline = time.time() + self.ready_timeout_s
         while time.time() < deadline:
             if self.proc.poll() is not None:
-                raise RuntimeError(f"embed server exited early with code {self.proc.returncode}")
+                self._close_stderr()
+                tail = self._stderr_tail()
+                raise RuntimeError(
+                    f"embed server exited early with code {self.proc.returncode}: {tail}"
+                )
             if _port_is_open(self.host, self.port):
                 return int(self.proc.pid)
             time.sleep(0.1)
@@ -766,6 +817,7 @@ class EmbedServerSession:
 
     def cleanup(self) -> None:
         if self.proc is None:
+            self._close_stderr()
             return
         pid = int(self.proc.pid)
         _kill_exact_pid(pid)
@@ -774,6 +826,7 @@ class EmbedServerSession:
         except subprocess.TimeoutExpired:
             _kill_exact_pid(pid)
         self.proc = None
+        self._close_stderr()
 
     def __enter__(self) -> EmbedServerSession:
         self.start()
@@ -844,6 +897,524 @@ def _reject_tracked_output(out_dir: Path) -> None:
         banned_resolved = banned.resolve()
         if resolved == banned_resolved or banned_resolved in resolved.parents:
             raise RuntimeError(f"refusing to write v4 JSON under {banned_resolved}")
+    # Also refuse any path whose components include tracked trees, even when cwd-relative.
+    parts = {part.lower() for part in resolved.parts}
+    if "reports" in parts or "data" in parts:
+        raise RuntimeError(f"refusing to write v4 JSON under tracked tree path {resolved}")
+
+
+def nfkc_casefold(text: str) -> str:
+    """NFKC then casefold for anti-leakage overlap checks."""
+    if not isinstance(text, str):
+        raise TypeError("text must be str")
+    return unicodedata.normalize("NFKC", text).casefold()
+
+
+def assert_zero_text_overlap(candidate: str, corpora: Sequence[str]) -> None:
+    """Raise when candidate collides with any corpus row under raw, NFKC, or casefold views."""
+    if not candidate.strip():
+        raise ValueError("candidate text is empty")
+    views = {
+        "raw": candidate,
+        "nfkc": unicodedata.normalize("NFKC", candidate),
+        "casefold": nfkc_casefold(candidate),
+    }
+    corpus_views: list[dict[str, str]] = []
+    for row in corpora:
+        corpus_views.append(
+            {
+                "raw": row,
+                "nfkc": unicodedata.normalize("NFKC", row),
+                "casefold": nfkc_casefold(row),
+            }
+        )
+    for name, value in views.items():
+        for idx, row_views in enumerate(corpus_views):
+            if value == row_views[name]:
+                raise RuntimeError(f"overlap under {name} with corpus row {idx}")
+
+
+@dataclass(frozen=True)
+class VolumeCurveFit:
+    """Directional fit used by the N_cal ladder, including the N=1 std fallback label."""
+
+    mu_t: np.ndarray
+    std_t: np.ndarray
+    mu_c: np.ndarray
+    std_c: np.ndarray
+    std_pool: np.ndarray
+    sep: np.ndarray
+    direction: np.ndarray
+    midpoint: np.ndarray
+    tie_count: int
+    std_t_fallback: str | None = None
+
+    @property
+    def dim(self) -> int:
+        return int(self.mu_t.shape[0])
+
+    def as_directional(self) -> v3.DirectionalFit:
+        return v3.DirectionalFit(
+            mu_t=self.mu_t,
+            std_t=self.std_t,
+            mu_c=self.mu_c,
+            std_c=self.std_c,
+            std_pool=self.std_pool,
+            sep=self.sep,
+            direction=self.direction,
+            midpoint=self.midpoint,
+            tie_count=self.tie_count,
+        )
+
+
+def fit_directional_n1(target: np.ndarray, contrast: np.ndarray) -> VolumeCurveFit:
+    """N=1 dial: ``std_T = 0`` forces ``std_pool = std_C`` against the contrast cloud."""
+    target_m = _as_f64_matrix(target, name="n1_target")
+    if target_m.shape[0] != 1:
+        raise ValueError(f"N=1 fit expects exactly one target row, got {target_m.shape[0]}")
+    contrast_m = _as_f64_matrix(contrast, name="n1_contrast")
+    if contrast_m.shape[1] != target_m.shape[1]:
+        raise ValueError("N=1 contrast dim differs from target")
+    if contrast_m.shape[0] < 2:
+        raise ValueError("N=1 contrast needs at least 2 rows for ddof=1")
+    mu_t = target_m[0].astype(np.float64, copy=True)
+    std_t = np.zeros_like(mu_t)
+    contrast_moments = xray.compute_coordinate_moments(contrast_m, expected_dim=int(mu_t.shape[0]))
+    mu_c = contrast_moments.mean
+    std_c = contrast_moments.std_dev_sample
+    _, _, _, _, sep, _ = xray.coordinate_contrast_stats(mu_t, std_t, mu_c, std_c)
+    direction = np.sign(mu_t - mu_c)
+    return VolumeCurveFit(
+        mu_t=mu_t,
+        std_t=std_t,
+        mu_c=mu_c,
+        std_c=std_c,
+        std_pool=np.asarray(std_c, dtype=np.float64).copy(),
+        sep=np.asarray(sep, dtype=np.float64),
+        direction=np.asarray(direction, dtype=np.float64),
+        midpoint=np.float64(0.5) * (mu_t + mu_c),
+        tie_count=int(np.sum(direction == 0.0)),
+        std_t_fallback=STD_T_ZERO_FALLBACK,
+    )
+
+
+def fit_directional_matrices_allow_n1(target: np.ndarray, contrast: np.ndarray) -> VolumeCurveFit:
+    """Route N=1 through the std_C fallback; N>=2 uses the standard pooled dial."""
+    target_m = _as_f64_matrix(target, name="calibration")
+    if target_m.shape[0] == 1:
+        return fit_directional_n1(target_m, contrast)
+    base = v3.fit_directional_matrices(target_m, contrast)
+    return VolumeCurveFit(
+        mu_t=base.mu_t,
+        std_t=base.std_t,
+        mu_c=base.mu_c,
+        std_c=base.std_c,
+        std_pool=base.std_pool,
+        sep=base.sep,
+        direction=base.direction,
+        midpoint=base.midpoint,
+        tie_count=base.tie_count,
+        std_t_fallback=None,
+    )
+
+
+def subsample_calibration_indices(n_total: int, n_keep: int, *, seed: int) -> np.ndarray:
+    """Deterministic without-replacement subsample of calibration bundle indices."""
+    if n_keep < 1:
+        raise ValueError("n_keep must be >= 1")
+    if n_keep > n_total:
+        raise ValueError(f"cannot keep {n_keep} from {n_total}")
+    rng = np.random.Generator(np.random.PCG64(np.uint64(seed)))
+    return np.sort(rng.choice(n_total, size=n_keep, replace=False).astype(np.int64))
+
+
+def _far_on_mask(y_true: np.ndarray, pred: np.ndarray, mask: np.ndarray) -> float | None:
+    labels = np.asarray(y_true, dtype=bool)
+    predictions = np.asarray(pred, dtype=bool)
+    selected = np.asarray(mask, dtype=bool)
+    if not np.any(selected):
+        return None
+    neg = selected & (~labels)
+    if not np.any(neg):
+        return None
+    return float(np.sum(predictions[neg]) / np.sum(neg))
+
+
+def _n_cal_metric_pack(
+    *,
+    cal_scores: np.ndarray,
+    hold_scores: np.ndarray,
+    y_true: np.ndarray,
+    categories: Sequence[str],
+    subtypes: Sequence[str],
+    fit: VolumeCurveFit,
+    n_cal: int,
+    seed: int | None,
+    kind: str,
+) -> dict[str, Any]:
+    cal_only = evaluate_cal_only(cal_scores, hold_scores, y_true)
+    auc = sim.compute_auc_triple(np.asarray(y_true, dtype=bool), hold_scores)
+    threshold = float(cal_only["p10"]["threshold"])
+    pred = hold_scores >= np.float64(threshold)
+    cats = np.asarray(list(categories), dtype=object)
+    subs = np.asarray(list(subtypes), dtype=object)
+    oracle_t, oracle_m = sim.fit_best_1d_threshold(hold_scores, np.asarray(y_true, dtype=bool))
+    return {
+        "kind": kind,
+        "n_cal": int(n_cal),
+        "seed": None if seed is None else int(seed),
+        "std_t_fallback": fit.std_t_fallback,
+        "cal_only": cal_only,
+        "roc_auc": float(auc["roc_auc"]),
+        "pr_auc_in_domain": float(auc["pr_auc_in_domain"]),
+        "pr_auc_reject": float(auc["pr_auc_reject"]),
+        "frr": cal_only["p10"]["frr"],
+        "far": cal_only["p10"]["far"],
+        "ood_far": _far_on_mask(y_true, pred, cats == "OUT_OF_DOMAIN_BENIGN"),
+        "adv_far": _far_on_mask(y_true, pred, cats == "ADVERSARIAL_FUZZING"),
+        "near_ood_far": _far_on_mask(y_true, pred, subs == "near_ood_neighbor"),
+        "threshold_p10": threshold,
+        "sep_ge_1_count": int(np.sum(fit.sep >= np.float64(1.0))),
+        "oracle_upper_bound": {
+            **{k: (None if v is None else (float(v) if isinstance(v, (float, np.floating)) else v)) for k, v in oracle_m.items()},
+            "threshold": float(oracle_t),
+            "tag": "[ORACLE_UPPER_BOUND]",
+        },
+    }
+
+
+def evaluate_n_cal_seed(
+    *,
+    cal_vectors: np.ndarray,
+    contrast: np.ndarray,
+    hold_vectors: np.ndarray,
+    y_true: np.ndarray,
+    categories: Sequence[str],
+    subtypes: Sequence[str],
+    n_keep: int,
+    seed: int,
+) -> dict[str, Any]:
+    """One deterministic subsample rung against the fixed holdout."""
+    matrix = _as_f64_matrix(cal_vectors, name="n_cal_calibration")
+    indices = subsample_calibration_indices(matrix.shape[0], n_keep, seed=seed)
+    subset = matrix[indices]
+    fit = fit_directional_matrices_allow_n1(subset, contrast)
+    directional = fit.as_directional()
+    cal_scores = v3.score_dir1024(subset, directional, DIR_VARIANT)
+    hold_scores = v3.score_dir1024(hold_vectors, directional, DIR_VARIANT)
+    return _n_cal_metric_pack(
+        cal_scores=cal_scores,
+        hold_scores=hold_scores,
+        y_true=y_true,
+        categories=categories,
+        subtypes=subtypes,
+        fit=fit,
+        n_cal=n_keep,
+        seed=seed,
+        kind="real_doc_subsample",
+    )
+
+
+def evaluate_description_only_scores(
+    *,
+    domain: str,
+    description_vector: np.ndarray,
+    contrast: np.ndarray,
+    hold_vectors: np.ndarray,
+    y_true: np.ndarray,
+    categories: Sequence[str],
+    subtypes: Sequence[str],
+) -> dict[str, Any]:
+    """Score holdout from a single description embedding with the N=1 std fallback."""
+    fit = fit_directional_n1(description_vector, contrast)
+    directional = fit.as_directional()
+    desc_score = v3.score_dir1024(description_vector, directional, DIR_VARIANT)
+    hold_scores = v3.score_dir1024(hold_vectors, directional, DIR_VARIANT)
+    threshold = float(desc_score[0])
+    pred = hold_scores >= np.float64(threshold)
+    auc = sim.compute_auc_triple(np.asarray(y_true, dtype=bool), hold_scores)
+    metrics = sim.compute_confusion_metrics(np.asarray(y_true, dtype=bool), pred)
+    cats = np.asarray(list(categories), dtype=object)
+    subs = np.asarray(list(subtypes), dtype=object)
+    oracle_t, oracle_m = sim.fit_best_1d_threshold(hold_scores, np.asarray(y_true, dtype=bool))
+    return {
+        "kind": "description_only",
+        "domain": domain,
+        "n_cal": 1,
+        "std_t_fallback": fit.std_t_fallback,
+        "threshold_relative_1b": threshold,
+        "roc_auc": float(auc["roc_auc"]),
+        "pr_auc_in_domain": float(auc["pr_auc_in_domain"]),
+        "pr_auc_reject": float(auc["pr_auc_reject"]),
+        "f1": float(metrics["f1"]),
+        "frr": metrics["frr"],
+        "far": metrics["far"],
+        "ood_far": _far_on_mask(y_true, pred, cats == "OUT_OF_DOMAIN_BENIGN"),
+        "adv_far": _far_on_mask(y_true, pred, cats == "ADVERSARIAL_FUZZING"),
+        "near_ood_far": _far_on_mask(y_true, pred, subs == "near_ood_neighbor"),
+        "sep_ge_1_count": int(np.sum(fit.sep >= np.float64(1.0))),
+        "oracle_upper_bound": {
+            **{k: (None if v is None else (float(v) if isinstance(v, (float, np.floating)) else v)) for k, v in oracle_m.items()},
+            "threshold": float(oracle_t),
+            "tag": "[ORACLE_UPPER_BOUND]",
+        },
+        "eje1_preset": EJE1_PRESET,
+    }
+
+
+def _mean_std(values: Sequence[float | None]) -> tuple[float | None, float | None]:
+    cleaned = [float(v) for v in values if v is not None and np.isfinite(v)]
+    if not cleaned:
+        return None, None
+    arr = np.asarray(cleaned, dtype=np.float64)
+    mean = float(np.mean(arr))
+    std = 0.0 if arr.size == 1 else float(np.std(arr, ddof=1))
+    return mean, std
+
+
+def aggregate_n_cal_rung(seed_rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """mean±std across deterministic seeds for one N_cal rung."""
+    if not seed_rows:
+        raise ValueError("aggregate_n_cal_rung needs at least one seed row")
+    n_cal = int(seed_rows[0]["n_cal"])
+    keys = {
+        "p05_f1": [row["cal_only"]["p05"]["f1"] for row in seed_rows],
+        "p10_f1": [row["cal_only"]["p10"]["f1"] for row in seed_rows],
+        "frr": [row["frr"] for row in seed_rows],
+        "far": [row["far"] for row in seed_rows],
+        "roc_auc": [row["roc_auc"] for row in seed_rows],
+        "ood_far": [row["ood_far"] for row in seed_rows],
+        "adv_far": [row["adv_far"] for row in seed_rows],
+        "near_ood_far": [row["near_ood_far"] for row in seed_rows],
+        "threshold_p10": [row["threshold_p10"] for row in seed_rows],
+        "sep_ge_1_count": [row["sep_ge_1_count"] for row in seed_rows],
+    }
+    mean: dict[str, float | None] = {}
+    std: dict[str, float | None] = {}
+    for name, series in keys.items():
+        m, s = _mean_std(series)
+        mean[name] = m
+        std[name] = s
+    return {
+        "n_cal": n_cal,
+        "n_seeds": len(seed_rows),
+        "mean": mean,
+        "std": std,
+        "threshold_stability_std": std["threshold_p10"],
+        "seeds": [int(row["seed"]) for row in seed_rows if row.get("seed") is not None],
+    }
+
+
+def marginal_n_cal_deltas(rungs: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Consecutive-rung deltas on mean p10 F1 / AUC / FRR / FAR."""
+    if len(rungs) < 2:
+        return []
+    out: list[dict[str, Any]] = []
+    for prev, curr in zip(rungs, rungs[1:]):
+        prev_mean = prev["mean"]
+        curr_mean = curr["mean"]
+        out.append(
+            {
+                "from_n": int(prev["n_cal"]),
+                "to_n": int(curr["n_cal"]),
+                "delta_f1": float(curr_mean["p10_f1"] - prev_mean["p10_f1"]),
+                "delta_auc": float(curr_mean["roc_auc"] - prev_mean["roc_auc"]),
+                "delta_frr": float(curr_mean["frr"] - prev_mean["frr"]),
+                "delta_far": float(curr_mean["far"] - prev_mean["far"]),
+            }
+        )
+    return out
+
+
+def embed_texts_loopback(
+    texts: Sequence[str],
+    *,
+    host: str = SERVER_HOST,
+    port: int = SERVER_PORT,
+    normalize: bool = True,
+    batch_size: int = 8,
+) -> np.ndarray:
+    """POST ``/embed`` on the local MPS server. Caller owns server lifetime."""
+    import httpx
+
+    if not texts:
+        return np.empty((0, sim.DIM), dtype=np.float64)
+    url = f"http://{host}:{port}"
+    with httpx.Client(timeout=180.0, trust_env=False) as client:
+        return xray._embed_batches_loopback(
+            client,
+            url,
+            list(texts),
+            normalize=normalize,
+            batch_size=batch_size,
+            expected_dim=sim.DIM,
+        )
+
+
+def evaluate_clause_cap_cell(
+    *,
+    domain: str,
+    hold_texts: Sequence[str],
+    hold_clauses: Sequence[Sequence[str]],
+    hold_gen_full: np.ndarray,
+    hold_gen_clause_scores: Sequence[np.ndarray],
+    hold_near_full: np.ndarray,
+    hold_near_clause_scores: Sequence[np.ndarray],
+    hold_struct_min_uncapped: np.ndarray,
+    y_true: np.ndarray,
+    categories: Sequence[str],
+    subtypes: Sequence[str],
+    cal_gen: np.ndarray,
+    cal_near: np.ndarray,
+    cal_struct: np.ndarray,
+    clause_profile: lex.LexicalProfile,
+    w_f: float = 0.35,
+) -> dict[str, Any]:
+    """CAL_ONLY F1/FAR under each clause_cap on dilution / smuggle / flooding subtypes."""
+    specs = [
+        spec
+        for spec in compact_recipe_catalog("full_only")
+        if spec.family == "eje1_only" and abs(float(spec.beta)) < 1e-15
+    ]
+    if len(specs) != 1:
+        raise RuntimeError(f"expected exactly one eje1_only recipe, got {len(specs)}")
+    rows: list[dict[str, Any]] = []
+    focus = ("dilution_80_20", "smuggle_recipe_footnote", "long_context_flooding", "prompt_injection_jailbreak")
+    for cap in CLAUSE_CAPS:
+        gen_clause_min = np.empty(len(hold_texts), dtype=np.float64)
+        near_clause_min = np.empty(len(hold_texts), dtype=np.float64)
+        struct_min = np.empty(len(hold_texts), dtype=np.float64)
+        selected_counts: list[int] = []
+        for i, clauses in enumerate(hold_clauses):
+            gen_vals = hold_gen_clause_scores[i]
+            near_vals = hold_near_clause_scores[i]
+            n_clause_scores = int(gen_vals.shape[0])
+            if n_clause_scores == 0:
+                gen_clause_min[i] = hold_gen_full[i]
+                near_clause_min[i] = hold_near_full[i]
+                struct_min[i] = hold_struct_min_uncapped[i]
+                selected_counts.append(0)
+                continue
+            if len(clauses) == n_clause_scores:
+                prefilter = prefilter_clause_s_struct(clauses, clause_profile)
+            else:
+                # LanceDB clause count can diverge from a fresh segment; rank by axis score.
+                prefilter = np.asarray(gen_vals, dtype=np.float64).copy()
+            if near_vals.shape[0] != n_clause_scores:
+                raise RuntimeError("near/general clause score lengths diverge")
+            keep = select_clause_indices_edge_plus_struct(n_clause_scores, cap, prefilter)
+            selected_counts.append(len(keep))
+            gen_clause_min[i] = float(np.min(gen_vals[keep]))
+            near_clause_min[i] = float(np.min(near_vals[keep]))
+            struct_min[i] = float(np.min(prefilter[keep]))
+        hold_gen = v3.blend_documents(hold_gen_full, gen_clause_min, w_f)
+        hold_near = v3.blend_documents(hold_near_full, near_clause_min, w_f)
+        cal_matrix = materialize_recipe_matrix(specs, cal_gen, cal_near, cal_struct)
+        hold_matrix = materialize_recipe_matrix(specs, hold_gen, hold_near, struct_min)
+        cal_only = evaluate_cal_only(cal_matrix[:, 0], hold_matrix[:, 0], y_true)
+        threshold = float(cal_only["p10"]["threshold"])
+        pred = hold_matrix[:, 0] >= np.float64(threshold)
+        subtype_far = {}
+        for name in focus:
+            mask = np.asarray(list(subtypes), dtype=object) == name
+            subtype_far[name] = _far_on_mask(y_true, pred, mask)
+        rows.append(
+            {
+                "clause_cap": cap,
+                "mean_selected_clauses": float(np.mean(np.asarray(selected_counts, dtype=np.float64))),
+                "cal_only_p10": cal_only["p10"],
+                "f1": float(cal_only["p10"]["f1"]),
+                "far": cal_only["p10"]["far"],
+                "frr": cal_only["p10"]["frr"],
+                "subtype_far": subtype_far,
+            }
+        )
+    return {
+        "domain": domain,
+        "w_f": w_f,
+        "recipe": specs[0].as_dict(),
+        "caps": rows,
+    }
+
+
+def run_n_cal_volume_curve_domain(
+    *,
+    domain: str,
+    cal_vectors: np.ndarray,
+    contrast: np.ndarray,
+    hold_vectors: np.ndarray,
+    y_true: np.ndarray,
+    categories: Sequence[str],
+    subtypes: Sequence[str],
+    description_vector: np.ndarray | None,
+    description_text: str | None,
+    overlap_corpora: Sequence[str],
+) -> dict[str, Any]:
+    """Full description-only + real-doc ladder for one domain."""
+    if description_text is not None:
+        assert_zero_text_overlap(description_text, overlap_corpora)
+    description_block = None
+    if description_vector is not None:
+        description_block = evaluate_description_only_scores(
+            domain=domain,
+            description_vector=description_vector,
+            contrast=contrast,
+            hold_vectors=hold_vectors,
+            y_true=y_true,
+            categories=categories,
+            subtypes=subtypes,
+        )
+    ladder_rows: list[dict[str, Any]] = []
+    rung_summaries: list[dict[str, Any]] = []
+    n_total = int(cal_vectors.shape[0])
+    for n_keep in N_CAL_LADDER:
+        if n_keep > n_total:
+            raise RuntimeError(f"ladder N={n_keep} exceeds calibration size {n_total}")
+        if n_keep == n_total:
+            fit = fit_directional_matrices_allow_n1(cal_vectors, contrast)
+            directional = fit.as_directional()
+            cal_scores = v3.score_dir1024(cal_vectors, directional, DIR_VARIANT)
+            hold_scores = v3.score_dir1024(hold_vectors, directional, DIR_VARIANT)
+            seed_rows = [
+                _n_cal_metric_pack(
+                    cal_scores=cal_scores,
+                    hold_scores=hold_scores,
+                    y_true=y_true,
+                    categories=categories,
+                    subtypes=subtypes,
+                    fit=fit,
+                    n_cal=n_keep,
+                    seed=None,
+                    kind="full_calibration",
+                )
+            ]
+        else:
+            seed_rows = [
+                evaluate_n_cal_seed(
+                    cal_vectors=cal_vectors,
+                    contrast=contrast,
+                    hold_vectors=hold_vectors,
+                    y_true=y_true,
+                    categories=categories,
+                    subtypes=subtypes,
+                    n_keep=n_keep,
+                    seed=seed,
+                )
+                for seed in N_CAL_SEEDS
+            ]
+        ladder_rows.extend(seed_rows)
+        rung_summaries.append(aggregate_n_cal_rung(seed_rows))
+    return {
+        "domain": domain,
+        "description_only": description_block,
+        "ladder": rung_summaries,
+        "ladder_seed_rows": ladder_rows,
+        "marginal_deltas": marginal_n_cal_deltas(rung_summaries),
+        "n_cal_ladder": list(N_CAL_LADDER),
+        "n_cal_seeds": list(N_CAL_SEEDS),
+        "holdout_n": int(np.asarray(y_true).shape[0]),
+        "eje1_preset": EJE1_PRESET,
+    }
 
 
 def evaluate_cell_synthetic(
@@ -912,6 +1483,31 @@ def evaluate_cell_synthetic(
     }
 
 
+def _write_json(out_path: Path, filename: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+    destination = out_path / filename
+    destination.write_text(json.dumps(v2.to_jsonable(dict(payload)), indent=2, allow_nan=False), encoding="utf-8")
+    return {
+        "file": filename,
+        "bytes": int(destination.stat().st_size),
+        "path": str(destination),
+    }
+
+
+def _clause_score_lists(
+    bundle: sim.PromptBundle,
+    chunk_scores: np.ndarray,
+) -> list[np.ndarray]:
+    """Per-prompt clause score vectors aligned with ``segment_clauses_opt2c`` order."""
+    out: list[np.ndarray] = []
+    scores = np.asarray(chunk_scores, dtype=np.float64)
+    for sl in bundle.clause_chunk_slices:
+        if sl.size == 0:
+            out.append(np.zeros(0, dtype=np.float64))
+        else:
+            out.append(np.asarray(scores[sl], dtype=np.float64))
+    return out
+
+
 def run_replay_v4(
     *,
     lancedb_uri: Path,
@@ -920,7 +1516,7 @@ def run_replay_v4(
     augmented_dir: Path,
     out_dir: Path,
 ) -> str:
-    """Full dual-axis sweep. Intended for Slice 3 execution against LanceDB."""
+    """Full dual-axis sweep, clause_cap eval, N_cal curve, and flooding latency."""
     import lancedb
 
     _reject_tracked_output(Path(out_dir))
@@ -932,6 +1528,81 @@ def run_replay_v4(
     runs = sim.load_lancedb_benchmark_runs(db)
     written: list[dict[str, Any]] = []
     headlines: list[str] = []
+    n_cal_files: list[dict[str, Any]] = []
+    clause_cap_files: list[dict[str, Any]] = []
+    flooding_texts: dict[str, list[str]] = {}
+    desc_texts = dict(DESCRIPTION_ONLY_TEXTS)
+
+    # Description embeddings via MPS server (exact-PID cleanup).
+    desc_vectors: dict[str, np.ndarray] = {}
+    session = EmbedServerSession()
+    try:
+        pid = session.start()
+        _log(f"embed server pid={pid} for description + flooding")
+        for domain, text in desc_texts.items():
+            vec = embed_texts_loopback([text], normalize=True)
+            desc_vectors[domain] = vec
+            emb_path = out_path / f"description_only__{domain}__embedding.json"
+            emb_path.write_text(
+                json.dumps(
+                    {
+                        "domain": domain,
+                        "normalize": True,
+                        "dim": int(vec.shape[1]),
+                        "vector": [float(x) for x in vec[0]],
+                        "text": text,
+                    },
+                    indent=2,
+                    allow_nan=False,
+                ),
+                encoding="utf-8",
+            )
+            written.append({"file": emb_path.name, "bytes": int(emb_path.stat().st_size), "kind": "description_embedding"})
+        # Flooding latency measured while the server is up.
+        flooding_latency: dict[str, Any] = {"domains": {}, "ports_closed_after": None}
+        for domain in ("python", "receta"):
+            rows = v2.load_benchmark_table(Path(benchmarks_dir) / f"{domain}.jsonl")
+            floods = [str(row["text"]) for row in rows if str(row["subtype"]) == "long_context_flooding"]
+            flooding_texts[domain] = floods
+            if not floods:
+                raise RuntimeError(f"{domain} missing long_context_flooding prompts")
+            domain_latency: dict[str, Any] = {}
+            # Uncapped: embed full flooding prompts as-is.
+            domain_latency["uncapped"] = measure_flooding_latency_ms(
+                floods,
+                lambda batch: embed_texts_loopback(batch, normalize=True).tolist(),
+                repeats=3,
+            )
+            # Build a cheap lexical profile from the flooding texts themselves for prefilter.
+            all_clauses = [xray.segment_clauses_opt2c(text) for text in floods]
+            flat = [c for doc in all_clauses for c in doc] or list(floods)
+            flood_profile = lex.fit(flat, "clause_opt2c")
+            for cap in (16, 24, 32):
+                capped_batches: list[str] = []
+                for clauses in all_clauses:
+                    if not clauses:
+                        continue
+                    pre = prefilter_clause_s_struct(clauses, flood_profile)
+                    keep = select_clause_indices_edge_plus_struct(len(clauses), cap, pre)
+                    capped_batches.extend(clauses[i] for i in keep)
+                if not capped_batches:
+                    capped_batches = list(floods)
+                domain_latency[f"cap_{cap}"] = measure_flooding_latency_ms(
+                    capped_batches,
+                    lambda batch: embed_texts_loopback(batch, normalize=True).tolist(),
+                    repeats=3,
+                )
+            flooding_latency["domains"][domain] = domain_latency
+            _log(f"flooding latency {domain} uncapped_p50={domain_latency['uncapped']['p50_ms']:.3f}ms")
+    finally:
+        session.cleanup()
+    if not ports_8080_8088_closed():
+        raise RuntimeError("PORTS_8080_8088_CLOSED failed after description/flooding phase")
+    flooding_latency["ports_closed_after"] = True
+    flooding_latency["PORTS_8080_8088_CLOSED"] = True
+    flood_meta = _write_json(out_path, "flooding_latency_v4.json", flooding_latency)
+    written.append({**flood_meta, "kind": "flooding_latency"})
+
     for domain in ("python", "receta"):
         lang = xray.V2_DOMAIN_LANG[domain]
         profile_id = sim.V1_PROFILES[domain]
@@ -940,6 +1611,10 @@ def run_replay_v4(
         raw_texts = v3.join_full_doc_texts(calibration["full_doc_sha256"], index)
         if len(raw_texts) != 600:
             raise RuntimeError(f"{domain} joined {len(raw_texts)} full documents, expected 600")
+        holdout_rows = v2.load_benchmark_table(Path(benchmarks_dir) / f"{domain}.jsonl")
+        holdout_texts = [str(row["text"]) for row in holdout_rows]
+        overlap_corpora = list(raw_texts) + holdout_texts
+        assert_zero_text_overlap(desc_texts[domain], overlap_corpora)
         cal_clauses = [xray.segment_clauses_opt2c(text) for text in raw_texts]
         folds = np.asarray(calibration["full_folds"], dtype=np.int64)
         _log(f"OOF S_struct {domain}")
@@ -966,15 +1641,50 @@ def run_replay_v4(
         fit_near_full = fit_holdout_axis(calibration["full_vectors"], near_full)
         fit_gen_clause = fit_holdout_axis(calibration["clause_vectors"], eje1_clause)
         fit_near_clause = fit_holdout_axis(calibration["clause_vectors"], near_clause)
-        # Full profiles for holdout S_struct (cal thresholds already OOF).
         flat_clauses = [clause for doc in cal_clauses for clause in doc]
         full_profile = lex.fit(raw_texts, "full_doc")
         clause_profile = lex.fit(flat_clauses, "clause_opt2c")
-        rows = v2.load_benchmark_table(Path(benchmarks_dir) / f"{domain}.jsonl")
-        text_map = {str(row["input_id"]): str(row["text"]) for row in rows}
-        subtypes_map = {str(row["input_id"]): str(row["subtype"]) for row in rows}
-        categories_map = {str(row["input_id"]): str(row["category"]) for row in rows}
-        expected_map = {str(row["input_id"]): bool(row["expected_pass"]) for row in rows}
+        text_map = {str(row["input_id"]): str(row["text"]) for row in holdout_rows}
+        subtypes_map = {str(row["input_id"]): str(row["subtype"]) for row in holdout_rows}
+        categories_map = {str(row["input_id"]): str(row["category"]) for row in holdout_rows}
+        expected_map = {str(row["input_id"]): bool(row["expected_pass"]) for row in holdout_rows}
+
+        # N_cal volume curve uses full_doc Eje 1 dial against fixed holdout surface scores.
+        run_full = runs[(profile_id, "full_only", "m0")]
+        bundle_full = sim.load_prompt_bundle(
+            db, run_full["run_id"], "full_only", subtypes_map, categories_map, expected_map
+        )
+        y_full = np.asarray(bundle_full.expected_pass, dtype=bool)
+        hold_full_vectors = bundle_full.chunk_vectors[bundle_full.full_chunk_idx]
+        n_cal_payload = run_n_cal_volume_curve_domain(
+            domain=domain,
+            cal_vectors=calibration["full_vectors"],
+            contrast=eje1_full,
+            hold_vectors=hold_full_vectors,
+            y_true=y_full,
+            categories=bundle_full.categories,
+            subtypes=bundle_full.subtypes,
+            description_vector=desc_vectors[domain],
+            description_text=desc_texts[domain],
+            overlap_corpora=overlap_corpora,
+        )
+        n_cal_payload["holdout_scoring"] = "full_doc_chunk0"
+        n_cal_payload["holdout_n"] = int(y_full.shape[0])
+        n_cal_meta = _write_json(out_path, f"{domain}__n_cal_volume_curve.json", n_cal_payload)
+        n_cal_files.append(n_cal_meta)
+        written.append({**n_cal_meta, "domain": domain, "kind": "n_cal"})
+        if n_cal_payload["description_only"] is not None:
+            desc = n_cal_payload["description_only"]
+            headlines.append(
+                f"{domain}/description_only roc_auc={desc['roc_auc']:.6f} "
+                f"T_1b={desc['threshold_relative_1b']:.6f}"
+            )
+        for rung in n_cal_payload["ladder"]:
+            headlines.append(
+                f"{domain}/N_cal={rung['n_cal']} p10_f1={rung['mean']['p10_f1']:.6f}"
+                f"±{rung['std']['p10_f1']:.6f}"
+            )
+
         for granularity in ("full_only", "clauses"):
             run = runs[(profile_id, granularity, "m0")]
             bundle = sim.load_prompt_bundle(db, run["run_id"], granularity, subtypes_map, categories_map, expected_map)
@@ -996,11 +1706,12 @@ def run_replay_v4(
                 cal_matrix = materialize_recipe_matrix(specs, cal_gen, cal_near, cal_struct_vec)
                 hold_matrix = materialize_recipe_matrix(specs, hold_gen, hold_near, hold_struct_vec)
             else:
-                # Clause-aware blends across fixed w_f; freeze one winner.
+                hold_gen_clause_chunks = v3.score_dir1024(bundle.chunk_vectors, fit_gen_clause, DIR_VARIANT)
+                hold_near_clause_chunks = v3.score_dir1024(bundle.chunk_vectors, fit_near_clause, DIR_VARIANT)
                 hold_gen_surface, hold_gen_cmin = v3.holdout_parts(
                     v3._matched_chunks(
                         hold_gen_chunks,
-                        v3.score_dir1024(bundle.chunk_vectors, fit_gen_clause, DIR_VARIANT),
+                        hold_gen_clause_chunks,
                         bundle.chunk_strategies,
                     ),
                     bundle,
@@ -1008,7 +1719,7 @@ def run_replay_v4(
                 hold_near_surface, hold_near_cmin = v3.holdout_parts(
                     v3._matched_chunks(
                         hold_near_chunks,
-                        v3.score_dir1024(bundle.chunk_vectors, fit_near_clause, DIR_VARIANT),
+                        hold_near_clause_chunks,
                         bundle.chunk_strategies,
                     ),
                     bundle,
@@ -1047,6 +1758,29 @@ def run_replay_v4(
                 cal_near = v3.blend_documents(s_near_cal_full, cal_near_cmin, 0.35)
                 hold_gen = v3.blend_documents(hold_gen_surface, hold_gen_cmin, 0.35)
                 hold_near = v3.blend_documents(hold_near_surface, hold_near_cmin, 0.35)
+
+                # clause_cap eval on clauses granularity.
+                cap_block = evaluate_clause_cap_cell(
+                    domain=domain,
+                    hold_texts=texts,
+                    hold_clauses=hold_clauses,
+                    hold_gen_full=hold_gen_surface,
+                    hold_gen_clause_scores=_clause_score_lists(bundle, hold_gen_clause_chunks),
+                    hold_near_full=hold_near_surface,
+                    hold_near_clause_scores=_clause_score_lists(bundle, hold_near_clause_chunks),
+                    hold_struct_min_uncapped=hold_struct["s_min"],
+                    y_true=np.asarray(bundle.expected_pass, dtype=bool),
+                    categories=bundle.categories,
+                    subtypes=bundle.subtypes,
+                    cal_gen=cal_gen,
+                    cal_near=cal_near,
+                    cal_struct=cal_struct_oof["s_min"],
+                    clause_profile=clause_profile,
+                    w_f=0.35,
+                )
+                cap_meta = _write_json(out_path, f"{domain}__clause_cap_eval.json", cap_block)
+                clause_cap_files.append(cap_meta)
+                written.append({**cap_meta, "domain": domain, "kind": "clause_cap"})
             y = np.asarray(bundle.expected_pass, dtype=bool)
             frozen = freeze_winning_recipe(
                 specs,
@@ -1091,18 +1825,16 @@ def run_replay_v4(
                 "eje2_stratum": NEAR_STRATUM,
                 "cal_oof": True,
             }
-            payload = v2.to_jsonable(cell)
             filename = f"{domain}__{granularity}__dual_axis_v4.json"
-            destination = out_path / filename
-            destination.write_text(json.dumps(payload, indent=2, allow_nan=False), encoding="utf-8")
+            meta = _write_json(out_path, filename, cell)
             written.append(
                 {
-                    "file": filename,
+                    **meta,
                     "domain": domain,
                     "granularity": granularity,
-                    "bytes": int(destination.stat().st_size),
                     "frozen_recipe": cell["frozen"]["recipe"]["name"],
                     "cal_only_p10_f1": cell["frozen"]["cal_only"]["p10"]["f1"],
+                    "kind": "dual_axis",
                 }
             )
             headlines.append(
@@ -1110,13 +1842,19 @@ def run_replay_v4(
                 f"p10_f1={cell['frozen']['cal_only']['p10']['f1']:.6f}"
             )
             _log(headlines[-1])
+
+    ports_closed = ports_8080_8088_closed()
+    if not ports_closed:
+        raise RuntimeError("PORTS_8080_8088_CLOSED failed at end of run_replay_v4")
     manifest = {
         "mode": "v4",
         "dtype": "float64",
         "dim": sim.DIM,
         "normalize": True,
-        "n_cells": len(written),
+        "n_cells": len([w for w in written if w.get("kind") == "dual_axis"]),
         "cells": written,
+        "n_cal_files": n_cal_files,
+        "clause_cap_files": clause_cap_files,
         "bootstrap_resamples": BOOTSTRAP_RESAMPLES,
         "bootstrap_seed": 0,
         "bootstrap_refits_thresholds": True,
@@ -1124,14 +1862,17 @@ def run_replay_v4(
         "eje1_preset": EJE1_PRESET,
         "eje2_stratum": NEAR_STRATUM,
         "clause_caps": list(CLAUSE_CAPS),
+        "n_cal_ladder": list(N_CAL_LADDER),
+        "PORTS_8080_8088_CLOSED": ports_closed,
         "output_dir": str(out_path),
     }
     manifest_path = out_path / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2, allow_nan=False), encoding="utf-8")
     lines = [
         "fhv1_1 replay v4",
-        f"cells={len(written)} dir={out_path}",
+        f"artifacts={len(written)} dir={out_path}",
         *headlines,
+        f"PORTS_8080_8088_CLOSED={ports_closed}",
         f"manifest={manifest_path} bytes={manifest_path.stat().st_size}",
     ]
     return "\n".join(lines)

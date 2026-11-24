@@ -385,6 +385,9 @@ class DispatchAndHarnessTest(unittest.TestCase):
     def test_output_dir_under_reports_is_refused(self) -> None:
         with self.assertRaises(RuntimeError):
             replay._reject_tracked_output(Path("reports/fhv1_1_id_v4"))
+        repo_reports = Path(__file__).resolve().parents[1] / "reports" / "fhv1_1_id_v4"
+        with self.assertRaises(RuntimeError):
+            replay._reject_tracked_output(repo_reports)
 
     def test_ports_closed_helper_is_boolean(self) -> None:
         self.assertIsInstance(replay.ports_8080_8088_closed(), bool)
@@ -470,6 +473,138 @@ class PublicSurfaceFiniteTest(unittest.TestCase):
         fit = v3.fit_directional_matrices(target, contrast)
         weights = v3.variant_weights(fit, replay.DIR_VARIANT)
         np.testing.assert_allclose(weights, np.maximum(fit.sep, 0.05))
+
+
+class NCalVolumeCurveTest(unittest.TestCase):
+    def test_nfkc_casefold_collapses_compat_and_case(self) -> None:
+        raw = "Caf\u00e9 PYTHON"
+        folded = replay.nfkc_casefold(raw)
+        self.assertEqual(folded, replay.nfkc_casefold("CAF\u00c9 python"))
+        self.assertNotEqual(raw, folded)
+
+    def test_zero_overlap_accepts_novel_and_rejects_dup(self) -> None:
+        corpora = ["alpha beta gamma", "delta epsilon"]
+        replay.assert_zero_text_overlap("brand new paragraph about widgets", corpora)
+        with self.assertRaises(RuntimeError):
+            replay.assert_zero_text_overlap("Alpha BETA gamma", corpora)
+
+    def test_description_only_texts_are_nonempty_unique_domains(self) -> None:
+        self.assertIn("python", replay.DESCRIPTION_ONLY_TEXTS)
+        self.assertIn("receta", replay.DESCRIPTION_ONLY_TEXTS)
+        py = replay.DESCRIPTION_ONLY_TEXTS["python"]
+        es = replay.DESCRIPTION_ONLY_TEXTS["receta"]
+        self.assertGreater(len(py.split()), 40)
+        self.assertGreater(len(es.split()), 40)
+        self.assertNotEqual(replay.nfkc_casefold(py), replay.nfkc_casefold(es))
+
+    def test_fit_n1_uses_std_c_as_std_pool(self) -> None:
+        dim = 16
+        target = _unit_rows(1, dim, 7)
+        contrast = _unit_rows(20, dim, 8, center=-np.ones(dim) / np.sqrt(dim))
+        fit = replay.fit_directional_n1(target, contrast)
+        self.assertTrue(np.allclose(fit.std_t, 0.0))
+        np.testing.assert_allclose(fit.std_pool, fit.std_c)
+        self.assertTrue(np.all(np.isfinite(fit.sep)))
+        self.assertEqual(fit.std_t_fallback, "std_pool=std_C")
+
+    def test_fit_allow_n1_matches_standard_for_n_ge_2(self) -> None:
+        target, contrast = _separated_target_contrast(n_target=12, n_contrast=10, dim=24, seed=3)
+        expected = v3.fit_directional_matrices(target, contrast)
+        got = replay.fit_directional_matrices_allow_n1(target, contrast)
+        np.testing.assert_allclose(got.std_pool, expected.std_pool)
+        self.assertIsNone(got.std_t_fallback)
+
+    def test_subsample_indices_are_deterministic_and_unique(self) -> None:
+        first = replay.subsample_calibration_indices(60, 10, seed=2)
+        second = replay.subsample_calibration_indices(60, 10, seed=2)
+        other = replay.subsample_calibration_indices(60, 10, seed=3)
+        np.testing.assert_array_equal(first, second)
+        self.assertEqual(len(set(first.tolist())), 10)
+        self.assertFalse(np.array_equal(first, other))
+        with self.assertRaises(ValueError):
+            replay.subsample_calibration_indices(5, 10, seed=0)
+
+    def test_n_cal_ladder_and_seeds_match_spec(self) -> None:
+        self.assertEqual(replay.N_CAL_LADDER, (1, 5, 10, 25, 50, 100, 200, 400, 600))
+        self.assertEqual(replay.N_CAL_SEEDS, (0, 1, 2, 3, 4))
+
+    def test_evaluate_n_cal_seed_metrics_finite(self) -> None:
+        dim = 32
+        n_cal = 40
+        n_hold = 30
+        cal, contrast = _separated_target_contrast(n_target=n_cal, n_contrast=25, dim=dim, seed=11)
+        hold = _unit_rows(n_hold, dim, 99, center=np.ones(dim) / np.sqrt(dim) * 0.35)
+        y, categories, subtypes, _ids = _strata(12, 18)
+        block = replay.evaluate_n_cal_seed(
+            cal_vectors=cal,
+            contrast=contrast,
+            hold_vectors=hold,
+            y_true=y,
+            categories=categories,
+            subtypes=subtypes,
+            n_keep=10,
+            seed=0,
+        )
+        self.assertEqual(block["n_cal"], 10)
+        self.assertTrue(np.isfinite(block["cal_only"]["p10"]["f1"]))
+        self.assertTrue(np.isfinite(block["roc_auc"]))
+        self.assertIn("sep_ge_1_count", block)
+        self.assertIn("ood_far", block)
+        self.assertIn("adv_far", block)
+        self.assertIn("near_ood_far", block)
+
+    def test_aggregate_and_marginal_deltas(self) -> None:
+        seed_rows = [
+            {
+                "n_cal": 5,
+                "seed": seed,
+                "cal_only": {
+                    "p05": {"f1": 0.5 + 0.01 * seed, "frr": 0.1, "far": 0.2, "threshold": 0.4},
+                    "p10": {"f1": 0.55 + 0.01 * seed, "frr": 0.08, "far": 0.18, "threshold": 0.35},
+                },
+                "roc_auc": 0.7 + 0.01 * seed,
+                "frr": 0.08,
+                "far": 0.18,
+                "ood_far": 0.2,
+                "adv_far": 0.15,
+                "near_ood_far": 0.25,
+                "threshold_p10": 0.35 + 0.01 * seed,
+                "sep_ge_1_count": 3 + seed,
+            }
+            for seed in range(5)
+        ]
+        summary = replay.aggregate_n_cal_rung(seed_rows)
+        self.assertIn("p10_f1", summary["mean"])
+        self.assertIn("p10_f1", summary["std"])
+        self.assertEqual(summary["n_seeds"], 5)
+        rung_a = {"n_cal": 5, "mean": {"p10_f1": 0.5, "roc_auc": 0.7, "frr": 0.1, "far": 0.2}}
+        rung_b = {"n_cal": 10, "mean": {"p10_f1": 0.6, "roc_auc": 0.75, "frr": 0.08, "far": 0.15}}
+        deltas = replay.marginal_n_cal_deltas([rung_a, rung_b])
+        self.assertEqual(len(deltas), 1)
+        self.assertAlmostEqual(deltas[0]["delta_f1"], 0.1, places=12)
+        self.assertAlmostEqual(deltas[0]["delta_auc"], 0.05, places=12)
+
+    def test_description_only_block_labels_oracle(self) -> None:
+        dim = 16
+        desc = _unit_rows(1, dim, 1)
+        contrast = _unit_rows(12, dim, 2, center=-np.ones(dim) / np.sqrt(dim))
+        hold = _unit_rows(20, dim, 3)
+        y, categories, subtypes, _ids = _strata(8, 12)
+        block = replay.evaluate_description_only_scores(
+            domain="python",
+            description_vector=desc,
+            contrast=contrast,
+            hold_vectors=hold,
+            y_true=y,
+            categories=categories,
+            subtypes=subtypes,
+        )
+        self.assertEqual(block["kind"], "description_only")
+        self.assertEqual(block["std_t_fallback"], "std_pool=std_C")
+        self.assertEqual(block["oracle_upper_bound"]["tag"], "[ORACLE_UPPER_BOUND]")
+        self.assertTrue(np.isfinite(block["roc_auc"]))
+        self.assertTrue(np.isfinite(block["pr_auc_in_domain"]))
+        self.assertTrue(np.isfinite(block["threshold_relative_1b"]))
 
 
 if __name__ == "__main__":
