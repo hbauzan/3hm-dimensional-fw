@@ -1,11 +1,11 @@
 ---
 task_id: "TASK-015"
-status: "IN_PROGRESS"
+status: "DONE"
 assigned_architect: "maximum-architect-agent"
 protocol: "transparent-dev-protocol"
 title: "fhv1_1 I+D v4: hardening pre-Rust, near-OOD axis, clause_cap DoS, N_cal curve"
 created_at: "2026-11-23T20:05:00-03:00"
-active_slice: "Slice 3"
+active_slice: "DONE"
 ---
 
 # TASK-015: `fhv1_1` I+D v4 — Hardening Pre-Rust, Eje 2 Near-OOD, `clause_cap` DoS, Curva `N_cal`
@@ -28,4 +28,4 @@ Execute 100% offline R&D (`tools/`, `reports/`, `roadmap/`, `TASKS.md` only) per
 - [x] **Slice 1**: Repair unidirectional `S_struct` channels, Latin letters out of `symbol_ratio`, and rare-rate smoothing in `tools/fhv1_1_lexical_profile.py` with `>= 44` tests.
 - [x] **Slice 2**: `--mode v4` dual-axis engine, 5-fold cal OOF, compact recipe catalog, `clause_cap` + real flooding latency, `>= 32` tests.
 - [x] **Slice 3**: `N_cal` volume curve (`1` description .. `600`) and full v4 JSON under `/tmp/fhv1_1_id_v4/`.
-- [ ] **Slice 4**: Report from those JSON files, cleanup, full gates, `TASK-015` `DONE`, untracked audit bundle, halt before push or merge.
+- [x] **Slice 4**: Report from those JSON files, cleanup, full gates, `TASK-015` `DONE`, untracked audit bundle, halt before push or merge.
