@@ -288,6 +288,18 @@ Commit: `chore(fhv1): publish the fhv1_1 v4 hardening and sample-curve report`
 
 Write untracked `audit_fhv1_1_id_v4_bundle.md` **after** that commit (verbatim gate stdout, `git log`, `file:line` citations). **STOP.** Do not `git push`. Do not `git merge`. Wait for human `"OK"`.
 
+### 7.5 Anexo Slice 5 — Remediación quirúrgica pre-merge (sobre `f52a693`)
+
+Tras la auditoría forense de `f52a693`, `TASK-015` aplicó un único Slice 5 atómico antes del cierre definitivo:
+
+1. **Fix 1 (`tools/fhv1_1_id_v4_report.py`, `tools/test_fhv1_1_id_v4_report.py`)**: `parse_v3_baseline` extrae `ADVERSARIAL_FUZZING` FAR (§0 `1B_base_tech`) e `IN_DOMAIN_VALID` FRR (§6 `1B_base_tech` `p10` con `tp + fn == 100`) directamente desde `reports/fhv1_1_id_v3_report.md`; `s_struct_lines` emite filas separadas para ambos cuadrantes sin rellenar columnas v3 con datos de v4.
+2. **Fix 2 (`tools/fhv1_1_replay_v4.py`, `tools/fhv1_1_id_v4_report.py`)**: calibración previa de `clause_profile` sobre los 600 documentos por dominio; medición de latencia de `long_context_flooding` por prompt (`6` prompts × `3` repeticiones = `18` mediciones con payload `[prompt] + selected_clauses`) para `uncapped` (todas las cláusulas `clause_opt2c`) vs `cap_16`/`cap_24`/`cap_32` (`speedup_vs_uncapped`); evaluación `evaluate_clause_cap_cell` con receta ciega congelada (`eje1_plus_struct|b=0.10`, `w_f=0.35`), conteo `s_struct`/`fallback`/`empty_clauses`, y cobertura de `smuggle_any` + subtipos `smuggle_*`.
+3. **Fix 3 (`tools/fhv1_1_replay_v4.py`, `tools/test_fhv1_1_replay_v4.py`)**: `cal_scores` vía `score_axis_oof(..., n_folds=5)` para `N >= 10` y 5-fold LOO para `N = 5`; en `N = 1` (`description_only` y subsample `N=1`) umbral ciego exclusivo desde el contraste `1B_base_tech` (`threshold_relative_1b = q_0.95`, `contrast_p99`, `midpoint = 0.50`, nunca auto-score ni holdout), con `[ORACLE_UPPER_BOUND]` separado.
+4. **Fix 4 (`tools/fhv1_1_replay_v4.py`, `tools/test_fhv1_1_replay_v4.py`, `tools/fhv1_1_id_v4_report.py`)**: catálogo compacto bloqueado en exactamente `12` recetas por granularidad (`w_f=0.35` default en `clauses`; sensibilidad `w_f ∈ {0.20, 0.35, 0.50}` en bloque diagnóstico separado); congelamiento 100% ciego de `eje1_plus_struct|b=0.10` (`nested_oof` solo diagnóstico); `[ORACLE_UPPER_BOUND]` calculado sobre el vector holdout de la receta congelada (`oracle_f1 >= cal_only_f1`); ejecución efectiva de `bootstrap_cal_only` (`n_resamples=1000`, `seed=0`, `refits_thresholds=True`) con IC 95% y `delta_f1` pareado en §0 y §6.
+5. **Fix 5 (`tools/fhv1_1_replay_v4.py`, `tools/fhv1_1_id_v4_report.py`)**: tabla completa de las 12 recetas en §3 (`F1`, `IN_DOMAIN_VALID FRR`, `OOD FAR`, `Adv FAR`, `Hybrid FAR`, `near_ood_neighbor FAR`, con gate 2D verdadero para `dual_axis_and`) y comparación explícita de literales `beta ∈ {0.00, 0.10, 0.20}` en §2.
+
+Commit Slice 5: `fix(fhv1): remediate v4 report baseline, flooding latency, N_cal OOF, and blind recipe selection`, regeneración de `audit_fhv1_1_id_v4_bundle.md` posterior al commit, `agent.sh validate` / `notify`, y **HALT** pre-merge (`0.2.1` congelado, sin `git push` ni `git merge --no-ff`).
+
 ---
 
 ## 8. Backlog `TASK-016` (DO NOT execute inside `TASK-015`)

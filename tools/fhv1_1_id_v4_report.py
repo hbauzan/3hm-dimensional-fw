@@ -174,6 +174,22 @@ def load_json(path: Path) -> tuple[Any, set[str]]:
     return data, tokens
 
 
+def _copy_breakdown(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "name": need(row, "name"),
+        "family": need(row, "family"),
+        "f1": need(row, "f1"),
+        "frr": need(row, "frr"),
+        "far": need(row, "far"),
+        "roc_auc": need(row, "roc_auc"),
+        "in_domain_valid_frr": need(row, "in_domain_valid_frr"),
+        "ood_far": need(row, "ood_far"),
+        "adv_far": need(row, "adv_far"),
+        "hybrid_far": need(row, "hybrid_far"),
+        "near_ood_neighbor_far": need(row, "near_ood_neighbor_far"),
+    }
+
+
 def slim_dual_axis(data: dict[str, Any]) -> dict[str, Any]:
     frozen = need(data, "frozen")
     recipe = copy_recipe(need(frozen, "recipe"))
@@ -191,10 +207,17 @@ def slim_dual_axis(data: dict[str, Any]) -> dict[str, Any]:
             {
                 "near_tag": need(row, "near_tag"),
                 "near_prob": need(row, "near_prob"),
+                "t_gen_p10": need(row, "t_gen_p10"),
+                "t_near": need(row, "t_near"),
                 "f1": need(row, "f1"),
                 "frr": need(row, "frr"),
                 "far": need(row, "far"),
                 "roc_auc": need(row, "roc_auc"),
+                "in_domain_valid_frr": need(row, "in_domain_valid_frr"),
+                "ood_far": need(row, "ood_far"),
+                "adv_far": need(row, "adv_far"),
+                "hybrid_far": need(row, "hybrid_far"),
+                "near_ood_neighbor_far": need(row, "near_ood_neighbor_far"),
                 "precision": need(row, "precision"),
                 "recall": need(row, "recall"),
                 "tp": need(row, "tp"),
@@ -203,6 +226,72 @@ def slim_dual_axis(data: dict[str, Any]) -> dict[str, Any]:
                 "fp": need(row, "fp"),
             }
         )
+    recipe_table_12 = []
+    for row in need(data, "recipe_table_12"):
+        beta_val = row["beta"] if "beta" in row else need(row, "recipe", "beta")
+        recipe_table_12.append(
+            {
+                **_copy_breakdown(row),
+                "beta": beta_val,
+                "is_frozen": row["is_frozen"] if "is_frozen" in row else (need(row, "name") == recipe["name"]),
+            }
+        )
+    beta_cmp = []
+    cmp_subtypes = (
+        "code_snippet",
+        "short_idiom_query",
+        "delimiter_escape",
+        "keyword_stuffing_hidden_instruction",
+        "near_ood_neighbor",
+    )
+    for row in need(data, "struct_beta_comparison"):
+        subs_raw = need(row, "subtypes")
+        subs_out = {sub: copy_error(need(subs_raw, sub)) for sub in cmp_subtypes}
+        beta_cmp.append(
+            {
+                **_copy_breakdown(row),
+                "beta": need(row, "beta"),
+                "w_f": need(row, "w_f"),
+                "subtypes": subs_out,
+            }
+        )
+    boot = need(data, "bootstrap")
+    frozen_boot = need(boot, "methods", "frozen")
+    delta_raw = need(boot, "delta_f1")
+    d_eje1 = need(delta_raw, "frozen_minus_eje1_only")
+    d_dual = need(delta_raw, "frozen_minus_best_dual_axis")
+    bootstrap = {
+        "n_resamples": need(boot, "n_resamples"),
+        "seed": need(boot, "seed"),
+        "refits_thresholds": need(boot, "refits_thresholds"),
+        "f1": need(boot, "f1"),
+        "ci95_low": need(boot, "ci95_low"),
+        "ci95_high": need(boot, "ci95_high"),
+        "frr": {"low": need(frozen_boot, "frr", "low"), "high": need(frozen_boot, "frr", "high")},
+        "far": {"low": need(frozen_boot, "far", "low"), "high": need(frozen_boot, "far", "high")},
+        "roc_auc": {"low": need(frozen_boot, "roc_auc", "low"), "high": need(frozen_boot, "roc_auc", "high")},
+        "best_dual_axis_recipe": need(boot, "best_dual_axis_recipe"),
+        "delta_f1": {
+            "frozen_minus_eje1_only": {
+                "point": need(d_eje1, "point"),
+                "mean": need(d_eje1, "mean"),
+                "ci95_low": need(d_eje1, "ci95_low"),
+                "ci95_high": need(d_eje1, "ci95_high"),
+            },
+            "frozen_minus_best_dual_axis": {
+                "point": need(d_dual, "point"),
+                "mean": need(d_dual, "mean"),
+                "ci95_low": need(d_dual, "ci95_low"),
+                "ci95_high": need(d_dual, "ci95_high"),
+            },
+        },
+    }
+    w_f_raw = need(data, "w_f_sensitivity")
+    w_f_sensitivity = (
+        None
+        if w_f_raw is None
+        else [{**_copy_breakdown(row), "w_f": need(row, "w_f")} for row in w_f_raw]
+    )
     quadrants = {name: copy_error(need(data, "subgroups", "quadrants", name)) for name in QUADRANTS}
     subtypes = []
     for row in need(data, "subgroups", "subtypes"):
@@ -244,7 +333,9 @@ def slim_dual_axis(data: dict[str, Any]) -> dict[str, Any]:
         "recipe": recipe,
         "recipe_name": recipe["name"],
         "family": recipe["family"],
-        "modal_column": need(frozen, "modal_column"),
+        "frozen_column": need(frozen, "frozen_column"),
+        "nested_modal_column": need(frozen, "nested_modal_column"),
+        "selection_policy": need(frozen, "selection_policy"),
         "f1": cal["p10"]["f1"],
         "frr": cal["p10"]["frr"],
         "far": cal["p10"]["far"],
@@ -258,6 +349,10 @@ def slim_dual_axis(data: dict[str, Any]) -> dict[str, Any]:
             "far": need(oracle, "far"),
             "threshold": need(oracle, "threshold"),
         },
+        "recipe_table_12": recipe_table_12,
+        "struct_beta_comparison": beta_cmp,
+        "bootstrap": bootstrap,
+        "w_f_sensitivity": w_f_sensitivity,
         "dual_axis_rows": dual_rows,
         "quadrants": quadrants,
         "subtypes": subtypes,
@@ -295,21 +390,32 @@ def slim_dual_axis(data: dict[str, Any]) -> dict[str, Any]:
 
 def slim_clause_cap(data: dict[str, Any]) -> dict[str, Any]:
     caps = []
+    cap_subtypes = (
+        "dilution_80_20",
+        "smuggle_recipe_footnote",
+        "smuggle_comment_docstring",
+        "smuggle_json_yaml",
+        "long_context_flooding",
+        "prompt_injection_jailbreak",
+        "smuggle_any",
+    )
     for row in need(data, "caps"):
         subtype = need(row, "subtype_far")
+        pre = need(row, "prefilter_counts")
         caps.append(
             {
                 "clause_cap": need(row, "clause_cap"),
                 "mean_selected_clauses": need(row, "mean_selected_clauses"),
+                "prefilter_counts": {
+                    "s_struct": need(pre, "s_struct"),
+                    "fallback": need(pre, "fallback"),
+                    "empty_clauses": need(pre, "empty_clauses"),
+                },
                 "f1": need(row, "f1"),
                 "far": need(row, "far"),
                 "frr": need(row, "frr"),
                 "cal_only_p10": copy_metric(need(row, "cal_only_p10")),
-                "subtype_far": {
-                    "dilution_80_20": need(subtype, "dilution_80_20"),
-                    "smuggle_recipe_footnote": need(subtype, "smuggle_recipe_footnote"),
-                    "long_context_flooding": need(subtype, "long_context_flooding"),
-                },
+                "subtype_far": {name: need(subtype, name) for name in cap_subtypes},
             }
         )
     return {
@@ -322,6 +428,19 @@ def slim_clause_cap(data: dict[str, Any]) -> dict[str, Any]:
 
 def slim_n_cal(data: dict[str, Any]) -> dict[str, Any]:
     desc = need(data, "description_only")
+    diag_raw = need(desc, "diagnostics")
+    diag = {}
+    for key in ("blind_1b_p95", "contrast_p99", "midpoint"):
+        block = need(diag_raw, key)
+        diag[key] = {
+            "threshold": need(block, "threshold"),
+            "f1": need(block, "f1"),
+            "frr": need(block, "frr"),
+            "far": need(block, "far"),
+        }
+    oracle = need(desc, "oracle_upper_bound")
+    if need(oracle, "tag") != "[ORACLE_UPPER_BOUND]":
+        raise KeyError("description_only oracle row tag is not [ORACLE_UPPER_BOUND]")
     ladder = []
     for row in need(data, "ladder"):
         mean = need(row, "mean")
@@ -352,6 +471,10 @@ def slim_n_cal(data: dict[str, Any]) -> dict[str, Any]:
         "description_only": {
             "kind": need(desc, "kind"),
             "n_cal": need(desc, "n_cal"),
+            "threshold_source": need(desc, "threshold_source"),
+            "threshold_relative_1b": need(desc, "threshold_relative_1b"),
+            "contrast_p99": need(desc, "contrast_p99"),
+            "midpoint": need(desc, "midpoint"),
             "f1": need(desc, "f1"),
             "frr": need(desc, "frr"),
             "far": need(desc, "far"),
@@ -359,7 +482,14 @@ def slim_n_cal(data: dict[str, Any]) -> dict[str, Any]:
             "ood_far": need(desc, "ood_far"),
             "adv_far": need(desc, "adv_far"),
             "near_ood_far": need(desc, "near_ood_far"),
-            "threshold_relative_1b": need(desc, "threshold_relative_1b"),
+            "diagnostics": diag,
+            "oracle_upper_bound": {
+                "tag": need(oracle, "tag"),
+                "f1": need(oracle, "f1"),
+                "frr": need(oracle, "frr"),
+                "far": need(oracle, "far"),
+                "threshold": need(oracle, "threshold"),
+            },
         },
         "ladder": ladder,
         "marginal_deltas": deltas,
@@ -376,10 +506,16 @@ def slim_flooding(data: dict[str, Any]) -> dict[str, Any]:
         caps = {}
         for cap_name, row in block.items():
             caps[cap_name] = {
-                "n_texts": need(row, "n_texts"),
+                "n_prompts": need(row, "n_prompts"),
                 "repeats": need(row, "repeats"),
+                "n_measurements": need(row, "n_measurements"),
+                "mean_clauses_per_prompt": need(row, "mean_clauses_per_prompt"),
+                "total_clauses_per_pass": need(row, "total_clauses_per_pass"),
+                "n_texts": need(row, "n_texts"),
                 "p50_ms": need(row, "p50_ms"),
                 "p99_ms": need(row, "p99_ms"),
+                "mean_ms": need(row, "mean_ms"),
+                "speedup_vs_uncapped": need(row, "speedup_vs_uncapped"),
             }
         domains[domain] = caps
     return {
@@ -484,22 +620,105 @@ def quote_phase0(roadmap_text: str) -> str:
     return quote
 
 
+V3_CELL_HEADING_RE = re.compile(
+    r"^###\s+(?P<domain>\S+)\s*/\s*(?P<granularity>\S+)\s*/\s*(?P<preset>\S+)\s*$"
+)
+
+
+def _split_md_cells(line: str) -> list[str]:
+    return [cell.strip().strip("`") for cell in line.strip().strip("|").split("|")]
+
+
+def _is_md_divider(cells: list[str]) -> bool:
+    return bool(cells) and all(("-" in cell) and not (set(cell) - {"-", ":", " "}) for cell in cells)
+
+
 def parse_v3_baseline(text: str) -> dict[tuple[str, str, str], dict[str, Any]]:
-    """Parse published v3 subtype rows for preset 1B_base_tech."""
+    """Parse v3 1B_base_tech subtype rows, §0 ADVERSARIAL_FUZZING FAR, and §6 IN_DOMAIN_VALID FRR."""
     out: dict[tuple[str, str, str], dict[str, Any]] = {}
-    for line in text.splitlines():
-        match = V3_SUBTYPE_RE.match(line.strip())
-        if match is None:
+    section_heading = ""
+    current_cell: tuple[str, str, str] | None = None
+    in_nested_cal_only = False
+    header_map: dict[str, int] | None = None
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            header_map = None
             continue
-        if match.group("preset") != "1B_base_tech":
+        if line.startswith("## "):
+            section_heading = line
+            current_cell = None
+            in_nested_cal_only = False
+            header_map = None
             continue
-        key = (match.group("domain"), match.group("granularity"), match.group("subtype"))
-        out[key] = {
-            "category": match.group("category"),
-            "n": match.group("n"),
-            "kind": match.group("kind"),
-            "error_rate": match.group("error_rate"),
-        }
+        heading_match = V3_CELL_HEADING_RE.match(line)
+        if heading_match is not None:
+            current_cell = (
+                heading_match.group("domain"),
+                heading_match.group("granularity"),
+                heading_match.group("preset"),
+            )
+            in_nested_cal_only = False
+            header_map = None
+            continue
+        if line.startswith("CAL_ONLY on the nested recipe:"):
+            in_nested_cal_only = True
+            header_map = None
+            continue
+        if not (line.startswith("|") and line.endswith("|")):
+            header_map = None
+            in_nested_cal_only = False
+            continue
+        match = V3_SUBTYPE_RE.match(line)
+        if match is not None and match.group("preset") == "1B_base_tech":
+            key = (match.group("domain"), match.group("granularity"), match.group("subtype"))
+            out[key] = {
+                "category": match.group("category"),
+                "n": match.group("n"),
+                "kind": match.group("kind"),
+                "error_rate": match.group("error_rate"),
+            }
+            continue
+        cells = _split_md_cells(line)
+        if _is_md_divider(cells):
+            continue
+        if header_map is None:
+            header_map = {name: idx for idx, name in enumerate(cells)}
+            continue
+        if len(cells) != len(header_map):
+            continue
+        cols = set(header_map)
+        if (
+            {"domain", "granularity", "preset", "adversarial FAR"} <= cols
+            and (section_heading.startswith("## 0") or not section_heading)
+        ):
+            if cells[header_map["preset"]] == "1B_base_tech":
+                dom = cells[header_map["domain"]]
+                gran = cells[header_map["granularity"]]
+                out[(dom, gran, "ADVERSARIAL_FUZZING")] = {
+                    "category": "ADVERSARIAL_FUZZING",
+                    "kind": "far",
+                    "error_rate": cells[header_map["adversarial FAR"]],
+                }
+        if (
+            current_cell is not None
+            and current_cell[2] == "1B_base_tech"
+            and in_nested_cal_only
+            and {"tag", "FRR", "tp", "fn"} <= cols
+        ):
+            if cells[header_map["tag"]] == "p10":
+                tp = int(cells[header_map["tp"]])
+                fn = int(cells[header_map["fn"]])
+                if tp + fn != 100:
+                    raise ValueError(
+                        f"v3 {current_cell[0]}/{current_cell[1]} p10 tp+fn expected 100, got {tp + fn}"
+                    )
+                out[(current_cell[0], current_cell[1], "IN_DOMAIN_VALID")] = {
+                    "category": "IN_DOMAIN_VALID",
+                    "n": str(tp + fn),
+                    "kind": "frr",
+                    "error_rate": cells[header_map["FRR"]],
+                }
     return out
 
 
@@ -527,20 +746,20 @@ def executive_lines(bundle: dict[str, Any]) -> list[str]:
     lines = [
         "Lineage: `TASK-011` (hardening/falsification) → `TASK-012` (replay) → `TASK-013` (fine dials) → "
         "`TASK-014` (v3 full-1024D + lexical guard) → `TASK-015` (v4 hardening, Eje 2, `clause_cap`, `N_cal` curve).",
-        f"Frozen recipe family on every dual-axis cell is selected under 5-fold cal OOF (`cal_oof_folds` "
-        f"{tick(manifest['cal_oof_folds'])}). Eje 1 preset {tick(manifest['eje1_preset'])}. "
+        f"Blind frozen recipe on every dual-axis cell (`eje1_plus_struct|b=0.10`) is scored under 5-fold cal OOF "
+        f"(`cal_oof_folds` {tick(manifest['cal_oof_folds'])}). Eje 1 preset {tick(manifest['eje1_preset'])}. "
         f"Eje 2 stratum {tick(manifest['eje2_stratum'])}. `normalize` {tick(manifest['normalize'])}. "
         f"`dtype` {tick(manifest['dtype'])}. dim {tick(manifest['dim'])}.",
-        f"Bootstrap contract on the manifest: resamples {tick(manifest['bootstrap_resamples'])}, "
+        f"Bootstrap contract on manifest and cells: resamples {tick(manifest['bootstrap_resamples'])}, "
         f"seed {tick(manifest['bootstrap_seed'])}, `refits_thresholds` {tick(manifest['bootstrap_refits_thresholds'])}. "
-        "Dual-axis cell JSON stores CAL_ONLY + nested 5×5 OOF + `[ORACLE_UPPER_BOUND]`; "
-        "bootstrap CI blocks are not present as separate cell fields in this scratch.",
-        "Upper-bound rows stay labeled `[ORACLE_UPPER_BOUND]` and are outside the executive F1 column.",
+        "Each dual-axis cell stores CAL_ONLY, blind frozen CI95 / paired `delta_f1`, diagnostic 5×5 OOF, and `[ORACLE_UPPER_BOUND]`.",
+        "Upper-bound rows stay labeled `[ORACLE_UPPER_BOUND]` on the frozen holdout scores and sit outside the executive F1 column.",
     ]
     rows = []
     for cell in cells:
         near = subtype_map(cell).get("near_ood_neighbor")
         near_far = tick(near["error_rate"]) if near is not None else "`absent`"
+        boot = cell["bootstrap"]
         rows.append(
             [
                 tick(cell["domain"]),
@@ -548,6 +767,7 @@ def executive_lines(bundle: dict[str, Any]) -> list[str]:
                 tick(cell["family"]),
                 tick(cell["recipe_name"]),
                 tick(cell["f1"]),
+                f"[{tick(boot['ci95_low'])}, {tick(boot['ci95_high'])}]",
                 tick(cell["nested_oof"]["f1"]["mean"]),
                 tick(cell["nested_oof"]["f1"]["std"]),
                 tick(cell["cal"]["p10"]["roc_auc"]),
@@ -567,6 +787,7 @@ def executive_lines(bundle: dict[str, Any]) -> list[str]:
                 "family",
                 "frozen recipe",
                 "CAL_ONLY p10 F1",
+                "bootstrap CI95",
                 "5x5 F1 mean",
                 "5x5 F1 std",
                 "ROC-AUC",
@@ -609,10 +830,14 @@ def executive_lines(bundle: dict[str, Any]) -> list[str]:
     return lines
 
 
+def _fmt_sub_rate(entry: dict[str, Any]) -> str:
+    return f"{tick(entry['error_rate'])} ({tick(entry['kind'])})"
+
+
 def s_struct_lines(bundle: dict[str, Any], v3_baseline: dict[tuple[str, str, str], dict[str, Any]] | None) -> list[str]:
     lines = [
-        "Comparison uses published v3 `1B_base_tech` subtype literals from `reports/fhv1_1_id_v3_report.md` "
-        "against v4 dual-axis cells (Eje 1 preset `1B_base_tech`). Rates are FRR on `IN_DOMAIN_VALID` and FAR on adversarial subtypes.",
+        "Comparison uses published v3 `1B_base_tech` literals from `reports/fhv1_1_id_v3_report.md` "
+        "against v4 dual-axis cells (Eje 1 preset `1B_base_tech`). `IN_DOMAIN_VALID` reports FRR and `ADVERSARIAL_FUZZING` reports FAR as separate rows.",
     ]
     focus = (
         "consulta_corta",
@@ -629,6 +854,8 @@ def s_struct_lines(bundle: dict[str, Any], v3_baseline: dict[tuple[str, str, str
     rows = []
     for cell in bundle["dual_cells"]:
         present = subtype_map(cell)
+        v3_in_domain = None if v3_baseline is None else v3_baseline.get((cell["domain"], cell["granularity"], "IN_DOMAIN_VALID"))
+        v3_adv = None if v3_baseline is None else v3_baseline.get((cell["domain"], cell["granularity"], "ADVERSARIAL_FUZZING"))
         rows.append(
             [
                 tick(cell["domain"]),
@@ -636,13 +863,24 @@ def s_struct_lines(bundle: dict[str, Any], v3_baseline: dict[tuple[str, str, str
                 "`IN_DOMAIN_VALID`",
                 tick(cell["quadrants"]["IN_DOMAIN_VALID"]["kind"]),
                 tick(cell["quadrants"]["IN_DOMAIN_VALID"]["error_rate"]),
+                tick(v3_in_domain["kind"]) if v3_in_domain else "`N/A`",
+                tick(v3_in_domain["error_rate"]) if v3_in_domain else "`N/A`",
+            ]
+        )
+        rows.append(
+            [
+                tick(cell["domain"]),
+                tick(cell["granularity"]),
+                "`ADVERSARIAL_FUZZING`",
                 tick(cell["quadrants"]["ADVERSARIAL_FUZZING"]["kind"]),
                 tick(cell["quadrants"]["ADVERSARIAL_FUZZING"]["error_rate"]),
+                tick(v3_adv["kind"]) if v3_adv else "`N/A`",
+                tick(v3_adv["error_rate"]) if v3_adv else "`N/A`",
             ]
         )
         for name in focus:
             v4 = present.get(name)
-            v3 = None if v3_baseline is None else v3_baseline.get((cell["domain"], cell["granularity"], name))
+            v3_sub = None if v3_baseline is None else v3_baseline.get((cell["domain"], cell["granularity"], name))
             rows.append(
                 [
                     tick(cell["domain"]),
@@ -650,14 +888,60 @@ def s_struct_lines(bundle: dict[str, Any], v3_baseline: dict[tuple[str, str, str
                     tick(name),
                     tick(v4["kind"]) if v4 else "`absent`",
                     tick(v4["error_rate"]) if v4 else "`absent`",
-                    tick(v3["kind"]) if v3 else "`absent`",
-                    tick(v3["error_rate"]) if v3 else "`absent`",
+                    tick(v3_sub["kind"]) if v3_sub else "`absent`",
+                    tick(v3_sub["error_rate"]) if v3_sub else "`absent`",
                 ]
             )
     lines.append(
         md_table(
             ["domain", "granularity", "row", "v4 kind", "v4 rate", "v3 kind", "v3 rate"],
             rows,
+        )
+    )
+    lines.append("### Structural penalty beta comparison (`eje1_only` beta=0 vs `eje1_plus_struct` beta=0.10, 0.20)")
+    beta_rows = []
+    for cell in bundle["dual_cells"]:
+        for row in cell["struct_beta_comparison"]:
+            subs = row["subtypes"]
+            beta_rows.append(
+                [
+                    tick(cell["domain"]),
+                    tick(cell["granularity"]),
+                    tick(row["name"]),
+                    tick(row["beta"]),
+                    tick(row["f1"]),
+                    tick(row["roc_auc"]),
+                    tick(row["in_domain_valid_frr"]),
+                    tick(row["ood_far"]),
+                    tick(row["adv_far"]),
+                    tick(row["hybrid_far"]),
+                    _fmt_sub_rate(subs["code_snippet"]),
+                    _fmt_sub_rate(subs["short_idiom_query"]),
+                    _fmt_sub_rate(subs["delimiter_escape"]),
+                    _fmt_sub_rate(subs["keyword_stuffing_hidden_instruction"]),
+                    _fmt_sub_rate(subs["near_ood_neighbor"]),
+                ]
+            )
+    lines.append(
+        md_table(
+            [
+                "domain",
+                "granularity",
+                "recipe",
+                "beta",
+                "F1",
+                "ROC-AUC",
+                "IN_DOMAIN_VALID FRR",
+                "OOD FAR",
+                "Adv FAR",
+                "Hybrid FAR",
+                "code_snippet",
+                "short_idiom_query",
+                "delimiter_escape",
+                "keyword_stuffing_hidden_instruction",
+                "near_ood_neighbor",
+            ],
+            beta_rows,
         )
     )
     lines.append(
@@ -670,22 +954,89 @@ def s_struct_lines(bundle: dict[str, Any], v3_baseline: dict[tuple[str, str, str
 
 def ablation_lines(bundle: dict[str, Any]) -> list[str]:
     lines = [
-        "Eje 1 is the frozen `eje1_plus_struct` / `eje1_only` catalog under 5-fold cal OOF. "
-        "Eje 2 appears as stored `dual_axis_and_cal_only` gate rows (`near_tag` / `near_prob`). "
-        "The nested 5×5 means are `frozen.nested_oof`.",
+        "Blind primary selection freezes `eje1_plus_struct|b=0.10` under 5-fold cal OOF. "
+        "All 12 catalog recipes (with true 2D AND thresholds for `dual_axis_and`) and `eje1_only` vs `eje1_plus_struct` beta comparison appear below; "
+        "`nested_oof` is diagnostic only.",
     ]
     for cell in bundle["dual_cells"]:
         lines.append(f"### {cell['domain']} / {cell['granularity']}")
         lines.append(
             f"Frozen {tick(cell['recipe_name'])} family {tick(cell['family'])} beta {tick(cell['recipe']['beta'])} "
-            f"w_f {tick(cell['recipe']['w_f'])}. modal_column {tick(cell['modal_column'])}. "
+            f"w_f {tick(cell['recipe']['w_f'])}. selection_policy {tick(cell['selection_policy'])}. "
+            f"frozen_column {tick(cell['frozen_column'])}. nested_modal_column {tick(cell['nested_modal_column'])}. "
             f"CAL_ONLY p10 F1 {tick(cell['f1'])}. 5x5 F1 mean {tick(cell['nested_oof']['f1']['mean'])} "
             f"std {tick(cell['nested_oof']['f1']['std'])}."
         )
+        table_rows = []
+        for row in cell["recipe_table_12"]:
+            table_rows.append(
+                [
+                    tick(row["name"]),
+                    tick(row["family"]),
+                    tick(row["is_frozen"]),
+                    tick(row["f1"]),
+                    tick(row["roc_auc"]),
+                    tick(row["in_domain_valid_frr"]),
+                    tick(row["ood_far"]),
+                    tick(row["adv_far"]),
+                    tick(row["hybrid_far"]),
+                    tick(row["near_ood_neighbor_far"]),
+                ]
+            )
+        lines.append(
+            md_table(
+                [
+                    "recipe",
+                    "family",
+                    "frozen",
+                    "F1",
+                    "ROC-AUC",
+                    "IN_DOMAIN_VALID FRR",
+                    "OOD FAR",
+                    "Adv FAR",
+                    "Hybrid FAR",
+                    "near_ood_neighbor FAR",
+                ],
+                table_rows,
+            )
+        )
+        if cell["w_f_sensitivity"] is not None:
+            sens_rows = [
+                [
+                    tick(row["w_f"]),
+                    tick(row["name"]),
+                    tick(row["f1"]),
+                    tick(row["roc_auc"]),
+                    tick(row["in_domain_valid_frr"]),
+                    tick(row["ood_far"]),
+                    tick(row["adv_far"]),
+                    tick(row["hybrid_far"]),
+                    tick(row["near_ood_neighbor_far"]),
+                ]
+                for row in cell["w_f_sensitivity"]
+            ]
+            lines.append("Diagnostic `w_f` sensitivity (`{0.20, 0.35, 0.50}`, outside primary catalog):")
+            lines.append(
+                md_table(
+                    [
+                        "w_f",
+                        "recipe",
+                        "F1",
+                        "ROC-AUC",
+                        "IN_DOMAIN_VALID FRR",
+                        "OOD FAR",
+                        "Adv FAR",
+                        "Hybrid FAR",
+                        "near_ood_neighbor FAR",
+                    ],
+                    sens_rows,
+                )
+            )
         for row in cell["dual_axis_rows"]:
             lines.append(
-                f"- Eje2 gate `near_tag` {tick(row['near_tag'])} F1 {tick(row['f1'])} is "
-                f"{link(row['f1'], cell['f1'])} the frozen CAL_ONLY p10 {tick(cell['f1'])}."
+                f"- Eje2 gate `near_tag` {tick(row['near_tag'])} F1 {tick(row['f1'])} "
+                f"(`IN_DOMAIN_VALID FRR` {tick(row['in_domain_valid_frr'])}, `near_ood_neighbor FAR` {tick(row['near_ood_neighbor_far'])}) "
+                f"is {link(row['f1'], cell['f1'])} the frozen CAL_ONLY p10 {tick(cell['f1'])}."
             )
         if cell["domain"] == "receta" and cell["granularity"] == "full_only":
             lines.append(
@@ -698,8 +1049,8 @@ def ablation_lines(bundle: dict[str, Any]) -> list[str]:
 
 def clause_cap_lines(bundle: dict[str, Any]) -> list[str]:
     lines = [
-        "`clause_cap` ∈ {`null`, 16, 24, 32}. FAR/F1 on dilution/smuggle/flooding come from `*_clause_cap_eval.json`. "
-        "Flooding wall-clock p50/p99 ms come from `flooding_latency_v4.json`.",
+        "`clause_cap` ∈ {`null`, 16, 24, 32} evaluated on frozen `eje1_plus_struct|b=0.10` (`w_f=0.35`). "
+        "Per-prompt flooding latency (`[prompt] + selected_clauses`, 3 repeats per prompt) comes from `flooding_latency_v4.json`.",
     ]
     for domain, block in sorted(bundle["clause_caps"].items()):
         lines.append(f"### {domain}")
@@ -708,16 +1059,23 @@ def clause_cap_lines(bundle: dict[str, Any]) -> list[str]:
         )
         rows = []
         for row in block["caps"]:
+            pre = row["prefilter_counts"]
+            sub = row["subtype_far"]
             rows.append(
                 [
                     tick(row["clause_cap"]),
                     tick(row["mean_selected_clauses"]),
+                    f"`{pre['s_struct']}/{pre['fallback']}/{pre['empty_clauses']}`",
                     tick(row["f1"]),
                     tick(row["frr"]),
                     tick(row["far"]),
-                    tick(row["subtype_far"]["dilution_80_20"]),
-                    tick(row["subtype_far"]["smuggle_recipe_footnote"]),
-                    tick(row["subtype_far"]["long_context_flooding"]),
+                    tick(sub["dilution_80_20"]),
+                    tick(sub["smuggle_any"]),
+                    tick(sub["smuggle_recipe_footnote"]),
+                    tick(sub["smuggle_comment_docstring"]),
+                    tick(sub["smuggle_json_yaml"]),
+                    tick(sub["long_context_flooding"]),
+                    tick(sub["prompt_injection_jailbreak"]),
                 ]
             )
         lines.append(
@@ -725,12 +1083,17 @@ def clause_cap_lines(bundle: dict[str, Any]) -> list[str]:
                 [
                     "clause_cap",
                     "mean_selected_clauses",
+                    "prefilter s_struct/fallback/empty",
                     "F1",
                     "FRR",
                     "FAR",
                     "dilution_80_20 FAR",
-                    "smuggle FAR",
+                    "smuggle_any FAR",
+                    "smuggle_recipe_footnote FAR",
+                    "smuggle_comment_docstring FAR",
+                    "smuggle_json_yaml FAR",
                     "flooding FAR",
+                    "prompt_injection_jailbreak FAR",
                 ],
                 rows,
             )
@@ -744,28 +1107,64 @@ def clause_cap_lines(bundle: dict[str, Any]) -> list[str]:
             rows.append(
                 [
                     tick(name),
-                    tick(row["n_texts"]),
+                    tick(row["n_prompts"]),
                     tick(row["repeats"]),
+                    tick(row["n_measurements"]),
+                    tick(row["mean_clauses_per_prompt"]),
+                    tick(row["total_clauses_per_pass"]),
                     tick(row["p50_ms"]),
                     tick(row["p99_ms"]),
+                    tick(row["mean_ms"]),
+                    tick(row["speedup_vs_uncapped"]),
                 ]
             )
-        lines.append(md_table(["cap", "n_texts", "repeats", "p50_ms", "p99_ms"], rows))
+        lines.append(
+            md_table(
+                [
+                    "cap",
+                    "n_prompts",
+                    "repeats",
+                    "n_measurements",
+                    "mean_clauses_per_prompt",
+                    "total_clauses_per_pass",
+                    "p50_ms",
+                    "p99_ms",
+                    "mean_ms",
+                    "speedup_vs_uncapped",
+                ],
+                rows,
+            )
+        )
     return lines
 
 
 def n_cal_lines(bundle: dict[str, Any]) -> list[str]:
     lines = [
-        "Volume curve `N_cal` from description-only (`n_cal=1`) through the stored ladder. "
+        "Volume curve `N_cal` from `N=1` (1B contrast quantile blind thresholds) through OOF calibration (`N >= 5`). "
         "Means and stds are literals from `*_n_cal_volume_curve.json`.",
     ]
     for domain, block in sorted(bundle["n_cal"].items()):
         lines.append(f"### {domain}")
         desc = block["description_only"]
+        oracle = desc["oracle_upper_bound"]
         lines.append(
-            f"description_only F1 {tick(desc['f1'])} FRR {tick(desc['frr'])} FAR {tick(desc['far'])} "
-            f"ROC-AUC {tick(desc['roc_auc'])} threshold_relative_1b {tick(desc['threshold_relative_1b'])}."
+            f"description_only `threshold_source` {tick(desc['threshold_source'])} "
+            f"`threshold_relative_1b` {tick(desc['threshold_relative_1b'])} "
+            f"`contrast_p99` {tick(desc['contrast_p99'])} `midpoint` {tick(desc['midpoint'])} — "
+            f"F1 {tick(desc['f1'])} FRR {tick(desc['frr'])} FAR {tick(desc['far'])} ROC-AUC {tick(desc['roc_auc'])}. "
+            f"`[ORACLE_UPPER_BOUND]` F1 {tick(oracle['f1'])} (threshold {tick(oracle['threshold'])})."
         )
+        diag_rows = [
+            [
+                tick(policy),
+                tick(desc["diagnostics"][policy]["threshold"]),
+                tick(desc["diagnostics"][policy]["f1"]),
+                tick(desc["diagnostics"][policy]["frr"]),
+                tick(desc["diagnostics"][policy]["far"]),
+            ]
+            for policy in ("blind_1b_p95", "contrast_p99", "midpoint")
+        ]
+        lines.append(md_table(["description_only policy", "threshold", "F1", "FRR", "FAR"], diag_rows))
         rows = []
         for row in block["ladder"]:
             rows.append(
@@ -837,7 +1236,7 @@ def n_cal_lines(bundle: dict[str, Any]) -> list[str]:
 def master_lines(bundle: dict[str, Any]) -> list[str]:
     manifest = bundle["manifest"]
     lines = [
-        "CAL_ONLY p05/p10/p15, nested 5×5, and `[ORACLE_UPPER_BOUND]` are copied from dual-axis cells. "
+        "CAL_ONLY p05/p10/p15, bootstrap CI95 / paired `delta_f1`, nested 5×5, and `[ORACLE_UPPER_BOUND]` are copied from dual-axis cells. "
         f"Manifest bootstrap contract: n {tick(manifest['bootstrap_resamples'])}, seed {tick(manifest['bootstrap_seed'])}, "
         f"`refits_thresholds` {tick(manifest['bootstrap_refits_thresholds'])}.",
     ]
@@ -868,6 +1267,45 @@ def master_lines(bundle: dict[str, Any]) -> list[str]:
             )
         lines.append("CAL_ONLY on the frozen recipe:")
         lines.append(md_table(["tag", "F1", "FRR", "FAR", "precision", "recall", "threshold", "ROC-AUC", "tp", "fn", "tn", "fp"], cal_rows))
+        boot = cell["bootstrap"]
+        lines.append(
+            f"Bootstrap CI95 (n={tick(boot['n_resamples'])}, seed={tick(boot['seed'])}, `refits_thresholds`={tick(boot['refits_thresholds'])}):"
+        )
+        lines.append(
+            md_table(
+                ["recipe", "F1", "ci95_low", "ci95_high", "FRR CI95", "FAR CI95", "ROC-AUC CI95"],
+                [
+                    [
+                        tick(cell["recipe_name"]),
+                        tick(boot["f1"]),
+                        tick(boot["ci95_low"]),
+                        tick(boot["ci95_high"]),
+                        f"[{tick(boot['frr']['low'])}, {tick(boot['frr']['high'])}]",
+                        f"[{tick(boot['far']['low'])}, {tick(boot['far']['high'])}]",
+                        f"[{tick(boot['roc_auc']['low'])}, {tick(boot['roc_auc']['high'])}]",
+                    ]
+                ],
+            )
+        )
+        delta_rows = []
+        for delta_key, comp_label in (
+            ("frozen_minus_eje1_only", "eje1_only"),
+            ("frozen_minus_best_dual_axis", boot["best_dual_axis_recipe"]),
+        ):
+            d_row = boot["delta_f1"][delta_key]
+            delta_rows.append(
+                [
+                    tick(delta_key),
+                    tick(comp_label),
+                    tick(d_row["point"]),
+                    tick(d_row["mean"]),
+                    tick(d_row["ci95_low"]),
+                    tick(d_row["ci95_high"]),
+                ]
+            )
+        lines.append(
+            md_table(["delta_f1 contrast", "baseline", "point", "mean", "ci95_low", "ci95_high"], delta_rows)
+        )
         lines.append("nested 5x5:")
         oof = cell["nested_oof"]
         lines.append(

@@ -12,14 +12,18 @@
 
 from __future__ import annotations
 
+import json
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
 import numpy as np
 
+import fhv1_1_id_v4_report as v4_report
 import fhv1_1_lexical_profile as lex
 import fhv1_1_replay_sim as sim
+import fhv1_1_replay_v2 as v2
 import fhv1_1_replay_v3 as v3
 import fhv1_1_replay_v4 as replay
 import fhv1_1_xray as xray
@@ -146,10 +150,45 @@ class DualGateAndCatalogTest(unittest.TestCase):
             {"eje1_only", "eje1_plus_struct", "dual_axis_and", "dual_axis_blend", "dual_axis_min"},
         )
 
-    def test_clauses_catalog_multiplies_by_three_weights(self) -> None:
+    def test_clauses_catalog_is_twelve_with_default_weight(self) -> None:
         specs = replay.compact_recipe_catalog("clauses")
-        self.assertEqual(len(specs), 36)
-        self.assertEqual(sorted({spec.w_f for spec in specs}), [0.20, 0.35, 0.50])
+        self.assertEqual(len(specs), 12)
+        self.assertEqual({spec.w_f for spec in specs}, {0.35})
+
+    def test_w_f_sensitivity_evaluates_three_weights_separately(self) -> None:
+        rng = np.random.default_rng(14)
+        y, categories, subtypes, _ids = _strata(16, 16)
+        cal_full = rng.random(30)
+        cal_cmin = rng.random(30)
+        cal_near_full = rng.random(30)
+        cal_near_cmin = rng.random(30)
+        cal_struct = np.clip(rng.random(30), 0.2, 1.0)
+        hold_full = rng.random(32) + np.where(y, 0.3, 0.0)
+        hold_cmin = rng.random(32) + np.where(y, 0.25, 0.0)
+        hold_near_full = rng.random(32)
+        hold_near_cmin = rng.random(32)
+        hold_struct = np.clip(rng.random(32), 0.2, 1.0)
+        rows = replay.evaluate_w_f_sensitivity(
+            cal_gen_full=cal_full,
+            cal_gen_cmin=cal_cmin,
+            cal_near_full=cal_near_full,
+            cal_near_cmin=cal_near_cmin,
+            cal_struct_min=cal_struct,
+            hold_gen_full=hold_full,
+            hold_gen_cmin=hold_cmin,
+            hold_near_full=hold_near_full,
+            hold_near_cmin=hold_near_cmin,
+            hold_struct_min=hold_struct,
+            y_true=y,
+            categories=categories,
+            subtypes=subtypes,
+        )
+        self.assertEqual([row["w_f"] for row in rows], [0.20, 0.35, 0.50])
+        for row in rows:
+            self.assertEqual(row["family"], "eje1_plus_struct")
+            self.assertAlmostEqual(row["beta"], 0.10, places=12)
+            self.assertTrue(np.isfinite(row["f1"]))
+            self.assertTrue(np.isfinite(row["roc_auc"]))
 
     def test_dual_and_gate_requires_both_axes(self) -> None:
         cal_g = np.linspace(0.1, 1.0, 20)
@@ -328,7 +367,44 @@ class AntiLeakageMetricsTest(unittest.TestCase):
         self.assertTrue(first["refits_thresholds"])
         self.assertEqual(first["seed"], 0)
 
-    def test_freeze_winning_recipe_returns_one_spec(self) -> None:
+    def test_bootstrap_supports_2d_dual_and_paired_deltas(self) -> None:
+        rng = np.random.default_rng(6)
+        y, categories, subtypes, _ids = _strata(16, 16)
+        cal_g = rng.random(40)
+        cal_n = rng.random(40)
+        hold_g = rng.random(32) + np.where(y, 0.35, 0.0)
+        hold_n = rng.random(32) + np.where(y, 0.25, 0.0)
+        methods = {
+            "frozen": (hold_g, cal_g),
+            "eje1_only": (hold_g * 0.95, cal_g * 0.95),
+            "best_dual_axis": replay.DualAndBootstrapMethod(
+                hold_general=hold_g,
+                hold_near=hold_n,
+                cal_general=cal_g,
+                cal_near=cal_n,
+                near_prob=0.05,
+            ),
+        }
+        boot = replay.bootstrap_cal_only(
+            methods,
+            y,
+            categories,
+            subtypes,
+            seed=0,
+            n_resamples=30,
+            paired_deltas=(
+                ("frozen_minus_eje1_only", "frozen", "eje1_only", 0.01),
+                ("frozen_minus_best_dual_axis", "frozen", "best_dual_axis", 0.02),
+            ),
+        )
+        self.assertTrue(boot["refits_thresholds"])
+        self.assertIn("best_dual_axis", boot["methods"])
+        self.assertIn("frozen_minus_eje1_only", boot["paired_deltas"])
+        self.assertIn("frozen_minus_best_dual_axis", boot["paired_deltas"])
+        d_dual = boot["paired_deltas"]["frozen_minus_best_dual_axis"]
+        self.assertLessEqual(d_dual["ci95_low"], d_dual["ci95_high"])
+
+    def test_freeze_winning_recipe_is_blind_and_oracle_dominates_cal_only(self) -> None:
         specs = replay.compact_recipe_catalog("full_only")
         rng = np.random.default_rng(4)
         y, categories, subtypes, input_ids = _strata(20, 20)
@@ -336,6 +412,8 @@ class AntiLeakageMetricsTest(unittest.TestCase):
         n = rng.random(40)
         s = np.clip(rng.random(40), 0.2, 1.0)
         g[:20] += 0.35
+        # Make dual_axis_min appear better on holdout to ensure blind selection ignores holdout labels.
+        n[:20] += 0.80
         cal_g = rng.random(50)
         cal_n = rng.random(50)
         cal_s = np.clip(rng.random(50), 0.2, 1.0)
@@ -344,9 +422,21 @@ class AntiLeakageMetricsTest(unittest.TestCase):
         frozen = replay.freeze_winning_recipe(
             specs, cal_matrix, hold_matrix, y, categories, subtypes, input_ids
         )
-        self.assertIn("recipe", frozen)
+        flipped = replay.freeze_winning_recipe(
+            specs, cal_matrix, hold_matrix, ~y, categories, subtypes, input_ids
+        )
+        self.assertEqual(frozen["recipe"]["family"], "eje1_plus_struct")
+        self.assertAlmostEqual(frozen["recipe"]["beta"], 0.10, places=12)
+        self.assertEqual(frozen["frozen_column"], 1)
+        self.assertEqual(frozen["recipe"], flipped["recipe"])
+        self.assertEqual(frozen["frozen_column"], flipped["frozen_column"])
         self.assertEqual(frozen["oracle_upper_bound"]["tag"], "[ORACLE_UPPER_BOUND]")
-        self.assertIn("p10", frozen["cal_only"])
+        for _prob, tag in replay.PROB_TAGS:
+            self.assertEqual(frozen["cal_only"][tag]["threshold"], flipped["cal_only"][tag]["threshold"])
+            self.assertGreaterEqual(
+                frozen["oracle_upper_bound"]["f1"] + 1e-12,
+                frozen["cal_only"][tag]["f1"],
+            )
 
     def test_canary_kinds_are_explicit(self) -> None:
         texts = [
@@ -393,15 +483,45 @@ class DispatchAndHarnessTest(unittest.TestCase):
         self.assertIsInstance(replay.ports_8080_8088_closed(), bool)
 
     def test_measure_flooding_latency_without_server(self) -> None:
-        texts = ["a" * 100, "b" * 100]
+        prompts = [
+            "First alpha clause. Second alpha clause. Third alpha clause. Fourth alpha clause.",
+            "First beta clause. Second beta clause. Third beta clause. Fourth beta clause.",
+        ]
+        profile = lex.fit([c for p in prompts for c in xray.segment_clauses_opt2c(p)], "clause_opt2c")
+        seen_payload_lengths: list[int] = []
 
         def embed_fn(batch: list[str]) -> list[list[float]]:
+            seen_payload_lengths.append(len(batch))
             return [[0.0] * 8 for _ in batch]
 
-        block = replay.measure_flooding_latency_ms(texts, embed_fn, repeats=3)
-        self.assertEqual(block["n_texts"], 2)
-        self.assertTrue(np.isfinite(block["p50_ms"]))
-        self.assertTrue(np.isfinite(block["p99_ms"]))
+        uncapped = replay.measure_flooding_latency_ms(prompts, embed_fn, cap=None, clause_profile=profile, repeats=3)
+        self.assertEqual(uncapped["n_prompts"], 2)
+        self.assertEqual(uncapped["repeats"], 3)
+        self.assertEqual(uncapped["n_measurements"], 6)
+        self.assertEqual(len(uncapped["samples_ms"]), 6)
+        self.assertEqual(uncapped["total_clauses_per_pass"], 8)
+        self.assertAlmostEqual(uncapped["mean_clauses_per_prompt"], 4.0, places=12)
+        self.assertTrue(np.isfinite(uncapped["p50_ms"]))
+        self.assertTrue(np.isfinite(uncapped["p99_ms"]))
+        self.assertTrue(np.isfinite(uncapped["mean_ms"]))
+        self.assertEqual(uncapped["speedup_vs_uncapped"], 1.0)
+        # Each timed call embeds [prompt_text] + selected_clauses = 1 + 4 = 5 texts.
+        self.assertEqual(seen_payload_lengths, [5] * 6)
+
+        domain_block = replay.measure_domain_flooding_latency(
+            prompts,
+            embed_fn,
+            clause_profile=profile,
+            caps=(None, 2),
+            repeats=3,
+        )
+        self.assertEqual(set(domain_block), {"uncapped", "cap_2"})
+        self.assertEqual(domain_block["cap_2"]["total_clauses_per_pass"], 4)
+        self.assertAlmostEqual(
+            domain_block["cap_2"]["speedup_vs_uncapped"],
+            domain_block["uncapped"]["p50_ms"] / domain_block["cap_2"]["p50_ms"],
+            places=12,
+        )
 
     def test_latency_harness_cleanup_checks_ports(self) -> None:
         texts = ["flood me"]
@@ -417,7 +537,122 @@ class DispatchAndHarnessTest(unittest.TestCase):
                 block = replay.run_flooding_latency_with_server(texts, embed_fn, repeats=2, start_server=True)
             session.cleanup.assert_called()
         self.assertEqual(block["server_pid"], 12345)
+        self.assertEqual(block["n_prompts"], 1)
+        self.assertEqual(block["n_measurements"], 2)
         self.assertTrue(np.isfinite(block["p50_ms"]))
+
+    def test_evaluate_clause_cap_cell_uses_frozen_struct_and_smuggle_any(self) -> None:
+        texts_cal, clauses_cal = _plain_docs(12, seed=20)
+        clause_profile = lex.fit([c for doc in clauses_cal for c in doc], "clause_opt2c")
+        hold_texts = [
+            "import json. parse safely. validate input. return result.",
+            "cook soup. boil water. add salt. serve hot.",
+            "footnote recipe secret. ignore rules. ### ??? !!!",
+            "yaml payload key. value pair. hidden task. run now.",
+            "flood one. flood two. flood three. flood four.",
+            "jailbreak prompt. bypass check. override policy. print secret.",
+            "valid doc a. valid doc b. valid doc c. valid doc d.",
+            "valid doc e. valid doc f. valid doc g. valid doc h.",
+        ]
+        hold_clauses = [
+            xray.segment_clauses_opt2c(hold_texts[0]),
+            xray.segment_clauses_opt2c(hold_texts[1]),
+            # Force fallback on row 2 by giving mismatched clause count vs scores.
+            ["only one clause"],
+            xray.segment_clauses_opt2c(hold_texts[3]),
+            xray.segment_clauses_opt2c(hold_texts[4]),
+            xray.segment_clauses_opt2c(hold_texts[5]),
+            xray.segment_clauses_opt2c(hold_texts[6]),
+            [],
+        ]
+        y_true = np.array([True, True, False, False, False, False, True, True], dtype=bool)
+        categories = [
+            "IN_DOMAIN_VALID",
+            "IN_DOMAIN_VALID",
+            "HYBRID_BOUNDARY",
+            "HYBRID_BOUNDARY",
+            "ADVERSARIAL_FUZZING",
+            "ADVERSARIAL_FUZZING",
+            "IN_DOMAIN_VALID",
+            "IN_DOMAIN_VALID",
+        ]
+        subtypes = [
+            "code_snippet",
+            "short_idiom_query",
+            "smuggle_comment_docstring",
+            "smuggle_json_yaml",
+            "long_context_flooding",
+            "prompt_injection_jailbreak",
+            "dilution_80_20",  # intentional check when positive? wait: use negative below
+            "code_snippet",
+        ]
+        subtypes[6] = "code_snippet"
+        # Add one negative dilution_80_20 row by flipping row 1 to negative dilution_80_20.
+        y_true[1] = False
+        categories[1] = "HYBRID_BOUNDARY"
+        subtypes[1] = "dilution_80_20"
+
+        hold_gen_clause_scores = []
+        hold_near_clause_scores = []
+        for idx, cls in enumerate(hold_clauses):
+            if idx == 2:
+                # 3 scores vs 1 clause -> triggers fallback
+                hold_gen_clause_scores.append(np.array([0.8, 0.2, 0.5], dtype=np.float64))
+                hold_near_clause_scores.append(np.array([0.7, 0.3, 0.4], dtype=np.float64))
+            elif idx == 7:
+                hold_gen_clause_scores.append(np.zeros(0, dtype=np.float64))
+                hold_near_clause_scores.append(np.zeros(0, dtype=np.float64))
+            else:
+                base = 0.85 if y_true[idx] else 0.25
+                hold_gen_clause_scores.append(np.full(len(cls), base, dtype=np.float64))
+                hold_near_clause_scores.append(np.full(len(cls), base, dtype=np.float64))
+
+        hold_gen_full = np.where(y_true, 0.85, 0.30).astype(np.float64)
+        hold_near_full = np.where(y_true, 0.85, 0.30).astype(np.float64)
+        hold_struct_full = np.array([1.0, 0.9, 0.42, 0.8, 0.7, 0.6, 1.0, 0.95], dtype=np.float64)
+        hold_struct_min_uncapped = hold_struct_full.copy()
+        cal_gen = np.linspace(0.4, 0.9, 20)
+        cal_near = np.linspace(0.4, 0.9, 20)
+        cal_struct = np.ones(20, dtype=np.float64)
+
+        block = replay.evaluate_clause_cap_cell(
+            domain="python",
+            hold_texts=hold_texts,
+            hold_clauses=hold_clauses,
+            hold_gen_full=hold_gen_full,
+            hold_gen_clause_scores=hold_gen_clause_scores,
+            hold_near_full=hold_near_full,
+            hold_near_clause_scores=hold_near_clause_scores,
+            hold_struct_min_uncapped=hold_struct_min_uncapped,
+            hold_struct_full=hold_struct_full,
+            y_true=y_true,
+            categories=categories,
+            subtypes=subtypes,
+            cal_gen=cal_gen,
+            cal_near=cal_near,
+            cal_struct=cal_struct,
+            clause_profile=clause_profile,
+            w_f=0.35,
+            beta=0.10,
+        )
+        self.assertEqual(block["recipe"]["family"], "eje1_plus_struct")
+        self.assertAlmostEqual(block["recipe"]["beta"], 0.10, places=12)
+        self.assertAlmostEqual(block["w_f"], 0.35, places=12)
+        first = block["caps"][0]
+        self.assertEqual(first["prefilter_counts"], {"s_struct": 6, "fallback": 1, "empty_clauses": 1})
+        far_map = first["subtype_far"]
+        for key in (
+            "dilution_80_20",
+            "smuggle_recipe_footnote",
+            "smuggle_comment_docstring",
+            "smuggle_json_yaml",
+            "long_context_flooding",
+            "prompt_injection_jailbreak",
+            "smuggle_any",
+        ):
+            self.assertIn(key, far_map)
+        self.assertIsNotNone(far_map["smuggle_any"])
+        self.assertIsNone(far_map["smuggle_recipe_footnote"])
 
     def test_evaluate_cell_synthetic_is_finite(self) -> None:
         rng = np.random.default_rng(5)
@@ -439,10 +674,23 @@ class DispatchAndHarnessTest(unittest.TestCase):
             texts=texts,
         )
         self.assertEqual(cell["catalog_size"], 12)
+        self.assertEqual(len(cell["recipe_table_12"]), 12)
+        for row in cell["recipe_table_12"]:
+            for key in ("f1", "in_domain_valid_frr", "ood_far", "adv_far", "hybrid_far", "near_ood_neighbor_far"):
+                self.assertIn(key, row)
+        self.assertEqual(len(cell["struct_beta_comparison"]), 3)
+        self.assertIn("bootstrap", cell)
+        self.assertIn("frozen_minus_eje1_only", cell["bootstrap"]["delta_f1"])
+        self.assertIn("frozen_minus_best_dual_axis", cell["bootstrap"]["delta_f1"])
         self.assertEqual(cell["eje1_preset"], "1B_base_tech")
         self.assertEqual(cell["eje2_stratum"], "near_ood_neighbor")
         self.assertTrue(np.isfinite(cell["frozen"]["cal_only"]["p10"]["f1"]))
         self.assertTrue(np.isfinite(cell["auc"]["roc_auc"]))
+        for _prob, tag in replay.PROB_TAGS:
+            self.assertGreaterEqual(
+                cell["frozen"]["oracle_upper_bound"]["f1"] + 1e-12,
+                cell["frozen"]["cal_only"][tag]["f1"],
+            )
 
     def test_struct_latency_block_finite(self) -> None:
         block = replay.struct_latency_block([10.0, 12.0, 11.0], [8.0, 9.0])
@@ -584,6 +832,123 @@ class NCalVolumeCurveTest(unittest.TestCase):
         self.assertAlmostEqual(deltas[0]["delta_f1"], 0.1, places=12)
         self.assertAlmostEqual(deltas[0]["delta_auc"], 0.05, places=12)
 
+    def test_n_cal_ge_5_uses_oof_and_differs_from_in_sample(self) -> None:
+        dim = 32
+        cal, contrast = _separated_target_contrast(n_target=30, n_contrast=20, dim=dim, seed=17)
+        hold = _unit_rows(20, dim, 55, center=np.ones(dim) / np.sqrt(dim) * 0.35)
+        y, categories, subtypes, _ids = _strata(10, 10)
+        for n_keep in (5, 10, 20):
+            indices = replay.subsample_calibration_indices(cal.shape[0], n_keep, seed=0)
+            subset = cal[indices]
+            fit = replay.fit_directional_matrices_allow_n1(subset, contrast)
+            in_sample = v3.score_dir1024(subset, fit.as_directional(), replay.DIR_VARIANT)
+            expected_oof = replay.score_axis_oof(
+                subset, np.arange(n_keep, dtype=np.int64) % 5, contrast, n_folds=5
+            )
+            self.assertFalse(np.allclose(expected_oof, in_sample))
+            block = replay.evaluate_n_cal_seed(
+                cal_vectors=cal,
+                contrast=contrast,
+                hold_vectors=hold,
+                y_true=y,
+                categories=categories,
+                subtypes=subtypes,
+                n_keep=n_keep,
+                seed=0,
+            )
+            expected_p10 = float(np.quantile(expected_oof, np.float64(0.10), method="linear"))
+            in_sample_p10 = float(np.quantile(in_sample, np.float64(0.10), method="linear"))
+            self.assertAlmostEqual(block["threshold_p10"], expected_p10, places=12)
+            self.assertNotAlmostEqual(block["threshold_p10"], in_sample_p10, places=9)
+
+    def test_n_cal_1_uses_1b_contrast_quantile_not_self_score(self) -> None:
+        dim = 16
+        cal = _unit_rows(20, dim, 31, center=np.ones(dim) / np.sqrt(dim) * 0.4)
+        contrast = _unit_rows(20, dim, 32, center=-np.ones(dim) / np.sqrt(dim) * 0.4)
+        hold_pos = _unit_rows(8, dim, 33, center=np.ones(dim) / np.sqrt(dim) * 0.4)
+        hold_neg = _unit_rows(12, dim, 34, center=-np.ones(dim) / np.sqrt(dim) * 0.4)
+        hold = np.vstack((hold_pos, hold_neg))
+        y, categories, subtypes, _ids = _strata(8, 12)
+
+        # Description-only N=1.
+        desc = cal[:1]
+        fit_desc = replay.fit_directional_n1(desc, contrast)
+        contrast_scores = v3.score_dir1024(contrast, fit_desc.as_directional(), replay.DIR_VARIANT)
+        expected_p95 = float(np.quantile(contrast_scores, np.float64(0.95), method="linear"))
+        expected_p99 = float(np.quantile(contrast_scores, np.float64(0.99), method="linear"))
+        desc_score = float(v3.score_dir1024(desc, fit_desc.as_directional(), replay.DIR_VARIANT)[0])
+        desc_block = replay.evaluate_description_only_scores(
+            domain="python",
+            description_vector=desc,
+            contrast=contrast,
+            hold_vectors=hold,
+            y_true=y,
+            categories=categories,
+            subtypes=subtypes,
+        )
+        self.assertEqual(desc_block["threshold_source"], "1b_contrast_quantile_0.95")
+        self.assertAlmostEqual(desc_block["threshold_relative_1b"], expected_p95, places=12)
+        self.assertAlmostEqual(desc_block["contrast_p99"], expected_p99, places=12)
+        self.assertEqual(desc_block["midpoint"], 0.50)
+        self.assertNotAlmostEqual(desc_block["threshold_relative_1b"], desc_score, places=6)
+        self.assertLess(desc_block["frr"], 1.0)
+        self.assertGreater(desc_block["f1"], 0.0)
+
+        # Real-doc N=1 subsample seed.
+        idx = replay.subsample_calibration_indices(cal.shape[0], 1, seed=0)
+        subset = cal[idx]
+        fit_n1 = replay.fit_directional_matrices_allow_n1(subset, contrast)
+        c_scores_n1 = v3.score_dir1024(contrast, fit_n1.as_directional(), replay.DIR_VARIANT)
+        expected_n1_p95 = float(np.quantile(c_scores_n1, np.float64(0.95), method="linear"))
+        self_score_n1 = float(v3.score_dir1024(subset, fit_n1.as_directional(), replay.DIR_VARIANT)[0])
+        seed_block = replay.evaluate_n_cal_seed(
+            cal_vectors=cal,
+            contrast=contrast,
+            hold_vectors=hold,
+            y_true=y,
+            categories=categories,
+            subtypes=subtypes,
+            n_keep=1,
+            seed=0,
+        )
+        self.assertEqual(seed_block["threshold_source"], "1b_contrast_quantile_0.95")
+        self.assertAlmostEqual(seed_block["threshold_relative_1b"], expected_n1_p95, places=12)
+        self.assertAlmostEqual(seed_block["threshold_p10"], expected_n1_p95, places=12)
+        self.assertAlmostEqual(seed_block["cal_only"]["blind_1b_p95"]["threshold"], expected_n1_p95, places=12)
+        self.assertNotAlmostEqual(seed_block["threshold_relative_1b"], self_score_n1, places=6)
+        self.assertLess(seed_block["frr"], 1.0)
+
+    def test_run_n_cal_volume_curve_domain_full_rung_uses_oof(self) -> None:
+        dim = 24
+        cal, contrast = _separated_target_contrast(n_target=10, n_contrast=15, dim=dim, seed=41)
+        hold = _unit_rows(20, dim, 42, center=np.ones(dim) / np.sqrt(dim) * 0.35)
+        y, categories, subtypes, _ids = _strata(10, 10)
+        cal_folds = np.arange(10, dtype=np.int64) % 5
+        expected_oof = replay.score_axis_oof(cal, cal_folds, contrast, n_folds=5)
+        expected_p10 = float(np.quantile(expected_oof, np.float64(0.10), method="linear"))
+        fit = replay.fit_directional_matrices_allow_n1(cal, contrast)
+        in_sample = v3.score_dir1024(cal, fit.as_directional(), replay.DIR_VARIANT)
+        in_sample_p10 = float(np.quantile(in_sample, np.float64(0.10), method="linear"))
+        with mock.patch.object(replay, "N_CAL_LADDER", (1, 5, 10)):
+            curve = replay.run_n_cal_volume_curve_domain(
+                domain="python",
+                cal_vectors=cal,
+                contrast=contrast,
+                hold_vectors=hold,
+                y_true=y,
+                categories=categories,
+                subtypes=subtypes,
+                description_vector=None,
+                description_text=None,
+                overlap_corpora=[],
+                cal_folds=cal_folds,
+            )
+        full_rows = [r for r in curve["ladder_seed_rows"] if r["kind"] == "full_calibration"]
+        self.assertEqual(len(full_rows), 1)
+        self.assertEqual(full_rows[0]["threshold_source"], "oof_calibration_quantile")
+        self.assertAlmostEqual(full_rows[0]["threshold_p10"], expected_p10, places=12)
+        self.assertNotAlmostEqual(full_rows[0]["threshold_p10"], in_sample_p10, places=9)
+
     def test_description_only_block_labels_oracle(self) -> None:
         dim = 16
         desc = _unit_rows(1, dim, 1)
@@ -601,10 +966,197 @@ class NCalVolumeCurveTest(unittest.TestCase):
         )
         self.assertEqual(block["kind"], "description_only")
         self.assertEqual(block["std_t_fallback"], "std_pool=std_C")
+        self.assertEqual(block["threshold_source"], "1b_contrast_quantile_0.95")
         self.assertEqual(block["oracle_upper_bound"]["tag"], "[ORACLE_UPPER_BOUND]")
         self.assertTrue(np.isfinite(block["roc_auc"]))
         self.assertTrue(np.isfinite(block["pr_auc_in_domain"]))
         self.assertTrue(np.isfinite(block["threshold_relative_1b"]))
+        self.assertTrue(np.isfinite(block["contrast_p99"]))
+        self.assertEqual(block["midpoint"], 0.50)
+
+    def test_replay_v4_outputs_roundtrip_into_report_generator(self) -> None:
+        rng = np.random.default_rng(77)
+        y, categories, subtypes, input_ids = _strata(16, 16)
+        texts = [
+            f"import json sqlite3 subprocess func_{i}. parse payload {i}."
+            for i in range(32)
+        ]
+        specs_full = replay.compact_recipe_catalog("full_only")
+        specs_cls = replay.compact_recipe_catalog("clauses")
+        cal_g = rng.random(40)
+        cal_n = rng.random(40)
+        cal_s = np.clip(rng.random(40), 0.2, 1.0)
+        hold_g = rng.random(32) + np.where(y, 0.35, 0.0)
+        hold_n = rng.random(32) + np.where(y, 0.25, 0.0)
+        hold_s = np.clip(rng.random(32), 0.2, 1.0)
+        latency = replay.struct_latency_block([10.0, 12.0], [5.0, 6.0])
+        cell_full = replay.build_dual_axis_cell(
+            domain="python",
+            granularity="full_only",
+            specs=specs_full,
+            cal_matrix=replay.materialize_recipe_matrix(specs_full, cal_g, cal_n, cal_s),
+            hold_matrix=replay.materialize_recipe_matrix(specs_full, hold_g, hold_n, hold_s),
+            s_general_cal=cal_g,
+            s_near_cal=cal_n,
+            s_general_hold=hold_g,
+            s_near_hold=hold_n,
+            y_true=y,
+            categories=categories,
+            subtypes=subtypes,
+            input_ids=input_ids,
+            texts=texts,
+            struct_latency=latency,
+            bootstrap_resamples=20,
+        )
+        w_f_sens = replay.evaluate_w_f_sensitivity(
+            cal_gen_full=cal_g,
+            cal_gen_cmin=cal_g * 0.9,
+            cal_near_full=cal_n,
+            cal_near_cmin=cal_n * 0.9,
+            cal_struct_min=cal_s,
+            hold_gen_full=hold_g,
+            hold_gen_cmin=hold_g * 0.9,
+            hold_near_full=hold_n,
+            hold_near_cmin=hold_n * 0.9,
+            hold_struct_min=hold_s,
+            y_true=y,
+            categories=categories,
+            subtypes=subtypes,
+        )
+        cell_clauses = replay.build_dual_axis_cell(
+            domain="python",
+            granularity="clauses",
+            specs=specs_cls,
+            cal_matrix=replay.materialize_recipe_matrix(specs_cls, cal_g, cal_n, cal_s),
+            hold_matrix=replay.materialize_recipe_matrix(specs_cls, hold_g, hold_n, hold_s),
+            s_general_cal=cal_g,
+            s_near_cal=cal_n,
+            s_general_hold=hold_g,
+            s_near_hold=hold_n,
+            y_true=y,
+            categories=categories,
+            subtypes=subtypes,
+            input_ids=input_ids,
+            texts=texts,
+            struct_latency=latency,
+            w_f_sensitivity=w_f_sens,
+            bootstrap_resamples=20,
+        )
+        hold_clauses = [xray.segment_clauses_opt2c(t) for t in texts]
+        clause_profile = lex.fit([c for doc in hold_clauses for c in doc], "clause_opt2c")
+        cap_block = replay.evaluate_clause_cap_cell(
+            domain="python",
+            hold_texts=texts,
+            hold_clauses=hold_clauses,
+            hold_gen_full=hold_g,
+            hold_gen_clause_scores=[np.full(len(cls), hold_g[i], dtype=np.float64) for i, cls in enumerate(hold_clauses)],
+            hold_near_full=hold_n,
+            hold_near_clause_scores=[np.full(len(cls), hold_n[i], dtype=np.float64) for i, cls in enumerate(hold_clauses)],
+            hold_struct_min_uncapped=hold_s,
+            hold_struct_full=hold_s,
+            y_true=y,
+            categories=categories,
+            subtypes=subtypes,
+            cal_gen=cal_g,
+            cal_near=cal_n,
+            cal_struct=cal_s,
+            clause_profile=clause_profile,
+        )
+        flood_dom = replay.measure_domain_flooding_latency(
+            ["flood one. flood two. flood three. flood four."],
+            lambda batch: [[0.0] * 4 for _ in batch],
+            clause_profile=clause_profile,
+            caps=(None, 2),
+            repeats=2,
+        )
+        flood_payload = {
+            "domains": {"python": flood_dom},
+            "ports_closed_after": True,
+            "PORTS_8080_8088_CLOSED": True,
+        }
+        cal_vec, contrast = _separated_target_contrast(n_target=10, n_contrast=12, dim=16, seed=81)
+        hold_vec = _unit_rows(32, 16, 82)
+        with mock.patch.object(replay, "N_CAL_LADDER", (1, 5, 10)):
+            n_cal_payload = replay.run_n_cal_volume_curve_domain(
+                domain="python",
+                cal_vectors=cal_vec,
+                contrast=contrast,
+                hold_vectors=hold_vec,
+                y_true=y,
+                categories=categories,
+                subtypes=subtypes,
+                description_vector=cal_vec[:1],
+                description_text=None,
+                overlap_corpora=[],
+            )
+        n_cal_payload["holdout_scoring"] = "full_doc_chunk0"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            cells_meta = [
+                {
+                    **replay._write_json(out, "python__full_only__dual_axis_v4.json", cell_full),
+                    "domain": "python",
+                    "granularity": "full_only",
+                    "frozen_recipe": cell_full["frozen"]["recipe"]["name"],
+                    "cal_only_p10_f1": cell_full["frozen"]["cal_only"]["p10"]["f1"],
+                    "kind": "dual_axis",
+                },
+                {
+                    **replay._write_json(out, "python__clauses__dual_axis_v4.json", cell_clauses),
+                    "domain": "python",
+                    "granularity": "clauses",
+                    "frozen_recipe": cell_clauses["frozen"]["recipe"]["name"],
+                    "cal_only_p10_f1": cell_clauses["frozen"]["cal_only"]["p10"]["f1"],
+                    "kind": "dual_axis",
+                },
+                {
+                    **replay._write_json(out, "python__clause_cap_eval.json", cap_block),
+                    "domain": "python",
+                    "kind": "clause_cap",
+                },
+                {
+                    **replay._write_json(out, "python__n_cal_volume_curve.json", n_cal_payload),
+                    "domain": "python",
+                    "kind": "n_cal",
+                },
+                {
+                    **replay._write_json(out, "flooding_latency_v4.json", flood_payload),
+                    "kind": "flooding_latency",
+                },
+            ]
+            manifest = {
+                "mode": "v4",
+                "dtype": "float64",
+                "dim": sim.DIM,
+                "normalize": True,
+                "n_cells": 2,
+                "cells": cells_meta,
+                "bootstrap_resamples": replay.BOOTSTRAP_RESAMPLES,
+                "bootstrap_seed": 0,
+                "bootstrap_refits_thresholds": True,
+                "cal_oof_folds": 5,
+                "eje1_preset": replay.EJE1_PRESET,
+                "eje2_stratum": replay.NEAR_STRATUM,
+                "clause_caps": list(replay.CLAUSE_CAPS),
+                "n_cal_ladder": [1, 5, 10],
+                "PORTS_8080_8088_CLOSED": True,
+            }
+            (out / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+            bundle = v4_report.load_directory(out)
+            v3_path = Path(__file__).resolve().parents[1] / "reports" / "fhv1_1_id_v3_report.md"
+            v3_base = v4_report.parse_v3_baseline(v3_path.read_text(encoding="utf-8"))
+            md = v4_report.render_report(
+                bundle,
+                phase0_quote="## 1. Phase-0\nDIFF_IDENTICAL=0\n19,229,584\n3,145,728\nPASSED=173",
+                disk_before="before",
+                disk_after="after",
+                v3_baseline=v3_base,
+            )
+            v4_report.assert_executive_f1(md, bundle)
+            self.assertIn("Diagnostic `w_f` sensitivity", md)
+            self.assertIn("`0.21`", md)
+            self.assertIn("`0.11`", md)
 
 
 if __name__ == "__main__":

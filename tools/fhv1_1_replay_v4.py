@@ -45,7 +45,10 @@ EJE1_PRESET = "1B_base_tech"
 NEAR_STRATUM = "near_ood_neighbor"
 CLAUSE_CAPS: tuple[int | None, ...] = (None, 16, 24, 32)
 W_F: tuple[float, ...] = (0.20, 0.35, 0.50)
-BLEND_LAMBDAS: tuple[float, ...] = (0.20, 0.35)
+DEFAULT_W_F = 0.35
+FROZEN_FAMILY = "eje1_plus_struct"
+FROZEN_BETA = 0.10
+BLEND_LAMBDAS: tuple[float, float] = (0.20, 0.35)
 AND_NEAR_PROBS: tuple[tuple[float, str], ...] = ((0.02, "p02"), (0.05, "p05"), (0.10, "p10"))
 GEN_GATE_PROB = 0.10
 PROB_TAGS: tuple[tuple[float, str], ...] = ((0.05, "p05"), (0.10, "p10"), (0.15, "p15"))
@@ -57,13 +60,24 @@ FOCUS_SUBTYPES: tuple[str, ...] = (
     "prompt_injection_jailbreak",
     "short_idiom_query",
     "code_snippet",
+    "delimiter_escape",
+    "keyword_stuffing_hidden_instruction",
     "consulta_corta",
     "sustitucion_ingredientes",
     "panaderia_fermentacion",
     "diagnostico_pasteleria_panaderia",
     "smuggle_recipe_footnote",
+    "smuggle_comment_docstring",
+    "smuggle_json_yaml",
     "dilution_80_20",
     "long_context_flooding",
+)
+STRUCT_CMP_SUBTYPES: tuple[str, ...] = (
+    "code_snippet",
+    "short_idiom_query",
+    "delimiter_escape",
+    "keyword_stuffing_hidden_instruction",
+    "near_ood_neighbor",
 )
 QUADRANT_NAMES: tuple[str, ...] = (
     "IN_DOMAIN_VALID",
@@ -304,33 +318,44 @@ class V4RecipeSpec:
         }
 
 
-def compact_recipe_catalog(granularity: str) -> tuple[V4RecipeSpec, ...]:
-    """Fixed catalog. ``full_only`` has exactly 12 recipes; clauses multiply by ``w_f``."""
+def compact_recipe_catalog(granularity: str, *, w_f: float | None = None) -> tuple[V4RecipeSpec, ...]:
+    """Fixed 12-recipe catalog per granularity (``full_only``: ``None``, ``clauses``: ``0.35``)."""
     if granularity not in ("full_only", "clauses"):
         raise ValueError(f"unsupported granularity {granularity}")
-    weights: tuple[float | None, ...]
     if granularity == "full_only":
-        weights = (None,)
+        weight: float | None = None
     else:
-        weights = tuple(float(w) for w in W_F)
-    specs: list[V4RecipeSpec] = []
-    for weight in weights:
-        specs.append(V4RecipeSpec("eje1_only", 0.0, None, None, None, weight))
-        for beta in (0.10, 0.20):
-            specs.append(V4RecipeSpec("eje1_plus_struct", float(beta), None, None, None, weight))
-        for prob, tag in AND_NEAR_PROBS:
-            specs.append(V4RecipeSpec("dual_axis_and", 0.0, None, tag, float(prob), weight))
-        for lam in BLEND_LAMBDAS:
-            specs.append(V4RecipeSpec("dual_axis_blend", 0.0, float(lam), None, None, weight))
-            specs.append(V4RecipeSpec("dual_axis_blend", 0.15, float(lam), None, None, weight))
-        specs.append(V4RecipeSpec("dual_axis_min", 0.0, None, None, None, weight))
-        specs.append(V4RecipeSpec("dual_axis_min", 0.15, None, None, None, weight))
+        weight = float(DEFAULT_W_F if w_f is None else w_f)
+    specs: list[V4RecipeSpec] = [
+        V4RecipeSpec("eje1_only", 0.0, None, None, None, weight),
+    ]
+    for beta in (0.10, 0.20):
+        specs.append(V4RecipeSpec("eje1_plus_struct", float(beta), None, None, None, weight))
+    for prob, tag in AND_NEAR_PROBS:
+        specs.append(V4RecipeSpec("dual_axis_and", 0.0, None, tag, float(prob), weight))
+    for lam in BLEND_LAMBDAS:
+        specs.append(V4RecipeSpec("dual_axis_blend", 0.0, float(lam), None, None, weight))
+        specs.append(V4RecipeSpec("dual_axis_blend", 0.15, float(lam), None, None, weight))
+    specs.append(V4RecipeSpec("dual_axis_min", 0.0, None, None, None, weight))
+    specs.append(V4RecipeSpec("dual_axis_min", 0.15, None, None, None, weight))
     catalog = tuple(specs)
-    if granularity == "full_only" and len(catalog) > 12:
-        raise RuntimeError(f"full_only catalog exceeded 12 recipes: {len(catalog)}")
-    if granularity == "full_only" and len(catalog) != 12:
-        raise RuntimeError(f"full_only catalog must be exactly 12, got {len(catalog)}")
+    if len(catalog) != 12:
+        raise RuntimeError(f"{granularity} catalog must be exactly 12, got {len(catalog)}")
     return catalog
+
+
+def find_frozen_recipe_index(specs: Sequence[V4RecipeSpec]) -> int:
+    """Blind a priori selection of ``eje1_plus_struct|b=0.10`` without reading ``y_true``."""
+    matches = [
+        idx
+        for idx, spec in enumerate(specs)
+        if spec.family == FROZEN_FAMILY and abs(float(spec.beta) - FROZEN_BETA) < 1e-12
+    ]
+    if len(matches) != 1:
+        raise RuntimeError(
+            f"expected exactly 1 frozen recipe {FROZEN_FAMILY}|b={FROZEN_BETA:.2f}, got {len(matches)}"
+        )
+    return matches[0]
 
 
 def blend_axes(s_general: np.ndarray, s_near: np.ndarray, lam: float) -> np.ndarray:
@@ -444,6 +469,39 @@ def evaluate_cal_only(
     return v3.evaluate_cal_only(cal_scores, hold_scores, y_true)
 
 
+def _prediction_breakdown_metrics(
+    y_true: np.ndarray,
+    pred: np.ndarray,
+    categories: Sequence[str],
+    subtypes: Sequence[str],
+) -> dict[str, Any]:
+    """Compute F1 plus IN_DOMAIN_VALID FRR and OOD/Adv/Hybrid/near_ood FAR."""
+    labels = np.asarray(y_true, dtype=bool)
+    predictions = np.asarray(pred, dtype=bool)
+    cats = np.asarray(list(categories), dtype=object)
+    subs = np.asarray(list(subtypes), dtype=object)
+    if cats.shape[0] != labels.shape[0] or subs.shape[0] != labels.shape[0]:
+        raise ValueError("categories/subtypes do not align with y_true")
+    cm = sim.compute_confusion_metrics(labels, predictions)
+    in_domain = v2.subgroup_error(labels, predictions, cats == "IN_DOMAIN_VALID")
+    return {
+        "tp": int(cm["tp"]),
+        "fn": int(cm["fn"]),
+        "tn": int(cm["tn"]),
+        "fp": int(cm["fp"]),
+        "precision": float(cm["precision"]),
+        "recall": None if cm["recall"] is None else float(cm["recall"]),
+        "f1": float(cm["f1"]),
+        "frr": None if cm["frr"] is None else float(cm["frr"]),
+        "far": None if cm["far"] is None else float(cm["far"]),
+        "in_domain_valid_frr": in_domain["error_rate"],
+        "ood_far": _far_on_mask(labels, predictions, cats == "OUT_OF_DOMAIN_BENIGN"),
+        "adv_far": _far_on_mask(labels, predictions, cats == "ADVERSARIAL_FUZZING"),
+        "hybrid_far": _far_on_mask(labels, predictions, cats == "HYBRID_BOUNDARY"),
+        "near_ood_neighbor_far": _far_on_mask(labels, predictions, subs == "near_ood_neighbor"),
+    }
+
+
 def evaluate_dual_and_cal_only(
     cal_general: np.ndarray,
     cal_near: np.ndarray,
@@ -453,27 +511,41 @@ def evaluate_dual_and_cal_only(
     *,
     near_prob: float,
     near_tag: str,
+    categories: Sequence[str] | None = None,
+    subtypes: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """Dual CAL_ONLY gate with fixed general p10 and configurable near percentile."""
     t_gen, t_near = dual_axis_and_thresholds(cal_general, cal_near, near_prob=near_prob)
     pred = predict_dual_axis_and(hold_general, hold_near, t_gen=t_gen, t_near=t_near)
-    metrics = sim.compute_confusion_metrics(np.asarray(y_true, dtype=bool), pred)
+    labels = np.asarray(y_true, dtype=bool)
     proxy = min_axes(hold_general, hold_near)
-    auc = sim.compute_auc_triple(np.asarray(y_true, dtype=bool), proxy)
+    auc = sim.compute_auc_triple(labels, proxy)
+    if categories is not None and subtypes is not None:
+        breakdown = _prediction_breakdown_metrics(labels, pred, categories, subtypes)
+    else:
+        cm = sim.compute_confusion_metrics(labels, pred)
+        breakdown = {
+            "tp": int(cm["tp"]),
+            "fn": int(cm["fn"]),
+            "tn": int(cm["tn"]),
+            "fp": int(cm["fp"]),
+            "precision": float(cm["precision"]),
+            "recall": None if cm["recall"] is None else float(cm["recall"]),
+            "f1": float(cm["f1"]),
+            "frr": None if cm["frr"] is None else float(cm["frr"]),
+            "far": None if cm["far"] is None else float(cm["far"]),
+            "in_domain_valid_frr": None,
+            "ood_far": None,
+            "adv_far": None,
+            "hybrid_far": None,
+            "near_ood_neighbor_far": None,
+        }
     return {
         "near_tag": near_tag,
         "near_prob": float(near_prob),
         "t_gen_p10": float(t_gen),
         "t_near": float(t_near),
-        "tp": int(metrics["tp"]),
-        "fn": int(metrics["fn"]),
-        "tn": int(metrics["tn"]),
-        "fp": int(metrics["fp"]),
-        "precision": float(metrics["precision"]),
-        "recall": None if metrics["recall"] is None else float(metrics["recall"]),
-        "f1": float(metrics["f1"]),
-        "frr": None if metrics["frr"] is None else float(metrics["frr"]),
-        "far": None if metrics["far"] is None else float(metrics["far"]),
+        **breakdown,
         "roc_auc": float(auc["roc_auc"]),
         "pr_auc_in_domain": float(auc["pr_auc_in_domain"]),
         "pr_auc_reject": float(auc["pr_auc_reject"]),
@@ -503,8 +575,60 @@ def nested_repeated_oof(
 BOOTSTRAP_PROBABILITY = 0.10
 
 
+@dataclass(frozen=True)
+class DualAndBootstrapMethod:
+    """2D ``dual_axis_and`` specification for paired threshold-refit bootstrap."""
+
+    hold_general: np.ndarray
+    hold_near: np.ndarray
+    cal_general: np.ndarray
+    cal_near: np.ndarray
+    near_prob: float
+    gen_prob: float = GEN_GATE_PROB
+
+
+def _ci95(values: np.ndarray) -> dict[str, float]:
+    arr = np.asarray(values, dtype=np.float64)
+    return {
+        "low": float(np.quantile(arr, np.float64(0.025), method="linear")),
+        "high": float(np.quantile(arr, np.float64(0.975), method="linear")),
+    }
+
+
+def _validate_bootstrap_method(
+    name: str,
+    spec: tuple[np.ndarray, np.ndarray] | DualAndBootstrapMethod,
+    n_hold: int,
+) -> tuple[str, dict[str, Any], int]:
+    if isinstance(spec, DualAndBootstrapMethod):
+        hg = _as_f64_vector(spec.hold_general, name=f"{name}.hold_general")
+        hn = _as_f64_vector(spec.hold_near, name=f"{name}.hold_near")
+        cg = _as_f64_vector(spec.cal_general, name=f"{name}.cal_general")
+        cn = _as_f64_vector(spec.cal_near, name=f"{name}.cal_near")
+        if hg.shape[0] != n_hold or hn.shape[0] != n_hold:
+            raise ValueError(f"{name} holdout arrays misaligned with labels")
+        if cg.shape[0] < 2 or cg.shape[0] != cn.shape[0]:
+            raise ValueError(f"{name} calibration arrays invalid")
+        payload = {
+            "hold_g": hg,
+            "hold_n": hn,
+            "cal_g": cg,
+            "cal_n": cn,
+            "near_prob": float(spec.near_prob),
+            "gen_prob": float(spec.gen_prob),
+            "roc_proxy": np.minimum(hg, hn),
+        }
+        return "2d_and", payload, int(cg.shape[0])
+    hold_scores, cal_scores = spec
+    hold_arr = _as_f64_vector(hold_scores, name=f"{name}.hold")
+    cal_arr = _as_f64_vector(cal_scores, name=f"{name}.cal")
+    if hold_arr.shape[0] != n_hold or cal_arr.shape[0] < 2:
+        raise ValueError(f"{name} bootstrap scores are misaligned")
+    return "1d", {"hold": hold_arr, "cal": cal_arr}, int(cal_arr.shape[0])
+
+
 def bootstrap_cal_only(
-    methods: Mapping[str, tuple[np.ndarray, np.ndarray]],
+    methods: Mapping[str, tuple[np.ndarray, np.ndarray] | DualAndBootstrapMethod],
     y_true: np.ndarray,
     categories: Sequence[str],
     subtypes: Sequence[str],
@@ -512,17 +636,90 @@ def bootstrap_cal_only(
     seed: int = 0,
     n_resamples: int = BOOTSTRAP_RESAMPLES,
     probability: float = BOOTSTRAP_PROBABILITY,
+    paired_deltas: Sequence[tuple[str, str, str, float]] = (),
 ) -> dict[str, Any]:
-    """Bootstrap 1000, seed=0, ``refits_thresholds=True`` (via v3 paired path)."""
-    return v3.bootstrap_cal_only_paired(
-        methods,
-        y_true,
+    """Paired bootstrap 1000, seed=0, ``refits_thresholds=True`` supporting 1D and 2D gates."""
+    if not methods:
+        raise ValueError("bootstrap needs at least one method")
+    labels = np.asarray(y_true, dtype=bool)
+    if labels.shape[0] != len(categories) or labels.shape[0] != len(subtypes):
+        raise ValueError("bootstrap labels do not align with strata")
+    names = tuple(methods)
+    parsed: list[tuple[str, dict[str, Any]]] = []
+    n_cals: list[int] = []
+    for name in names:
+        kind, payload, n_cal = _validate_bootstrap_method(name, methods[name], int(labels.shape[0]))
+        parsed.append((kind, payload))
+        n_cals.append(n_cal)
+    if any(n != n_cals[0] for n in n_cals):
+        raise ValueError("calibration score lengths differ across methods")
+    cal_draws, hold_draws = v3.bootstrap_resample_indices(
+        n_cals[0],
         categories,
         subtypes,
         seed=seed,
         n_resamples=n_resamples,
-        probability=probability,
     )
+    n_methods = len(names)
+    f1 = np.empty((n_resamples, n_methods), dtype=np.float64)
+    frr = np.empty((n_resamples, n_methods), dtype=np.float64)
+    far = np.empty((n_resamples, n_methods), dtype=np.float64)
+    roc = np.empty((n_resamples, n_methods), dtype=np.float64)
+    for draw, (cal_idx, hold_idx) in enumerate(zip(cal_draws, hold_draws)):
+        y_draw = labels[hold_idx]
+        y_int = y_draw.astype(np.int64)
+        for m_idx, (kind, payload) in enumerate(parsed):
+            if kind == "1d":
+                t_val = float(np.quantile(payload["cal"][cal_idx], np.float64(probability), method="linear"))
+                pred = payload["hold"][hold_idx] >= np.float64(t_val)
+                roc_scores = payload["hold"][hold_idx]
+            else:
+                t_gen = float(np.quantile(payload["cal_g"][cal_idx], np.float64(payload["gen_prob"]), method="linear"))
+                t_near = float(np.quantile(payload["cal_n"][cal_idx], np.float64(payload["near_prob"]), method="linear"))
+                pred = (payload["hold_g"][hold_idx] >= np.float64(t_gen)) & (
+                    payload["hold_n"][hold_idx] >= np.float64(t_near)
+                )
+                roc_scores = payload["roc_proxy"][hold_idx]
+            metrics = sim.compute_confusion_metrics(y_draw, pred)
+            if metrics["frr"] is None or metrics["far"] is None:
+                raise RuntimeError("stratified bootstrap lost a class")
+            f1[draw, m_idx] = np.float64(metrics["f1"])
+            frr[draw, m_idx] = np.float64(metrics["frr"])
+            far[draw, m_idx] = np.float64(metrics["far"])
+            roc[draw, m_idx] = sim.compute_roc_auc_trapezoidal(y_int, roc_scores)
+
+    out_methods: dict[str, Any] = {}
+    name_to_idx = {name: i for i, name in enumerate(names)}
+    for m_idx, name in enumerate(names):
+        out_methods[name] = {
+            "f1": _ci95(f1[:, m_idx]),
+            "frr": _ci95(frr[:, m_idx]),
+            "far": _ci95(far[:, m_idx]),
+            "roc_auc": _ci95(roc[:, m_idx]),
+        }
+    out: dict[str, Any] = {
+        "n_resamples": int(n_resamples),
+        "seed": int(seed),
+        "refits_thresholds": True,
+        "threshold_policy": "resampled_calibration_percentile",
+        "probability": float(probability),
+        "methods": out_methods,
+    }
+    if paired_deltas:
+        deltas_out: dict[str, Any] = {}
+        for delta_name, left_name, right_name, point_delta in paired_deltas:
+            diff = f1[:, name_to_idx[left_name]] - f1[:, name_to_idx[right_name]]
+            ci = _ci95(diff)
+            deltas_out[delta_name] = {
+                "point": float(point_delta),
+                "mean": float(np.mean(diff)),
+                "ci95_low": float(ci["low"]),
+                "ci95_high": float(ci["high"]),
+                "low": float(ci["low"]),
+                "high": float(ci["high"]),
+            }
+        out["paired_deltas"] = deltas_out
+    return out
 
 
 def detach_oracle(row: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None]:
@@ -538,18 +735,36 @@ def freeze_winning_recipe(
     subtypes: Sequence[str],
     input_ids: Sequence[str],
 ) -> dict[str, Any]:
-    """Select one recipe via nested 5x5 OOF. Holdout labels never set the CAL_ONLY threshold."""
-    nested = nested_repeated_oof(hold_matrix, y_true, categories, subtypes, input_ids)
-    clean, oracle = detach_oracle(dict(nested))
-    modal = int(clean["modal_column"])
-    winner = specs[modal]
-    cal_scores = cal_matrix[:, modal]
-    hold_scores = hold_matrix[:, modal]
-    cal_only = evaluate_cal_only(cal_scores, hold_scores, y_true)
+    """Freeze blind ``eje1_plus_struct|b=0.10``; keep ``nested_repeated_oof`` diagnostic only."""
+    frozen_col = find_frozen_recipe_index(specs)
+    winner = specs[frozen_col]
+    cal_scores = cal_matrix[:, frozen_col]
+    hold_scores = hold_matrix[:, frozen_col]
+    labels = np.asarray(y_true, dtype=bool)
+    cal_only = evaluate_cal_only(cal_scores, hold_scores, labels)
+    oracle_t, oracle_m = sim.fit_best_1d_threshold(hold_scores, labels)
+    oracle = {
+        "tag": "[ORACLE_UPPER_BOUND]",
+        "source": "frozen_recipe_holdout_scores_fit_on_all_holdout_labels",
+        "threshold": float(oracle_t),
+        **{
+            k: (None if v is None else (float(v) if isinstance(v, (float, np.floating)) else int(v)))
+            for k, v in oracle_m.items()
+        },
+    }
+    nested = nested_repeated_oof(hold_matrix, labels, categories, subtypes, input_ids)
+    clean, _nested_oracle = detach_oracle(dict(nested))
+    nested_packed = v3._pack_repeated(clean)
+    nested_modal = int(clean["modal_column"])
+    nested_packed["modal_column"] = nested_modal
+    nested_packed["modal_wins"] = int(clean["modal_wins"])
+    nested_packed["modal_recipe"] = specs[nested_modal].name()
     return {
         "recipe": winner.as_dict(),
-        "modal_column": modal,
-        "nested_oof": v3._pack_repeated(clean),
+        "frozen_column": frozen_col,
+        "nested_modal_column": nested_modal,
+        "selection_policy": "blind_apriori_eje1_plus_struct_b010",
+        "nested_oof": nested_packed,
         "oracle_upper_bound": oracle,
         "cal_only": cal_only,
     }
@@ -836,33 +1051,95 @@ class EmbedServerSession:
         self.cleanup()
 
 
+def select_flooding_prompt_clauses(
+    prompt: str,
+    cap: int | None,
+    clause_profile: lex.LexicalProfile | None = None,
+) -> list[str]:
+    """Select uncapped or ``edge_plus_struct``-capped clauses for one flooding prompt."""
+    clauses = xray.segment_clauses_opt2c(prompt)
+    if cap is None or len(clauses) <= cap:
+        return list(clauses)
+    if clause_profile is None:
+        raise ValueError("clause_profile is required when flooding latency uses a clause_cap")
+    prefilter = prefilter_clause_s_struct(clauses, clause_profile)
+    keep = select_clause_indices_edge_plus_struct(len(clauses), cap, prefilter)
+    return [clauses[i] for i in keep]
+
+
 def measure_flooding_latency_ms(
-    texts: Sequence[str],
+    prompts: Sequence[str],
     embed_fn: Callable[[Sequence[str]], Sequence[Sequence[float]]],
     *,
+    cap: int | None = None,
+    clause_profile: lex.LexicalProfile | None = None,
     repeats: int = 3,
 ) -> dict[str, Any]:
-    """End-to-end flooding latency in ms via a caller-supplied embed callable."""
+    """Per-prompt ``[prompt] + selected_clauses`` latency via caller-supplied embedder."""
     if repeats < 1:
         raise ValueError("repeats must be >= 1")
-    if not texts:
-        raise ValueError("flooding latency needs at least one text")
+    if not prompts:
+        raise ValueError("flooding latency needs at least one prompt")
+    selected_by_prompt = [
+        select_flooding_prompt_clauses(str(prompt), cap, clause_profile) for prompt in prompts
+    ]
+    payloads = [[str(prompt), *selected] for prompt, selected in zip(prompts, selected_by_prompt)]
+    total_clauses = sum(len(selected) for selected in selected_by_prompt)
     samples: list[float] = []
     for _ in range(repeats):
-        started = time.perf_counter()
-        vectors = embed_fn(list(texts))
-        elapsed_ms = (time.perf_counter() - started) * 1000.0
-        if len(vectors) != len(texts):
-            raise RuntimeError("embed_fn returned the wrong number of vectors")
-        samples.append(float(elapsed_ms))
+        for payload in payloads:
+            started = time.perf_counter()
+            vectors = embed_fn(list(payload))
+            elapsed_ms = (time.perf_counter() - started) * 1000.0
+            if len(vectors) != len(payload):
+                raise RuntimeError("embed_fn returned the wrong number of vectors")
+            samples.append(float(elapsed_ms))
     arr = np.asarray(samples, dtype=np.float64)
     return {
-        "n_texts": len(texts),
-        "repeats": repeats,
+        "cap": cap,
+        "n_prompts": len(prompts),
+        "repeats": int(repeats),
+        "n_measurements": len(samples),
+        "mean_clauses_per_prompt": float(total_clauses / len(prompts)),
+        "total_clauses_per_pass": int(total_clauses),
+        "n_texts": int(sum(len(p) for p in payloads)),
         "p50_ms": float(np.quantile(arr, 0.50, method="linear")),
         "p99_ms": float(np.quantile(arr, 0.99, method="linear")),
+        "mean_ms": float(np.mean(arr)),
+        "speedup_vs_uncapped": 1.0,
         "samples_ms": [float(x) for x in samples],
     }
+
+
+def measure_domain_flooding_latency(
+    prompts: Sequence[str],
+    embed_fn: Callable[[Sequence[str]], Sequence[Sequence[float]]],
+    *,
+    clause_profile: lex.LexicalProfile,
+    caps: Sequence[int | None] = CLAUSE_CAPS,
+    repeats: int = 3,
+) -> dict[str, Any]:
+    """Measure ``uncapped`` and capped flooding latencies using calibrated ``clause_profile``."""
+    out: dict[str, Any] = {}
+    for cap in caps:
+        label = "uncapped" if cap is None else f"cap_{cap}"
+        out[label] = measure_flooding_latency_ms(
+            prompts,
+            embed_fn,
+            cap=cap,
+            clause_profile=clause_profile,
+            repeats=repeats,
+        )
+    if "uncapped" in out:
+        base_p50 = float(out["uncapped"]["p50_ms"])
+        for label, block in out.items():
+            if label == "uncapped":
+                block["speedup_vs_uncapped"] = 1.0
+            elif block["p50_ms"] > 0.0:
+                block["speedup_vs_uncapped"] = float(base_p50 / block["p50_ms"])
+            else:
+                block["speedup_vs_uncapped"] = None
+    return out
 
 
 def run_flooding_latency_with_server(
@@ -880,7 +1157,7 @@ def run_flooding_latency_with_server(
             pid = session.start()
         else:
             pid = None
-        block = measure_flooding_latency_ms(texts, embed_fn, repeats=repeats)
+        block = measure_flooding_latency_ms(texts, embed_fn, cap=None, repeats=repeats)
         block["server_pid"] = pid
         return block
     finally:
@@ -1040,6 +1317,105 @@ def _far_on_mask(y_true: np.ndarray, pred: np.ndarray, mask: np.ndarray) -> floa
     return float(np.sum(predictions[neg]) / np.sum(neg))
 
 
+def _eval_threshold_metrics(
+    hold_scores: np.ndarray,
+    threshold: float,
+    y_true: np.ndarray,
+    cats: np.ndarray,
+    subs: np.ndarray,
+) -> dict[str, Any]:
+    pred = hold_scores >= np.float64(threshold)
+    metrics = sim.compute_confusion_metrics(y_true, pred)
+    return {
+        "threshold": float(threshold),
+        "f1": float(metrics["f1"]),
+        "frr": metrics["frr"],
+        "far": metrics["far"],
+        "tp": int(metrics["tp"]),
+        "fp": int(metrics["fp"]),
+        "fn": int(metrics["fn"]),
+        "tn": int(metrics["tn"]),
+        "ood_far": _far_on_mask(y_true, pred, cats == "OUT_OF_DOMAIN_BENIGN"),
+        "adv_far": _far_on_mask(y_true, pred, cats == "ADVERSARIAL_FUZZING"),
+        "near_ood_far": _far_on_mask(y_true, pred, subs == "near_ood_neighbor"),
+    }
+
+
+def _evaluate_n1_blind_pack(
+    *,
+    single_vector: np.ndarray,
+    contrast: np.ndarray,
+    hold_vectors: np.ndarray,
+    y_true: np.ndarray,
+    categories: Sequence[str],
+    subtypes: Sequence[str],
+    kind: str,
+    domain: str | None = None,
+    seed: int | None = None,
+) -> dict[str, Any]:
+    """Blind N=1 operating threshold derived strictly from 1B contrast quantiles."""
+    fit = fit_directional_matrices_allow_n1(single_vector, contrast)
+    directional = fit.as_directional()
+    self_score = float(v3.score_dir1024(single_vector, directional, DIR_VARIANT)[0])
+    contrast_scores = v3.score_dir1024(contrast, directional, DIR_VARIANT)
+    t_p95 = float(np.quantile(contrast_scores, np.float64(0.95), method="linear"))
+    t_p99 = float(np.quantile(contrast_scores, np.float64(0.99), method="linear"))
+    midpoint = 0.50
+    hold_scores = v3.score_dir1024(hold_vectors, directional, DIR_VARIANT)
+    labels = np.asarray(y_true, dtype=bool)
+    cats = np.asarray(list(categories), dtype=object)
+    subs = np.asarray(list(subtypes), dtype=object)
+    auc = sim.compute_auc_triple(labels, hold_scores)
+    blind_p95 = _eval_threshold_metrics(hold_scores, t_p95, labels, cats, subs)
+    diag_p99 = _eval_threshold_metrics(hold_scores, t_p99, labels, cats, subs)
+    diag_mid = _eval_threshold_metrics(hold_scores, midpoint, labels, cats, subs)
+    oracle_t, oracle_m = sim.fit_best_1d_threshold(hold_scores, labels)
+    cal_only = {
+        "blind_1b_p95": dict(blind_p95),
+        "p05": dict(blind_p95),
+        "p10": dict(blind_p95),
+        "contrast_p99": dict(diag_p99),
+        "midpoint": dict(diag_mid),
+    }
+    payload: dict[str, Any] = {
+        "kind": kind,
+        "n_cal": 1,
+        "seed": None if seed is None else int(seed),
+        "std_t_fallback": fit.std_t_fallback,
+        "threshold_source": "1b_contrast_quantile_0.95",
+        "threshold_relative_1b": t_p95,
+        "threshold_p10": t_p95,
+        "contrast_p99": t_p99,
+        "midpoint": midpoint,
+        "informational_self_score": self_score,
+        "cal_only": cal_only,
+        "diagnostics": {
+            "blind_1b_p95": blind_p95,
+            "contrast_p99": diag_p99,
+            "midpoint": diag_mid,
+        },
+        "roc_auc": float(auc["roc_auc"]),
+        "pr_auc_in_domain": float(auc["pr_auc_in_domain"]),
+        "pr_auc_reject": float(auc["pr_auc_reject"]),
+        "f1": float(blind_p95["f1"]),
+        "frr": blind_p95["frr"],
+        "far": blind_p95["far"],
+        "ood_far": blind_p95["ood_far"],
+        "adv_far": blind_p95["adv_far"],
+        "near_ood_far": blind_p95["near_ood_far"],
+        "sep_ge_1_count": int(np.sum(fit.sep >= np.float64(1.0))),
+        "oracle_upper_bound": {
+            **{k: (None if v is None else (float(v) if isinstance(v, (float, np.floating)) else v)) for k, v in oracle_m.items()},
+            "threshold": float(oracle_t),
+            "tag": "[ORACLE_UPPER_BOUND]",
+        },
+        "eje1_preset": EJE1_PRESET,
+    }
+    if domain is not None:
+        payload["domain"] = domain
+    return payload
+
+
 def _n_cal_metric_pack(
     *,
     cal_scores: np.ndarray,
@@ -1064,6 +1440,7 @@ def _n_cal_metric_pack(
         "n_cal": int(n_cal),
         "seed": None if seed is None else int(seed),
         "std_t_fallback": fit.std_t_fallback,
+        "threshold_source": "oof_calibration_quantile",
         "cal_only": cal_only,
         "roc_auc": float(auc["roc_auc"]),
         "pr_auc_in_domain": float(auc["pr_auc_in_domain"]),
@@ -1094,14 +1471,27 @@ def evaluate_n_cal_seed(
     n_keep: int,
     seed: int,
 ) -> dict[str, Any]:
-    """One deterministic subsample rung against the fixed holdout."""
+    """One deterministic subsample rung against the fixed holdout (OOF for N>=5, 1B quantile for N=1)."""
     matrix = _as_f64_matrix(cal_vectors, name="n_cal_calibration")
     indices = subsample_calibration_indices(matrix.shape[0], n_keep, seed=seed)
     subset = matrix[indices]
+    if n_keep == 1:
+        return _evaluate_n1_blind_pack(
+            single_vector=subset,
+            contrast=contrast,
+            hold_vectors=hold_vectors,
+            y_true=y_true,
+            categories=categories,
+            subtypes=subtypes,
+            kind="real_doc_subsample",
+            seed=seed,
+        )
+    if n_keep < 5:
+        raise ValueError(f"5-fold OOF N_cal curve requires n_keep == 1 or n_keep >= 5, got {n_keep}")
+    folds = np.arange(n_keep, dtype=np.int64) % 5
+    cal_scores = score_axis_oof(subset, folds, contrast, n_folds=5)
     fit = fit_directional_matrices_allow_n1(subset, contrast)
-    directional = fit.as_directional()
-    cal_scores = v3.score_dir1024(subset, directional, DIR_VARIANT)
-    hold_scores = v3.score_dir1024(hold_vectors, directional, DIR_VARIANT)
+    hold_scores = v3.score_dir1024(hold_vectors, fit.as_directional(), DIR_VARIANT)
     return _n_cal_metric_pack(
         cal_scores=cal_scores,
         hold_scores=hold_scores,
@@ -1125,41 +1515,17 @@ def evaluate_description_only_scores(
     categories: Sequence[str],
     subtypes: Sequence[str],
 ) -> dict[str, Any]:
-    """Score holdout from a single description embedding with the N=1 std fallback."""
-    fit = fit_directional_n1(description_vector, contrast)
-    directional = fit.as_directional()
-    desc_score = v3.score_dir1024(description_vector, directional, DIR_VARIANT)
-    hold_scores = v3.score_dir1024(hold_vectors, directional, DIR_VARIANT)
-    threshold = float(desc_score[0])
-    pred = hold_scores >= np.float64(threshold)
-    auc = sim.compute_auc_triple(np.asarray(y_true, dtype=bool), hold_scores)
-    metrics = sim.compute_confusion_metrics(np.asarray(y_true, dtype=bool), pred)
-    cats = np.asarray(list(categories), dtype=object)
-    subs = np.asarray(list(subtypes), dtype=object)
-    oracle_t, oracle_m = sim.fit_best_1d_threshold(hold_scores, np.asarray(y_true, dtype=bool))
-    return {
-        "kind": "description_only",
-        "domain": domain,
-        "n_cal": 1,
-        "std_t_fallback": fit.std_t_fallback,
-        "threshold_relative_1b": threshold,
-        "roc_auc": float(auc["roc_auc"]),
-        "pr_auc_in_domain": float(auc["pr_auc_in_domain"]),
-        "pr_auc_reject": float(auc["pr_auc_reject"]),
-        "f1": float(metrics["f1"]),
-        "frr": metrics["frr"],
-        "far": metrics["far"],
-        "ood_far": _far_on_mask(y_true, pred, cats == "OUT_OF_DOMAIN_BENIGN"),
-        "adv_far": _far_on_mask(y_true, pred, cats == "ADVERSARIAL_FUZZING"),
-        "near_ood_far": _far_on_mask(y_true, pred, subs == "near_ood_neighbor"),
-        "sep_ge_1_count": int(np.sum(fit.sep >= np.float64(1.0))),
-        "oracle_upper_bound": {
-            **{k: (None if v is None else (float(v) if isinstance(v, (float, np.floating)) else v)) for k, v in oracle_m.items()},
-            "threshold": float(oracle_t),
-            "tag": "[ORACLE_UPPER_BOUND]",
-        },
-        "eje1_preset": EJE1_PRESET,
-    }
+    """Score holdout from one description vector using 1B contrast quantiles (never desc_score[0])."""
+    return _evaluate_n1_blind_pack(
+        single_vector=description_vector,
+        contrast=contrast,
+        hold_vectors=hold_vectors,
+        y_true=y_true,
+        categories=categories,
+        subtypes=subtypes,
+        kind="description_only",
+        domain=domain,
+    )
 
 
 def _mean_std(values: Sequence[float | None]) -> tuple[float | None, float | None]:
@@ -1268,45 +1634,73 @@ def evaluate_clause_cap_cell(
     cal_near: np.ndarray,
     cal_struct: np.ndarray,
     clause_profile: lex.LexicalProfile,
-    w_f: float = 0.35,
+    hold_struct_full: np.ndarray | None = None,
+    w_f: float = DEFAULT_W_F,
+    beta: float = FROZEN_BETA,
 ) -> dict[str, Any]:
     """CAL_ONLY F1/FAR under each clause_cap on dilution / smuggle / flooding subtypes."""
+    target_family = "eje1_only" if abs(float(beta)) < 1e-15 else FROZEN_FAMILY
     specs = [
         spec
         for spec in compact_recipe_catalog("full_only")
-        if spec.family == "eje1_only" and abs(float(spec.beta)) < 1e-15
+        if spec.family == target_family and abs(float(spec.beta) - float(beta)) < 1e-12
     ]
     if len(specs) != 1:
-        raise RuntimeError(f"expected exactly one eje1_only recipe, got {len(specs)}")
+        raise RuntimeError(
+            f"expected exactly one {target_family}(beta={beta}) recipe, got {len(specs)}"
+        )
+    if hold_struct_full is not None and len(hold_struct_full) != len(hold_texts):
+        raise ValueError("hold_struct_full length must equal hold_texts length")
     rows: list[dict[str, Any]] = []
-    focus = ("dilution_80_20", "smuggle_recipe_footnote", "long_context_flooding", "prompt_injection_jailbreak")
+    focus = (
+        "dilution_80_20",
+        "smuggle_recipe_footnote",
+        "smuggle_comment_docstring",
+        "smuggle_json_yaml",
+        "long_context_flooding",
+        "prompt_injection_jailbreak",
+    )
+    subs_arr = np.asarray(list(subtypes), dtype=object)
+    smuggle_any_mask = np.array([str(s).startswith("smuggle_") for s in subtypes], dtype=bool)
     for cap in CLAUSE_CAPS:
         gen_clause_min = np.empty(len(hold_texts), dtype=np.float64)
         near_clause_min = np.empty(len(hold_texts), dtype=np.float64)
         struct_min = np.empty(len(hold_texts), dtype=np.float64)
         selected_counts: list[int] = []
+        prefilter_counts = {"s_struct": 0, "fallback": 0, "empty_clauses": 0}
         for i, clauses in enumerate(hold_clauses):
             gen_vals = hold_gen_clause_scores[i]
             near_vals = hold_near_clause_scores[i]
             n_clause_scores = int(gen_vals.shape[0])
+            if near_vals.shape[0] != n_clause_scores:
+                raise RuntimeError("near/general clause score lengths diverge")
+            full_s = (
+                float(hold_struct_full[i])
+                if hold_struct_full is not None
+                else float(hold_struct_min_uncapped[i])
+            )
             if n_clause_scores == 0:
+                prefilter_counts["empty_clauses"] += 1
                 gen_clause_min[i] = hold_gen_full[i]
                 near_clause_min[i] = hold_near_full[i]
-                struct_min[i] = hold_struct_min_uncapped[i]
+                struct_min[i] = full_s
                 selected_counts.append(0)
                 continue
             if len(clauses) == n_clause_scores:
+                prefilter_counts["s_struct"] += 1
                 prefilter = prefilter_clause_s_struct(clauses, clause_profile)
+                keep = select_clause_indices_edge_plus_struct(n_clause_scores, cap, prefilter)
+                clause_s = float(np.min(prefilter[keep]))
+                struct_min[i] = min(full_s, clause_s) if hold_struct_full is not None else clause_s
             else:
-                # LanceDB clause count can diverge from a fresh segment; rank by axis score.
-                prefilter = np.asarray(gen_vals, dtype=np.float64).copy()
-            if near_vals.shape[0] != n_clause_scores:
-                raise RuntimeError("near/general clause score lengths diverge")
-            keep = select_clause_indices_edge_plus_struct(n_clause_scores, cap, prefilter)
+                prefilter_counts["fallback"] += 1
+                # Fallback ranks clause indices by axis scores without replacing [0,1] S_struct.
+                ranking = np.asarray(gen_vals, dtype=np.float64)
+                keep = select_clause_indices_edge_plus_struct(n_clause_scores, cap, ranking)
+                struct_min[i] = full_s
             selected_counts.append(len(keep))
             gen_clause_min[i] = float(np.min(gen_vals[keep]))
             near_clause_min[i] = float(np.min(near_vals[keep]))
-            struct_min[i] = float(np.min(prefilter[keep]))
         hold_gen = v3.blend_documents(hold_gen_full, gen_clause_min, w_f)
         hold_near = v3.blend_documents(hold_near_full, near_clause_min, w_f)
         cal_matrix = materialize_recipe_matrix(specs, cal_gen, cal_near, cal_struct)
@@ -1314,14 +1708,13 @@ def evaluate_clause_cap_cell(
         cal_only = evaluate_cal_only(cal_matrix[:, 0], hold_matrix[:, 0], y_true)
         threshold = float(cal_only["p10"]["threshold"])
         pred = hold_matrix[:, 0] >= np.float64(threshold)
-        subtype_far = {}
-        for name in focus:
-            mask = np.asarray(list(subtypes), dtype=object) == name
-            subtype_far[name] = _far_on_mask(y_true, pred, mask)
+        subtype_far = {name: _far_on_mask(y_true, pred, subs_arr == name) for name in focus}
+        subtype_far["smuggle_any"] = _far_on_mask(y_true, pred, smuggle_any_mask)
         rows.append(
             {
                 "clause_cap": cap,
                 "mean_selected_clauses": float(np.mean(np.asarray(selected_counts, dtype=np.float64))),
+                "prefilter_counts": prefilter_counts,
                 "cal_only_p10": cal_only["p10"],
                 "f1": float(cal_only["p10"]["f1"]),
                 "far": cal_only["p10"]["far"],
@@ -1331,7 +1724,7 @@ def evaluate_clause_cap_cell(
         )
     return {
         "domain": domain,
-        "w_f": w_f,
+        "w_f": float(w_f),
         "recipe": specs[0].as_dict(),
         "caps": rows,
     }
@@ -1349,6 +1742,7 @@ def run_n_cal_volume_curve_domain(
     description_vector: np.ndarray | None,
     description_text: str | None,
     overlap_corpora: Sequence[str],
+    cal_folds: np.ndarray | None = None,
 ) -> dict[str, Any]:
     """Full description-only + real-doc ladder for one domain."""
     if description_text is not None:
@@ -1371,23 +1765,40 @@ def run_n_cal_volume_curve_domain(
         if n_keep > n_total:
             raise RuntimeError(f"ladder N={n_keep} exceeds calibration size {n_total}")
         if n_keep == n_total:
-            fit = fit_directional_matrices_allow_n1(cal_vectors, contrast)
-            directional = fit.as_directional()
-            cal_scores = v3.score_dir1024(cal_vectors, directional, DIR_VARIANT)
-            hold_scores = v3.score_dir1024(hold_vectors, directional, DIR_VARIANT)
-            seed_rows = [
-                _n_cal_metric_pack(
-                    cal_scores=cal_scores,
-                    hold_scores=hold_scores,
-                    y_true=y_true,
-                    categories=categories,
-                    subtypes=subtypes,
-                    fit=fit,
-                    n_cal=n_keep,
-                    seed=None,
-                    kind="full_calibration",
+            if n_keep == 1:
+                seed_rows = [
+                    _evaluate_n1_blind_pack(
+                        single_vector=cal_vectors,
+                        contrast=contrast,
+                        hold_vectors=hold_vectors,
+                        y_true=y_true,
+                        categories=categories,
+                        subtypes=subtypes,
+                        kind="full_calibration",
+                    )
+                ]
+            else:
+                folds = (
+                    np.arange(n_total, dtype=np.int64) % 5
+                    if cal_folds is None
+                    else np.asarray(cal_folds, dtype=np.int64).reshape(-1)
                 )
-            ]
+                cal_scores = score_axis_oof(cal_vectors, folds, contrast, n_folds=5)
+                fit = fit_directional_matrices_allow_n1(cal_vectors, contrast)
+                hold_scores = v3.score_dir1024(hold_vectors, fit.as_directional(), DIR_VARIANT)
+                seed_rows = [
+                    _n_cal_metric_pack(
+                        cal_scores=cal_scores,
+                        hold_scores=hold_scores,
+                        y_true=y_true,
+                        categories=categories,
+                        subtypes=subtypes,
+                        fit=fit,
+                        n_cal=n_keep,
+                        seed=None,
+                        kind="full_calibration",
+                    )
+                ]
         else:
             seed_rows = [
                 evaluate_n_cal_seed(
@@ -1417,6 +1828,328 @@ def run_n_cal_volume_curve_domain(
     }
 
 
+def _evaluate_1d_recipe_row(
+    spec: V4RecipeSpec,
+    cal_scores: np.ndarray,
+    hold_scores: np.ndarray,
+    y_true: np.ndarray,
+    categories: Sequence[str],
+    subtypes: Sequence[str],
+    *,
+    column: int,
+    is_frozen: bool,
+    include_subtypes: Sequence[str] = (),
+) -> dict[str, Any]:
+    labels = np.asarray(y_true, dtype=bool)
+    cal_only = evaluate_cal_only(cal_scores, hold_scores, labels)
+    threshold = float(cal_only["p10"]["threshold"])
+    pred = np.asarray(hold_scores, dtype=np.float64) >= np.float64(threshold)
+    breakdown = _prediction_breakdown_metrics(labels, pred, categories, subtypes)
+    auc = sim.compute_auc_triple(labels, hold_scores)
+    row: dict[str, Any] = {
+        **spec.as_dict(),
+        "column": int(column),
+        "is_frozen": bool(is_frozen),
+        "threshold_p10": threshold,
+        "threshold_near": None,
+        "cal_only_f1": float(breakdown["f1"]),
+        "roc_auc": float(auc["roc_auc"]),
+        "pr_auc_in_domain": float(auc["pr_auc_in_domain"]),
+        "pr_auc_reject": float(auc["pr_auc_reject"]),
+        **breakdown,
+    }
+    if include_subtypes:
+        subs_arr = np.asarray(list(subtypes), dtype=object)
+        row["subtypes"] = {
+            sub: v2.subgroup_error(labels, pred, subs_arr == sub) for sub in include_subtypes
+        }
+    return row
+
+
+def evaluate_recipe_table_12(
+    specs: Sequence[V4RecipeSpec],
+    cal_matrix: np.ndarray,
+    hold_matrix: np.ndarray,
+    s_general_cal: np.ndarray,
+    s_near_cal: np.ndarray,
+    s_general_hold: np.ndarray,
+    s_near_hold: np.ndarray,
+    y_true: np.ndarray,
+    categories: Sequence[str],
+    subtypes: Sequence[str],
+    *,
+    frozen_col: int,
+) -> list[dict[str, Any]]:
+    """CAL_ONLY breakdown for all 12 catalog recipes (true 2D AND gate for ``dual_axis_and``)."""
+    rows: list[dict[str, Any]] = []
+    for idx, spec in enumerate(specs):
+        if spec.family == "dual_axis_and":
+            if spec.near_prob is None or spec.near_tag is None:
+                raise ValueError("dual_axis_and spec missing near_prob or near_tag")
+            and_row = evaluate_dual_and_cal_only(
+                s_general_cal,
+                s_near_cal,
+                s_general_hold,
+                s_near_hold,
+                y_true,
+                near_prob=float(spec.near_prob),
+                near_tag=str(spec.near_tag),
+                categories=categories,
+                subtypes=subtypes,
+            )
+            rows.append(
+                {
+                    **spec.as_dict(),
+                    "column": int(idx),
+                    "is_frozen": bool(idx == frozen_col),
+                    "threshold_p10": float(and_row["t_gen_p10"]),
+                    "threshold_near": float(and_row["t_near"]),
+                    "cal_only_f1": float(and_row["f1"]),
+                    "roc_auc": float(and_row["roc_auc"]),
+                    "pr_auc_in_domain": float(and_row["pr_auc_in_domain"]),
+                    "pr_auc_reject": float(and_row["pr_auc_reject"]),
+                    "tp": and_row["tp"],
+                    "fn": and_row["fn"],
+                    "tn": and_row["tn"],
+                    "fp": and_row["fp"],
+                    "precision": and_row["precision"],
+                    "recall": and_row["recall"],
+                    "f1": and_row["f1"],
+                    "frr": and_row["frr"],
+                    "far": and_row["far"],
+                    "in_domain_valid_frr": and_row["in_domain_valid_frr"],
+                    "ood_far": and_row["ood_far"],
+                    "adv_far": and_row["adv_far"],
+                    "hybrid_far": and_row["hybrid_far"],
+                    "near_ood_neighbor_far": and_row["near_ood_neighbor_far"],
+                }
+            )
+        else:
+            rows.append(
+                _evaluate_1d_recipe_row(
+                    spec,
+                    cal_matrix[:, idx],
+                    hold_matrix[:, idx],
+                    y_true,
+                    categories,
+                    subtypes,
+                    column=idx,
+                    is_frozen=(idx == frozen_col),
+                )
+            )
+    return rows
+
+
+def evaluate_struct_beta_comparison(
+    specs: Sequence[V4RecipeSpec],
+    cal_matrix: np.ndarray,
+    hold_matrix: np.ndarray,
+    y_true: np.ndarray,
+    categories: Sequence[str],
+    subtypes: Sequence[str],
+) -> list[dict[str, Any]]:
+    """Explicit ``eje1_only (beta=0)`` vs ``eje1_plus_struct (beta=0.10, 0.20)`` breakdown."""
+    indices = [i for i, spec in enumerate(specs) if spec.family in ("eje1_only", "eje1_plus_struct")]
+    if len(indices) != 3:
+        raise RuntimeError(f"expected 3 beta comparison recipes, got {len(indices)}")
+    frozen_col = find_frozen_recipe_index(specs)
+    return [
+        _evaluate_1d_recipe_row(
+            specs[idx],
+            cal_matrix[:, idx],
+            hold_matrix[:, idx],
+            y_true,
+            categories,
+            subtypes,
+            column=idx,
+            is_frozen=(idx == frozen_col),
+            include_subtypes=STRUCT_CMP_SUBTYPES,
+        )
+        for idx in indices
+    ]
+
+
+def evaluate_w_f_sensitivity(
+    *,
+    cal_gen_full: np.ndarray,
+    cal_gen_cmin: np.ndarray,
+    cal_near_full: np.ndarray,
+    cal_near_cmin: np.ndarray,
+    cal_struct_min: np.ndarray,
+    hold_gen_full: np.ndarray,
+    hold_gen_cmin: np.ndarray,
+    hold_near_full: np.ndarray,
+    hold_near_cmin: np.ndarray,
+    hold_struct_min: np.ndarray,
+    y_true: np.ndarray,
+    categories: Sequence[str],
+    subtypes: Sequence[str],
+) -> list[dict[str, Any]]:
+    """Diagnostic ``w_f in {0.20, 0.35, 0.50}`` sensitivity on frozen ``eje1_plus_struct|b=0.10``."""
+    rows: list[dict[str, Any]] = []
+    for weight in W_F:
+        cal_g = v3.blend_documents(cal_gen_full, cal_gen_cmin, weight)
+        cal_n = v3.blend_documents(cal_near_full, cal_near_cmin, weight)
+        hold_g = v3.blend_documents(hold_gen_full, hold_gen_cmin, weight)
+        hold_n = v3.blend_documents(hold_near_full, hold_near_cmin, weight)
+        specs_w = compact_recipe_catalog("clauses", w_f=weight)
+        frozen_col = find_frozen_recipe_index(specs_w)
+        spec = specs_w[frozen_col]
+        cal_scores = score_recipe_continuous(spec, cal_g, cal_n, cal_struct_min)
+        hold_scores = score_recipe_continuous(spec, hold_g, hold_n, hold_struct_min)
+        row = _evaluate_1d_recipe_row(
+            spec,
+            cal_scores,
+            hold_scores,
+            y_true,
+            categories,
+            subtypes,
+            column=frozen_col,
+            is_frozen=(abs(float(weight) - DEFAULT_W_F) < 1e-12),
+        )
+        row["is_default_w_f"] = bool(abs(float(weight) - DEFAULT_W_F) < 1e-12)
+        rows.append(row)
+    return rows
+
+
+def build_dual_axis_cell(
+    *,
+    domain: str,
+    granularity: str,
+    specs: Sequence[V4RecipeSpec],
+    cal_matrix: np.ndarray,
+    hold_matrix: np.ndarray,
+    s_general_cal: np.ndarray,
+    s_near_cal: np.ndarray,
+    s_general_hold: np.ndarray,
+    s_near_hold: np.ndarray,
+    y_true: np.ndarray,
+    categories: Sequence[str],
+    subtypes: Sequence[str],
+    input_ids: Sequence[str],
+    texts: Sequence[str],
+    struct_latency: Mapping[str, Any] | None = None,
+    w_f_sensitivity: Sequence[Mapping[str, Any]] | None = None,
+    bootstrap_resamples: int = BOOTSTRAP_RESAMPLES,
+) -> dict[str, Any]:
+    """Assemble one dual-axis replay cell (shared by synthetic unit tests and live replay)."""
+    labels = np.asarray(y_true, dtype=bool)
+    frozen = freeze_winning_recipe(
+        specs, cal_matrix, hold_matrix, labels, categories, subtypes, input_ids
+    )
+    frozen_col = int(frozen["frozen_column"])
+    recipe_table_12 = evaluate_recipe_table_12(
+        specs,
+        cal_matrix,
+        hold_matrix,
+        s_general_cal,
+        s_near_cal,
+        s_general_hold,
+        s_near_hold,
+        labels,
+        categories,
+        subtypes,
+        frozen_col=frozen_col,
+    )
+    struct_beta_cmp = evaluate_struct_beta_comparison(
+        specs, cal_matrix, hold_matrix, labels, categories, subtypes
+    )
+    and_rows = [
+        evaluate_dual_and_cal_only(
+            s_general_cal,
+            s_near_cal,
+            s_general_hold,
+            s_near_hold,
+            labels,
+            near_prob=prob,
+            near_tag=tag,
+            categories=categories,
+            subtypes=subtypes,
+        )
+        for prob, tag in AND_NEAR_PROBS
+    ]
+    eje1_only_cols = [i for i, spec in enumerate(specs) if spec.family == "eje1_only"]
+    if len(eje1_only_cols) != 1:
+        raise RuntimeError(f"expected 1 eje1_only recipe, got {len(eje1_only_cols)}")
+    eje1_col = eje1_only_cols[0]
+    dual_rows = [r for r in recipe_table_12 if str(r["family"]).startswith("dual_axis_")]
+    if not dual_rows:
+        raise RuntimeError("catalog has no dual_axis_* recipes")
+    best_dual_row = max(dual_rows, key=lambda row: (float(row["f1"]), -int(row["column"])))
+    best_dual_col = int(best_dual_row["column"])
+    best_dual_spec = specs[best_dual_col]
+    best_dual_method: tuple[np.ndarray, np.ndarray] | DualAndBootstrapMethod
+    if best_dual_spec.family == "dual_axis_and":
+        best_dual_method = DualAndBootstrapMethod(
+            hold_general=s_general_hold,
+            hold_near=s_near_hold,
+            cal_general=s_general_cal,
+            cal_near=s_near_cal,
+            near_prob=float(best_dual_spec.near_prob),
+            gen_prob=GEN_GATE_PROB,
+        )
+    else:
+        best_dual_method = (hold_matrix[:, best_dual_col], cal_matrix[:, best_dual_col])
+    frozen_f1 = float(frozen["cal_only"]["p10"]["f1"])
+    eje1_f1 = float(recipe_table_12[eje1_col]["f1"])
+    best_dual_f1 = float(best_dual_row["f1"])
+    boot = bootstrap_cal_only(
+        {
+            "frozen": (hold_matrix[:, frozen_col], cal_matrix[:, frozen_col]),
+            "eje1_only": (hold_matrix[:, eje1_col], cal_matrix[:, eje1_col]),
+            "best_dual_axis": best_dual_method,
+        },
+        labels,
+        categories,
+        subtypes,
+        seed=0,
+        n_resamples=bootstrap_resamples,
+        probability=BOOTSTRAP_PROBABILITY,
+        paired_deltas=(
+            ("frozen_minus_eje1_only", "frozen", "eje1_only", frozen_f1 - eje1_f1),
+            ("frozen_minus_best_dual_axis", "frozen", "best_dual_axis", frozen_f1 - best_dual_f1),
+        ),
+    )
+    frozen_boot = boot["methods"]["frozen"]["f1"]
+    bootstrap_block = {
+        **boot,
+        "f1": frozen_f1,
+        "ci95_low": float(frozen_boot["low"]),
+        "ci95_high": float(frozen_boot["high"]),
+        "eje1_only_f1": eje1_f1,
+        "best_dual_axis_recipe": best_dual_spec.name(),
+        "best_dual_axis_column": best_dual_col,
+        "best_dual_axis_f1": best_dual_f1,
+        "delta_f1": dict(boot["paired_deltas"]),
+    }
+    threshold = float(frozen["cal_only"]["p10"]["threshold"])
+    pred = hold_matrix[:, frozen_col] >= np.float64(threshold)
+    auc = sim.compute_auc_triple(labels, hold_matrix[:, frozen_col])
+    return {
+        "domain": domain,
+        "granularity": granularity,
+        "catalog_size": len(specs),
+        "recipes": [spec.as_dict() for spec in specs],
+        "frozen": frozen,
+        "recipe_table_12": recipe_table_12,
+        "struct_beta_comparison": struct_beta_cmp,
+        "dual_axis_and_cal_only": and_rows,
+        "bootstrap": bootstrap_block,
+        "auc": auc,
+        "subgroups": subgroup_block(labels, pred, categories, subtypes),
+        "canary": canary_block(texts, categories, labels, pred),
+        "struct_latency_us": struct_latency,
+        "w_f_sensitivity": None if w_f_sensitivity is None else list(w_f_sensitivity),
+        "clause_caps": list(CLAUSE_CAPS),
+        "dtype": "float64",
+        "normalize": True,
+        "dir_variant": DIR_VARIANT,
+        "eje1_preset": EJE1_PRESET,
+        "eje2_stratum": NEAR_STRATUM,
+        "cal_oof": True,
+    }
+
+
 def evaluate_cell_synthetic(
     *,
     domain: str,
@@ -1433,54 +2166,30 @@ def evaluate_cell_synthetic(
     input_ids: Sequence[str],
     texts: Sequence[str],
     struct_latency: Mapping[str, Any] | None = None,
+    bootstrap_resamples: int = 50,
 ) -> dict[str, Any]:
     """Score one regime cell from already-materialized axis scores (unit-test path)."""
-    specs = compact_recipe_catalog(granularity if granularity == "full_only" else "full_only")
-    # For synthetic clauses tests the caller already blended w_f into the vectors;
-    # use the 12-recipe full_only catalog shape unless clauses + per-w_f matrices are supplied.
-    if granularity == "clauses":
-        # Expand catalog across w_f by treating input scores as already blended once;
-        # callers that need per-w_f grids should call compact_recipe_catalog("clauses").
-        specs = compact_recipe_catalog("full_only")
+    specs = compact_recipe_catalog(granularity)
     cal_matrix = materialize_recipe_matrix(specs, s_general_cal, s_near_cal, s_struct_cal)
     hold_matrix = materialize_recipe_matrix(specs, s_general_hold, s_near_hold, s_struct_hold)
-    frozen = freeze_winning_recipe(
-        specs, cal_matrix, hold_matrix, y_true, categories, subtypes, input_ids
+    return build_dual_axis_cell(
+        domain=domain,
+        granularity=granularity,
+        specs=specs,
+        cal_matrix=cal_matrix,
+        hold_matrix=hold_matrix,
+        s_general_cal=s_general_cal,
+        s_near_cal=s_near_cal,
+        s_general_hold=s_general_hold,
+        s_near_hold=s_near_hold,
+        y_true=y_true,
+        categories=categories,
+        subtypes=subtypes,
+        input_ids=input_ids,
+        texts=texts,
+        struct_latency=struct_latency,
+        bootstrap_resamples=bootstrap_resamples,
     )
-    and_rows = []
-    for prob, tag in AND_NEAR_PROBS:
-        and_rows.append(
-            evaluate_dual_and_cal_only(
-                s_general_cal,
-                s_near_cal,
-                s_general_hold,
-                s_near_hold,
-                y_true,
-                near_prob=prob,
-                near_tag=tag,
-            )
-        )
-    winner_col = int(frozen["modal_column"])
-    threshold = float(frozen["cal_only"]["p10"]["threshold"])
-    pred = hold_matrix[:, winner_col] >= np.float64(threshold)
-    auc = sim.compute_auc_triple(np.asarray(y_true, dtype=bool), hold_matrix[:, winner_col])
-    return {
-        "domain": domain,
-        "granularity": granularity,
-        "catalog_size": len(specs),
-        "recipes": [spec.as_dict() for spec in specs],
-        "frozen": frozen,
-        "dual_axis_and_cal_only": and_rows,
-        "auc": auc,
-        "subgroups": subgroup_block(y_true, pred, categories, subtypes),
-        "canary": canary_block(texts, categories, y_true, pred),
-        "struct_latency_us": struct_latency,
-        "dtype": "float64",
-        "normalize": True,
-        "dir_variant": DIR_VARIANT,
-        "eje1_preset": EJE1_PRESET,
-        "eje2_stratum": NEAR_STRATUM,
-    }
 
 
 def _write_json(out_path: Path, filename: str, payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -1530,11 +2239,42 @@ def run_replay_v4(
     headlines: list[str] = []
     n_cal_files: list[dict[str, Any]] = []
     clause_cap_files: list[dict[str, Any]] = []
-    flooding_texts: dict[str, list[str]] = {}
     desc_texts = dict(DESCRIPTION_ONLY_TEXTS)
 
-    # Description embeddings via MPS server (exact-PID cleanup).
+    # Pre-load each domain's 600 calibration docs and fit domain profiles BEFORE starting EmbedServerSession.
+    domain_cache: dict[str, dict[str, Any]] = {}
+    for domain in ("python", "receta"):
+        profile_id = sim.V1_PROFILES[domain]
+        index = v3.load_augmented_hash_index(v3.augmented_jsonl(Path(augmented_dir), domain))
+        calibration = v3.load_calibration_with_hashes(db, profile_id, domain)
+        raw_texts = v3.join_full_doc_texts(calibration["full_doc_sha256"], index)
+        if len(raw_texts) != 600:
+            raise RuntimeError(f"{domain} joined {len(raw_texts)} full documents, expected 600")
+        holdout_rows = v2.load_benchmark_table(Path(benchmarks_dir) / f"{domain}.jsonl")
+        holdout_texts = [str(row["text"]) for row in holdout_rows]
+        overlap_corpora = list(raw_texts) + holdout_texts
+        assert_zero_text_overlap(desc_texts[domain], overlap_corpora)
+        cal_clauses = [xray.segment_clauses_opt2c(text) for text in raw_texts]
+        flat_clauses = [clause for doc in cal_clauses for clause in doc]
+        full_profile = lex.fit(raw_texts, "full_doc")
+        clause_profile = lex.fit(flat_clauses, "clause_opt2c")
+        floods = [str(row["text"]) for row in holdout_rows if str(row["subtype"]) == "long_context_flooding"]
+        if not floods:
+            raise RuntimeError(f"{domain} missing long_context_flooding prompts")
+        domain_cache[domain] = {
+            "calibration": calibration,
+            "raw_texts": raw_texts,
+            "cal_clauses": cal_clauses,
+            "holdout_rows": holdout_rows,
+            "overlap_corpora": overlap_corpora,
+            "full_profile": full_profile,
+            "clause_profile": clause_profile,
+            "floods": floods,
+        }
+
+    # Description embeddings + per-prompt flooding latency inside one MPS server session.
     desc_vectors: dict[str, np.ndarray] = {}
+    flooding_latency: dict[str, Any] = {"domains": {}, "ports_closed_after": None}
     session = EmbedServerSession()
     try:
         pid = session.start()
@@ -1558,42 +2298,20 @@ def run_replay_v4(
                 encoding="utf-8",
             )
             written.append({"file": emb_path.name, "bytes": int(emb_path.stat().st_size), "kind": "description_embedding"})
-        # Flooding latency measured while the server is up.
-        flooding_latency: dict[str, Any] = {"domains": {}, "ports_closed_after": None}
         for domain in ("python", "receta"):
-            rows = v2.load_benchmark_table(Path(benchmarks_dir) / f"{domain}.jsonl")
-            floods = [str(row["text"]) for row in rows if str(row["subtype"]) == "long_context_flooding"]
-            flooding_texts[domain] = floods
-            if not floods:
-                raise RuntimeError(f"{domain} missing long_context_flooding prompts")
-            domain_latency: dict[str, Any] = {}
-            # Uncapped: embed full flooding prompts as-is.
-            domain_latency["uncapped"] = measure_flooding_latency_ms(
-                floods,
+            cached = domain_cache[domain]
+            domain_latency = measure_domain_flooding_latency(
+                cached["floods"],
                 lambda batch: embed_texts_loopback(batch, normalize=True).tolist(),
+                clause_profile=cached["clause_profile"],
+                caps=CLAUSE_CAPS,
                 repeats=3,
             )
-            # Build a cheap lexical profile from the flooding texts themselves for prefilter.
-            all_clauses = [xray.segment_clauses_opt2c(text) for text in floods]
-            flat = [c for doc in all_clauses for c in doc] or list(floods)
-            flood_profile = lex.fit(flat, "clause_opt2c")
-            for cap in (16, 24, 32):
-                capped_batches: list[str] = []
-                for clauses in all_clauses:
-                    if not clauses:
-                        continue
-                    pre = prefilter_clause_s_struct(clauses, flood_profile)
-                    keep = select_clause_indices_edge_plus_struct(len(clauses), cap, pre)
-                    capped_batches.extend(clauses[i] for i in keep)
-                if not capped_batches:
-                    capped_batches = list(floods)
-                domain_latency[f"cap_{cap}"] = measure_flooding_latency_ms(
-                    capped_batches,
-                    lambda batch: embed_texts_loopback(batch, normalize=True).tolist(),
-                    repeats=3,
-                )
             flooding_latency["domains"][domain] = domain_latency
-            _log(f"flooding latency {domain} uncapped_p50={domain_latency['uncapped']['p50_ms']:.3f}ms")
+            _log(
+                f"flooding latency {domain} uncapped_p50={domain_latency['uncapped']['p50_ms']:.3f}ms "
+                f"cap16_speedup={domain_latency['cap_16']['speedup_vs_uncapped']:.2f}x"
+            )
     finally:
         session.cleanup()
     if not ports_8080_8088_closed():
@@ -1606,16 +2324,14 @@ def run_replay_v4(
     for domain in ("python", "receta"):
         lang = xray.V2_DOMAIN_LANG[domain]
         profile_id = sim.V1_PROFILES[domain]
-        index = v3.load_augmented_hash_index(v3.augmented_jsonl(Path(augmented_dir), domain))
-        calibration = v3.load_calibration_with_hashes(db, profile_id, domain)
-        raw_texts = v3.join_full_doc_texts(calibration["full_doc_sha256"], index)
-        if len(raw_texts) != 600:
-            raise RuntimeError(f"{domain} joined {len(raw_texts)} full documents, expected 600")
-        holdout_rows = v2.load_benchmark_table(Path(benchmarks_dir) / f"{domain}.jsonl")
-        holdout_texts = [str(row["text"]) for row in holdout_rows]
-        overlap_corpora = list(raw_texts) + holdout_texts
-        assert_zero_text_overlap(desc_texts[domain], overlap_corpora)
-        cal_clauses = [xray.segment_clauses_opt2c(text) for text in raw_texts]
+        cached = domain_cache[domain]
+        calibration = cached["calibration"]
+        raw_texts = cached["raw_texts"]
+        cal_clauses = cached["cal_clauses"]
+        holdout_rows = cached["holdout_rows"]
+        overlap_corpora = cached["overlap_corpora"]
+        full_profile = cached["full_profile"]
+        clause_profile = cached["clause_profile"]
         folds = np.asarray(calibration["full_folds"], dtype=np.int64)
         _log(f"OOF S_struct {domain}")
         cal_struct_oof = score_struct_oof(raw_texts, cal_clauses, folds, time_calls=False)
@@ -1641,9 +2357,6 @@ def run_replay_v4(
         fit_near_full = fit_holdout_axis(calibration["full_vectors"], near_full)
         fit_gen_clause = fit_holdout_axis(calibration["clause_vectors"], eje1_clause)
         fit_near_clause = fit_holdout_axis(calibration["clause_vectors"], near_clause)
-        flat_clauses = [clause for doc in cal_clauses for clause in doc]
-        full_profile = lex.fit(raw_texts, "full_doc")
-        clause_profile = lex.fit(flat_clauses, "clause_opt2c")
         text_map = {str(row["input_id"]): str(row["text"]) for row in holdout_rows}
         subtypes_map = {str(row["input_id"]): str(row["subtype"]) for row in holdout_rows}
         categories_map = {str(row["input_id"]): str(row["category"]) for row in holdout_rows}
@@ -1667,6 +2380,7 @@ def run_replay_v4(
             description_vector=desc_vectors[domain],
             description_text=desc_texts[domain],
             overlap_corpora=overlap_corpora,
+            cal_folds=folds,
         )
         n_cal_payload["holdout_scoring"] = "full_doc_chunk0"
         n_cal_payload["holdout_n"] = int(y_full.shape[0])
@@ -1695,16 +2409,16 @@ def run_replay_v4(
             )
             hold_gen_chunks = v3.score_dir1024(bundle.chunk_vectors, fit_gen_full, DIR_VARIANT)
             hold_near_chunks = v3.score_dir1024(bundle.chunk_vectors, fit_near_full, DIR_VARIANT)
+            y = np.asarray(bundle.expected_pass, dtype=bool)
+            w_f_sens: list[dict[str, Any]] | None = None
             if granularity == "full_only":
                 hold_gen, _ = v3.holdout_parts(hold_gen_chunks, bundle)
                 hold_near, _ = v3.holdout_parts(hold_near_chunks, bundle)
                 cal_gen = s_gen_cal_full
                 cal_near = s_near_cal_full
-                cal_struct_vec = cal_struct_oof["s_full"]
-                hold_struct_vec = hold_struct["s_full"]
                 specs = compact_recipe_catalog("full_only")
-                cal_matrix = materialize_recipe_matrix(specs, cal_gen, cal_near, cal_struct_vec)
-                hold_matrix = materialize_recipe_matrix(specs, hold_gen, hold_near, hold_struct_vec)
+                cal_matrix = materialize_recipe_matrix(specs, cal_gen, cal_near, cal_struct_oof["s_full"])
+                hold_matrix = materialize_recipe_matrix(specs, hold_gen, hold_near, hold_struct["s_full"])
             else:
                 hold_gen_clause_chunks = v3.score_dir1024(bundle.chunk_vectors, fit_gen_clause, DIR_VARIANT)
                 hold_near_clause_chunks = v3.score_dir1024(bundle.chunk_vectors, fit_near_clause, DIR_VARIANT)
@@ -1737,29 +2451,27 @@ def run_replay_v4(
                     int(calibration["n_bundles"]),
                 )
                 specs = compact_recipe_catalog("clauses")
-                cal_cols: list[np.ndarray] = []
-                hold_cols: list[np.ndarray] = []
-                for spec in specs:
-                    if spec.w_f is None:
-                        raise RuntimeError("clauses catalog requires w_f")
-                    cal_g = v3.blend_documents(s_gen_cal_full, cal_gen_cmin, spec.w_f)
-                    cal_n = v3.blend_documents(s_near_cal_full, cal_near_cmin, spec.w_f)
-                    hold_g = v3.blend_documents(hold_gen_surface, hold_gen_cmin, spec.w_f)
-                    hold_n = v3.blend_documents(hold_near_surface, hold_near_cmin, spec.w_f)
-                    cal_cols.append(
-                        score_recipe_continuous(spec, cal_g, cal_n, cal_struct_oof["s_min"])
-                    )
-                    hold_cols.append(
-                        score_recipe_continuous(spec, hold_g, hold_n, hold_struct["s_min"])
-                    )
-                cal_matrix = np.column_stack(cal_cols)
-                hold_matrix = np.column_stack(hold_cols)
-                cal_gen = v3.blend_documents(s_gen_cal_full, cal_gen_cmin, 0.35)
-                cal_near = v3.blend_documents(s_near_cal_full, cal_near_cmin, 0.35)
-                hold_gen = v3.blend_documents(hold_gen_surface, hold_gen_cmin, 0.35)
-                hold_near = v3.blend_documents(hold_near_surface, hold_near_cmin, 0.35)
-
-                # clause_cap eval on clauses granularity.
+                cal_gen = v3.blend_documents(s_gen_cal_full, cal_gen_cmin, DEFAULT_W_F)
+                cal_near = v3.blend_documents(s_near_cal_full, cal_near_cmin, DEFAULT_W_F)
+                hold_gen = v3.blend_documents(hold_gen_surface, hold_gen_cmin, DEFAULT_W_F)
+                hold_near = v3.blend_documents(hold_near_surface, hold_near_cmin, DEFAULT_W_F)
+                cal_matrix = materialize_recipe_matrix(specs, cal_gen, cal_near, cal_struct_oof["s_min"])
+                hold_matrix = materialize_recipe_matrix(specs, hold_gen, hold_near, hold_struct["s_min"])
+                w_f_sens = evaluate_w_f_sensitivity(
+                    cal_gen_full=s_gen_cal_full,
+                    cal_gen_cmin=cal_gen_cmin,
+                    cal_near_full=s_near_cal_full,
+                    cal_near_cmin=cal_near_cmin,
+                    cal_struct_min=cal_struct_oof["s_min"],
+                    hold_gen_full=hold_gen_surface,
+                    hold_gen_cmin=hold_gen_cmin,
+                    hold_near_full=hold_near_surface,
+                    hold_near_cmin=hold_near_cmin,
+                    hold_struct_min=hold_struct["s_min"],
+                    y_true=y,
+                    categories=bundle.categories,
+                    subtypes=bundle.subtypes,
+                )
                 cap_block = evaluate_clause_cap_cell(
                     domain=domain,
                     hold_texts=texts,
@@ -1769,62 +2481,39 @@ def run_replay_v4(
                     hold_near_full=hold_near_surface,
                     hold_near_clause_scores=_clause_score_lists(bundle, hold_near_clause_chunks),
                     hold_struct_min_uncapped=hold_struct["s_min"],
-                    y_true=np.asarray(bundle.expected_pass, dtype=bool),
+                    hold_struct_full=hold_struct["s_full"],
+                    y_true=y,
                     categories=bundle.categories,
                     subtypes=bundle.subtypes,
                     cal_gen=cal_gen,
                     cal_near=cal_near,
                     cal_struct=cal_struct_oof["s_min"],
                     clause_profile=clause_profile,
-                    w_f=0.35,
+                    w_f=DEFAULT_W_F,
+                    beta=FROZEN_BETA,
                 )
                 cap_meta = _write_json(out_path, f"{domain}__clause_cap_eval.json", cap_block)
                 clause_cap_files.append(cap_meta)
                 written.append({**cap_meta, "domain": domain, "kind": "clause_cap"})
-            y = np.asarray(bundle.expected_pass, dtype=bool)
-            frozen = freeze_winning_recipe(
-                specs,
-                cal_matrix,
-                hold_matrix,
-                y,
-                bundle.categories,
-                bundle.subtypes,
-                bundle.input_ids,
+            cell = build_dual_axis_cell(
+                domain=domain,
+                granularity=granularity,
+                specs=specs,
+                cal_matrix=cal_matrix,
+                hold_matrix=hold_matrix,
+                s_general_cal=cal_gen,
+                s_near_cal=cal_near,
+                s_general_hold=hold_gen,
+                s_near_hold=hold_near,
+                y_true=y,
+                categories=bundle.categories,
+                subtypes=bundle.subtypes,
+                input_ids=bundle.input_ids,
+                texts=texts,
+                struct_latency=struct_latency_block(hold_struct["full_us"], hold_struct["clause_us"]),
+                w_f_sensitivity=w_f_sens,
+                bootstrap_resamples=BOOTSTRAP_RESAMPLES,
             )
-            and_rows = [
-                evaluate_dual_and_cal_only(
-                    cal_gen,
-                    cal_near,
-                    hold_gen,
-                    hold_near,
-                    y,
-                    near_prob=prob,
-                    near_tag=tag,
-                )
-                for prob, tag in AND_NEAR_PROBS
-            ]
-            winner_col = int(frozen["modal_column"])
-            threshold = float(frozen["cal_only"]["p10"]["threshold"])
-            pred = hold_matrix[:, winner_col] >= np.float64(threshold)
-            cell = {
-                "domain": domain,
-                "granularity": granularity,
-                "catalog_size": len(specs),
-                "recipes": [spec.as_dict() for spec in specs],
-                "frozen": frozen,
-                "dual_axis_and_cal_only": and_rows,
-                "auc": sim.compute_auc_triple(y, hold_matrix[:, winner_col]),
-                "subgroups": subgroup_block(y, pred, bundle.categories, bundle.subtypes),
-                "canary": canary_block(texts, bundle.categories, y, pred),
-                "struct_latency_us": struct_latency_block(hold_struct["full_us"], hold_struct["clause_us"]),
-                "clause_caps": list(CLAUSE_CAPS),
-                "dtype": "float64",
-                "normalize": True,
-                "dir_variant": DIR_VARIANT,
-                "eje1_preset": EJE1_PRESET,
-                "eje2_stratum": NEAR_STRATUM,
-                "cal_oof": True,
-            }
             filename = f"{domain}__{granularity}__dual_axis_v4.json"
             meta = _write_json(out_path, filename, cell)
             written.append(
