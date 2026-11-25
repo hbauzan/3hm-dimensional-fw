@@ -13,6 +13,8 @@ Rare non-letters are not a hand-written symbol list. ``fit`` records document
 frequency on the supplied texts only. A non-letter or a 2-character non-letter
 bigram contributes surprise only when its calibration document frequency is
 strictly below 1 percent (exact rational test ``doc_count * 100 < n_docs``).
+The in-prompt rare rate uses the smoothed denominator
+``rare_count / max(n_items, RARE_RATE_SMOOTH_DENOM)``.
 """
 
 from __future__ import annotations
@@ -25,11 +27,13 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Mapping, Sequence
 
-# Basic ASCII punctuation. Symbol characters are the residual outside ASCII
-# letters, decimal digits, whitespace, and this set.
+# Basic ASCII punctuation plus inverted Spanish marks. Symbol characters are the
+# residual outside Latin letters (including accented Latin), decimal digits,
+# whitespace, and this set. Repeated-run detection stays on the ASCII subset.
 ASCII_PUNCT: frozenset[str] = frozenset(
     "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
 )
+PUNCT: frozenset[str] = ASCII_PUNCT | frozenset("¿¡")
 
 # Closed connector sets. Primary language is whichever set has the higher
 # token total on the fit texts. There is no domain-to-language table.
@@ -97,6 +101,14 @@ GRANULARITIES: frozenset[str] = frozenset(("full_doc", "clause", "clause_opt2c")
 # Short alphabetic queries skip only the low-side connector penalty.
 SHORT_TEXT_ALPHA_WORDS = 6
 
+# Bilateral entropy is skipped below this raw length so short valid queries are
+# not false-alarmed. letter_ratio == 0 and high punct_ratio still catch ???!!!.
+SHORT_TEXT_ENTROPY_LEN = 32
+
+# Floor for rare-rate denominators: rare_count / max(n_items, RARE_RATE_SMOOTH_DENOM).
+# One or two rare marks against a declarative fit must not reach excess == 20.
+RARE_RATE_SMOOTH_DENOM = 20
+
 # Positive floor inside max(p95 - median, IQR, floor). One floor for every channel.
 ROBUST_SCALE_FLOOR = 0.05
 
@@ -105,15 +117,17 @@ S_STRUCT_MIN_EXPONENT = -700.0
 
 # Channel weights w_f. Constants. They are not estimated from evaluation rows.
 #
-#   excess_f = 0
-#       when the channel lies inside [p01, p99]
-#   excess_f = one-sided distance outside that interval / robust_scale
-#       otherwise
+#   Upper-only channels (value > p99): digit_ratio, punct_ratio, symbol_ratio,
+#       non_latin_or_control_unicode_ratio, max_repeated_punct_run,
+#       rare_nonletter_char_rate, rare_nonletter_bigram_rate,
+#       foreign_connector_ratio
+#   Lower-only channels (value < p01): letter_ratio, target_connector_ratio
+#       (target_connector_ratio also skips the low side when alpha_word_count < 6)
+#   Bilateral: char_shannon_entropy only (skipped when len(text) < 32)
 #
-#   S_struct = 1.0
-#       if every excess_f == 0
-#   S_struct = exp( -sum(w_f * excess_f) / S_STRUCT_SCALE )
-#       otherwise
+#   excess_f = one-sided distance outside the active side / robust_scale
+#   S_struct = 1.0 if every excess_f == 0
+#   S_struct = exp( -sum(w_f * excess_f) / S_STRUCT_SCALE ) otherwise
 #
 # S_STRUCT_SCALE is the positive constant in the exponential.
 # It is not the per-channel robust scale.
@@ -135,6 +149,25 @@ CHANNEL_WEIGHTS: Mapping[str, float] = MappingProxyType(
 )
 S_STRUCT_SCALE = 8.0
 SCORED_CHANNELS: tuple[str, ...] = tuple(name for name, _ in CHANNEL_WEIGHT_TABLE)
+
+UPPER_ONLY_CHANNELS: frozenset[str] = frozenset(
+    (
+        "digit_ratio",
+        "punct_ratio",
+        "symbol_ratio",
+        "non_latin_or_control_unicode_ratio",
+        "max_repeated_punct_run",
+        "rare_nonletter_char_rate",
+        "rare_nonletter_bigram_rate",
+        "foreign_connector_ratio",
+    )
+)
+LOWER_ONLY_CHANNELS: frozenset[str] = frozenset(
+    (
+        "letter_ratio",
+        "target_connector_ratio",
+    )
+)
 
 ALPHA_WORD_COUNT = "alpha_word_count"
 
@@ -233,8 +266,9 @@ class LexicalProfile:
         return _evaluate(text, self)
 
 
-def _is_ascii_letter(char: str) -> bool:
-    return ("A" <= char <= "Z") or ("a" <= char <= "z")
+def _is_latin_letter(char: str) -> bool:
+    """Alphabetic characters whose Unicode name marks the Latin script."""
+    return char.isalpha() and "LATIN" in unicodedata.name(char, "")
 
 
 def _is_non_latin_or_control(char: str) -> bool:
@@ -321,10 +355,10 @@ def _is_rare(doc_count: int, n_docs: int) -> bool:
 
 
 def _rare_rate(items: Sequence[str], doc_counts: Mapping[str, int], n_docs: int) -> float:
-    """In-prompt relative frequency of items whose calibration df is below 1 percent.
+    """Smoothed in-prompt rate of items whose calibration df is below 1 percent.
 
-    Each occurrence has weight ``1 / len(items)``. Common items contribute 0.
-    An empty item list yields 0.
+    Formula: ``rare_count / max(len(items), RARE_RATE_SMOOTH_DENOM)``.
+    Common items contribute 0. An empty item list yields 0.
     """
     total = len(items)
     if total == 0:
@@ -333,7 +367,8 @@ def _rare_rate(items: Sequence[str], doc_counts: Mapping[str, int], n_docs: int)
     for item in items:
         if _is_rare(doc_counts.get(item, 0), n_docs):
             rare += 1
-    return float(rare) / float(total)
+    denom = max(total, RARE_RATE_SMOOTH_DENOM)
+    return float(rare) / float(denom)
 
 
 def _ratio(numerator: int, denominator: int) -> float:
@@ -368,7 +403,7 @@ def _feature_map(
     primary_language: str,
 ) -> dict[str, float]:
     length = len(text)
-    ascii_letter_n = 0
+    latin_letter_n = 0
     digit_n = 0
     whitespace_n = 0
     punct_n = 0
@@ -377,17 +412,17 @@ def _feature_map(
     for char in text:
         if char.isalpha():
             letter_n += 1
-        if _is_ascii_letter(char):
-            ascii_letter_n += 1
+        if _is_latin_letter(char):
+            latin_letter_n += 1
         elif char.isdigit():
             digit_n += 1
         elif char.isspace():
             whitespace_n += 1
-        elif char in ASCII_PUNCT:
+        elif char in PUNCT:
             punct_n += 1
         if _is_non_latin_or_control(char):
             non_latin_n += 1
-    symbol_n = length - ascii_letter_n - digit_n - whitespace_n - punct_n
+    symbol_n = length - latin_letter_n - digit_n - whitespace_n - punct_n
     if symbol_n < 0:
         raise ValueError("character partition undercounted the string")
 
@@ -510,16 +545,24 @@ def _evaluate(text: str, profile: LexicalProfile) -> StructuralScore:
         profile.primary_language,
     )
     short = features[ALPHA_WORD_COUNT] < float(SHORT_TEXT_ALPHA_WORDS)
+    skip_entropy = len(text) < SHORT_TEXT_ENTROPY_LEN
     excesses: dict[str, float] = {}
     missing_connector_penalty = 0.0
     for name in SCORED_CHANNELS:
         value = features[name]
         low, high = _outside_excess(value, profile.envelopes[name])
+        if name in UPPER_ONLY_CHANNELS:
+            low = 0.0
+        elif name in LOWER_ONLY_CHANNELS:
+            high = 0.0
         if name == "target_connector_ratio":
             # Missing-connector penalty is only the low side, and only at 6+ words.
             if short:
                 low = 0.0
             missing_connector_penalty = low
+        if name == "char_shannon_entropy" and skip_entropy:
+            low = 0.0
+            high = 0.0
         excesses[name] = low + high
         if not math.isfinite(excesses[name]) or excesses[name] < 0.0:
             raise ValueError(f"non-finite excess for {name}")
